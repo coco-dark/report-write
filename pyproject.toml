@@ -1,0 +1,34 @@
+[project]
+name = "anyuan-report-writing"
+version = "0.1.0"
+description = "报告书写多 Agent 流水线：学习模板、检索评级、逐章写作、检查并人工确认"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "langgraph>=1.0,<2",
+    "langchain>=1.0,<2",
+    "langchain-core>=0.3",
+    "langchain-openai>=0.2",
+    "fastapi>=0.115",
+    "uvicorn>=0.32",
+    "pydantic>=2",
+    "pyyaml>=6",
+    "pymysql>=1.1",
+    "redis>=5.0",
+    "python-multipart>=0.0.9",
+    "python-docx>=1.1",
+    "weasyprint>=62",
+    "pypdf>=5",
+    "openpyxl>=3.1",
+    "xlrd>=2.0",
+]
+
+[project.scripts]
+report-writing = "report_writing.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["backend/src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["backend/src"]
+testpaths = ["tests"]

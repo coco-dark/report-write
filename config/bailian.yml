@@ -1,0 +1,14 @@
+# 百炼 OpenAI 兼容；api-key 写在 bailian.local.yml
+bailian:
+  deepseek:
+    api-key: ""
+    base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    completions-path: /chat/completions
+    model-name: deepseek-v4.1-flash
+    control-model-name: ""
+    intent-model-name: ""
+    chat-template-kwargs-enabled: false
+    timeout: 60
+    temperature: 0.7
+    max-tokens: 4096
+    thinking-level: none

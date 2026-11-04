@@ -1,0 +1,113 @@
+/* 智能文档协作 · 统一主题 */
+:root {
+  --ay-blue: #4e6ef2;
+  --ay-blue-soft: #eef3ff;
+  --ay-blue-hover: #3f5de0;
+  --ay-ink: #1f2329;
+  --ay-muted: #8a919f;
+  --ay-line: #e8ecf4;
+  --ay-card: #ffffff;
+  --ay-bg: #f5f7fb;
+  --ay-bg-grad: linear-gradient(180deg, #f5f7fb 0%, #eef2f8 100%);
+  --ay-hero: linear-gradient(135deg, #ffffff 0%, #f3f6ff 55%, #eaf0ff 100%);
+  --ay-radius-lg: 16px;
+  --ay-radius-md: 12px;
+  --ay-radius-sm: 10px;
+  --ay-shadow: 0 4px 14px rgba(47, 74, 160, 0.06);
+  --ay-shadow-hover: 0 8px 20px rgba(47, 74, 160, 0.1);
+
+  /* Element Plus 主色对齐 */
+  --el-color-primary: #4e6ef2;
+  --el-color-primary-light-3: #7b91f6;
+  --el-color-primary-light-5: #a7b6f9;
+  --el-color-primary-light-7: #d3dafc;
+  --el-color-primary-light-8: #e4e9fd;
+  --el-color-primary-light-9: #eef3ff;
+  --el-color-primary-dark-2: #3f5de0;
+  --el-border-radius-base: 10px;
+  --el-border-radius-small: 8px;
+  --el-border-radius-round: 999px;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  height: 100%;
+  background: var(--ay-bg);
+  color: var(--ay-ink);
+  font-family: "PingFang SC", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+}
+
+html {
+  /* 避免顶栏在刘海 / 嵌入 WebView 时被裁切 */
+  padding: env(safe-area-inset-top, 0) env(safe-area-inset-right, 0) env(safe-area-inset-bottom, 0)
+    env(safe-area-inset-left, 0);
+  box-sizing: border-box;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* 通用页面壳 */
+.ay-page {
+  box-sizing: border-box;
+  height: 100%;
+  max-height: 100%;
+  overflow: hidden;
+  padding: 14px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: var(--ay-bg-grad);
+}
+
+.ay-page-scroll {
+  overflow: auto;
+}
+
+.ay-hero {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 16px;
+  border-radius: var(--ay-radius-lg);
+  background: var(--ay-hero);
+  border: 1px solid rgba(78, 110, 242, 0.12);
+  box-shadow: var(--ay-shadow);
+}
+
+.ay-hero h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 720;
+  color: var(--ay-ink);
+  letter-spacing: -0.02em;
+}
+
+.ay-hero p {
+  margin: 2px 0 0;
+  color: var(--ay-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.ay-card {
+  border: 1px solid var(--ay-line);
+  border-radius: var(--ay-radius-lg);
+  background: var(--ay-card);
+  box-shadow: 0 2px 10px rgba(31, 35, 41, 0.03);
+}
+
+.ay-btn-primary.el-button--primary,
+.el-button--primary {
+  --el-button-bg-color: var(--ay-blue);
+  --el-button-border-color: var(--ay-blue);
+  --el-button-hover-bg-color: var(--ay-blue-hover);
+  --el-button-hover-border-color: var(--ay-blue-hover);
+}

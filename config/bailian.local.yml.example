@@ -1,0 +1,7 @@
+# 复制为 bailian.local.yml
+bailian:
+  deepseek:
+    api-key: sk-your-dashscope-key
+    # model-name: deepseek-v4.1-flash
+    # control-model-name: qwen-turbo
+    # intent-model-name: qwen-turbo

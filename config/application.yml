@@ -1,0 +1,45 @@
+# 本服务运行时配置（敏感项写在 application.local.yml，勿提交仓库）
+
+report_writing:
+  data_home: data
+  llm_mode: bailian
+  database:
+    mode: auto
+    jdbc_url: ""
+  document_parse:
+    mode: rag
+    log_chunk: 6000
+  redis:
+    url: ""
+  chat_control:
+    model_name: ""
+    max_tokens: 1536
+    react_rounds: 5
+    dialogue_turns: 6
+  intent:
+    max_tokens: 768
+  features:
+    reply_polish: true
+    chain_debug: false
+    blueprint_match_llm: false
+    scripted_chat: false
+  outline:
+    multiround: true
+    toc_max_chars: 250000
+    chapter_scan_max_chars: 80000
+    prefer_local_docx: true
+    try_rag_html: true
+
+spring:
+  datasource:
+    druid:
+      master:
+        url: ""
+        username: ""
+        password: ""
+
+suiyue:
+  rag:
+    domain: http://8.130.53.248:8889
+  file:
+    domain: https://images.smartqa.cn

@@ -1,0 +1,34 @@
+{
+  "id": "eia-narrative",
+  "version": "1",
+  "title": "环境影响评价叙述章节",
+  "chapters": [
+    {
+      "key": "overview",
+      "title": "项目概况",
+      "level": 1,
+      "points": ["项目名称", "建设地点", "建设内容", "总投资"],
+      "sample_paragraphs": [
+        "项目名称为某某工程。建设地点位于某某地。建设内容为新增主变并写明容量。总投资为若干万元。"
+      ],
+      "depends_on": []
+    },
+    {
+      "key": "environment",
+      "title": "环境现状",
+      "level": 1,
+      "points": ["环境空气", "声环境"],
+      "sample_paragraphs": [
+        "环境空气执行二级标准。声环境执行2类标准，并给出昼间和夜间限值。"
+      ],
+      "depends_on": ["overview"]
+    },
+    {
+      "key": "figures",
+      "title": "附图",
+      "level": 1,
+      "points": [],
+      "sample_paragraphs": []
+    }
+  ]
+}

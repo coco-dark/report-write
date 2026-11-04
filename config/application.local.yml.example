@@ -1,0 +1,21 @@
+# 复制为 application.local.yml（与 anyuan 本地库 / RAG 对齐时可参考下列结构）
+
+report_writing:
+  database:
+    mode: mysql
+  redis:
+    url: redis://:password@host:16379/1
+
+spring:
+  datasource:
+    druid:
+      master:
+        url: jdbc:mysql://127.0.0.1:13306/anyuan?useUnicode=true&characterEncoding=utf8&zeroDateTimeBehavior=convertToNull&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+        username: root
+        password: your_mysql_password
+
+suiyue:
+  rag:
+    domain: http://8.130.53.248:8889
+  file:
+    domain: https://images.smartqa.cn
