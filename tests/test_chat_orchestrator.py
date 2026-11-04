@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from report_writing.chat_orchestrator import (
+    _writing_chapter_keys,
     clone_blueprint_to_writing_task,
     handle_chat,
     is_blueprint_valid,
@@ -579,10 +580,9 @@ def test_select_blueprint_unanalyzed_gate_and_write_analyzed_only(tmp_path: Path
 
     cloned = clone_blueprint_to_writing_task(home, "bp_partial", chapter_keys=["c1"])
     keys = [c.key for c in cloned.outline.chapters]
-    assert "c1" in keys
-    assert "c2" not in keys
-    # 无关纯目录节点不再整棵带上，只保留勾选章及其祖先
-    assert "c3" not in keys
+    assert keys == ["c1", "c2", "c3"]
+    assert cloned.write_chapter_scope == ["c1"]
+    assert _writing_chapter_keys(cloned) == ["c1"]
 
 
 def test_blueprint_wizard_meta_creates_new_bp(tmp_path: Path):

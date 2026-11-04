@@ -25,6 +25,7 @@ def _seed(home: Path) -> str:
     ensure_task(path)
     task = TaskStore(path).load()
     task.title = "调度蓝本"
+    task.sample_ready = True
     task.outline_confirmed = True
     task.outline = OutlineTree(
         chapters=[
@@ -145,7 +146,7 @@ def test_dispatch_study_chapter_not_write(tmp_path: Path):
         tmp_path,
         session,
         "学习第3章",
-        [{"tool": "re_study_chapters", "args": {"chapter_sequences": ["3"]}}],
+        [{"tool": "re_study_chapters", "args": {"chapter_sequences": ["3"], "study_method": "sample"}}],
     )
     assert reply
     wizard = (session.freeform or {}).get("blueprint_wizard") or {}
@@ -364,7 +365,7 @@ def test_dispatch_study_all_of_chapter_skips_scope_question(tmp_path: Path):
         tmp_path,
         session,
         "学习第二章所有",
-        [{"tool": "re_study_chapters", "args": {"chapter_sequences": ["2"]}}],
+        [{"tool": "re_study_chapters", "args": {"chapter_sequences": ["2"], "study_method": "sample"}}],
         invoke=invoke,
     )
     assert reply
@@ -397,7 +398,7 @@ def test_dispatch_study_self_chapter_excludes_children(tmp_path: Path):
         tmp_path,
         session,
         msg,
-        [{"tool": "re_study_chapters", "args": {"chapter_sequences": ["1"]}}],
+        [{"tool": "re_study_chapters", "args": {"chapter_sequences": ["1"], "study_method": "sample"}}],
         invoke=invoke,
     )
     assert "下面的全部子章节" not in (reply or "")

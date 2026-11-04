@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import secrets
 import time
@@ -26,6 +27,8 @@ _current_user_id: ContextVar[str] = ContextVar("current_user_id", default="defau
 
 _USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{3,32}$")
 _ID_SAFE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+_log = logging.getLogger(__name__)
 
 
 def current_user_id() -> str:
@@ -214,27 +217,55 @@ def login_user(home: Path, username: str, password: str) -> AuthResponse:
 
 def get_llm_config(home: Path, user_id: str) -> UserLlmConfig:
     ensure_default_user(home)
-    path = users_root(home) / _require_id(user_id) / "llm.json"
-    if not path.is_file():
+    uid = _require_id(user_id)
+    from report_writing.services.user_llm_catalog import (
+        UserLlmConfigStoreError,
+        llm_config_has_data,
+        llm_config_store_available,
+        load_user_llm_config,
+        save_user_llm_config,
+    )
+
+    if llm_config_store_available():
+        try:
+            stored = load_user_llm_config(uid)
+        except UserLlmConfigStoreError:
+            stored = None
+        if stored is not None:
+            return stored
+        legacy = _read_llm_config_file(home, uid)
+        if llm_config_has_data(legacy):
+            try:
+                save_user_llm_config(uid, legacy)
+                _remove_llm_config_file(home, uid)
+            except Exception as error:
+                _log.warning("迁移 llm.json → MySQL 失败 user=%s: %s", uid, error)
+                return legacy
+            return legacy
         return UserLlmConfig()
-    data = json.loads(path.read_text(encoding="utf-8"))
-    return UserLlmConfig.from_dict(data if isinstance(data, dict) else {})
+    return UserLlmConfig()
 
 
 def save_llm_config(home: Path, user_id: str, payload: dict[str, Any] | UserLlmConfig) -> UserLlmConfigPublic:
     uid = _require_id(user_id)
     ensure_default_user(home)
+    from report_writing.services.user_llm_catalog import (
+        UserLlmConfigStoreError,
+        llm_config_store_available,
+        save_user_llm_config,
+    )
+
+    if not llm_config_store_available():
+        raise UserLlmConfigStoreError(
+            "个人模型配置已改为仅存 MySQL，请启动数据库并配置 REPORT_WRITING_DATABASE（勿使用 file 模式）。"
+        )
     existing = get_llm_config(home, uid)
     data = payload.to_dict() if isinstance(payload, UserLlmConfig) else dict(payload or {})
     merged = UserLlmConfig.from_dict({**existing.to_dict(), **data})
     if "api_key" in data and not str(data.get("api_key") or "").strip():
         merged.api_key = existing.api_key
-    folder = users_root(home) / uid
-    folder.mkdir(parents=True, exist_ok=True)
-    (folder / "llm.json").write_text(
-        json.dumps(merged.to_dict(), ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    save_user_llm_config(uid, merged)
+    _remove_llm_config_file(home, uid)
     return public_llm_config(home, uid)
 
 
@@ -245,6 +276,16 @@ def public_llm_config(home: Path, user_id: str) -> UserLlmConfigPublic:
     hint = ""
     if key:
         hint = key[:4] + "…" + key[-4:] if len(key) > 10 else "****"
+    from report_writing.infra.bailian import load_bailian_settings, normalize_model_name
+
+    system = load_bailian_settings()
+    system_model = normalize_model_name(system.model_name or "") or system.model_name
+    active_model = ""
+    active_source = "user" if using_user else "system"
+    if using_user:
+        active_model = normalize_model_name((cfg.model_name or "").strip()) or (cfg.model_name or "").strip()
+    else:
+        active_model = system_model
     return UserLlmConfigPublic(
         provider=cfg.provider,
         base_url=cfg.base_url or cfg.effective_base_url(),
@@ -258,6 +299,9 @@ def public_llm_config(home: Path, user_id: str) -> UserLlmConfigPublic:
         intent_model_name=str(cfg.intent_model_name or "").strip(),
         enabled=cfg.enabled,
         using_system_default=not using_user,
+        active_source=active_source,
+        active_model_name=active_model or "",
+        system_model_name=system_model or "",
     )
 
 
@@ -503,6 +547,26 @@ def _require_id(value: str) -> str:
     if not key or not _ID_SAFE.match(key):
         raise ValueError("用户 id 不合法")
     return key
+
+
+def _read_llm_config_file(home: Path, user_id: str) -> UserLlmConfig:
+    path = users_root(home) / _require_id(user_id) / "llm.json"
+    if not path.is_file():
+        return UserLlmConfig()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return UserLlmConfig()
+    return UserLlmConfig.from_dict(data if isinstance(data, dict) else {})
+
+
+def _remove_llm_config_file(home: Path, user_id: str) -> None:
+    path = users_root(home) / _require_id(user_id) / "llm.json"
+    if path.is_file():
+        try:
+            path.unlink()
+        except OSError as error:
+            _log.debug("删除已迁移的 llm.json 失败: %s", error)
 
 
 def _now() -> str:

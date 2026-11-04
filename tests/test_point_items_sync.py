@@ -5,6 +5,26 @@ from report_writing.domain.point_items_sync import (
 )
 
 
+def test_merge_project_slots_into_points():
+    from report_writing.domain.point_items_sync import merge_project_slots_into_points
+
+    pts = merge_project_slots_into_points(
+        ["交代工程概况与建设必要性"],
+        [
+            {"name": "工程名称", "hint": "按立项文件"},
+            {"name": "电压等级"},
+        ],
+    )
+    assert any("（待补充：工程名称）" in p for p in pts)
+    assert any("（待补充：电压等级）" in p for p in pts)
+    # 已覆盖的不重复追加
+    again = merge_project_slots_into_points(
+        ["填写工程名称（待补充：工程名称）"],
+        [{"name": "工程名称"}],
+    )
+    assert sum("（待补充：工程名称）" in p for p in again) == 1
+
+
 def test_sync_preserves_element_id_by_index():
     prev = [
         {"id": "p0", "text": "旧", "element_id": "el-1", "slot": "项目名"},

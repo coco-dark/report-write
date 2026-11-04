@@ -58,8 +58,8 @@ def test_normalize_links_and_clears_needs_supplement(tmp_path: Path):
     )
     task.outline = OutlineTree(chapters=[node])
     normalize_chapter_point_items_on_node(task, node)
-    assert node.point_items[0].get("element_id") == "el_a"
-    assert node.point_items[0].get("needs_supplement") is not True
+    assert node.element_ids == ["el_a"]
+    assert not str(node.point_items[0].get("element_id") or "").strip()
     gaps = collect_deterministic_gaps(task, ["c1"], home)
     assert gaps == []
 
@@ -174,3 +174,141 @@ def test_normalize_repairs_id_like_element_name(tmp_path: Path):
     assert task.element_nodes[0].name == "年度目标责任书或绩效考核表"
     assert node.point_items[0].get("element_name") == "年度目标责任书或绩效考核表"
     assert collect_deterministic_gaps(task, ["c12"], home) == []
+
+
+def test_run_supplement_check_no_false_count_three_linked_points(tmp_path: Path):
+    home = tmp_path
+    (home / "tasks").mkdir(parents=True)
+    wid = "wThree"
+    path = home / "tasks" / wid
+    ensure_task(path)
+    task = TaskStore(path).load()
+    task.id = wid
+    els = [
+        ElementNode(id="el1", name="A", kind="fixed", value="1"),
+        ElementNode(id="el2", name="B", kind="fixed", value="2"),
+        ElementNode(id="el3", name="C", kind="fixed", value="3"),
+    ]
+    task.element_nodes = els
+    node = OutlineNode(
+        key="1.1",
+        sequence="1.1",
+        title="节",
+        element_ids=["el1", "el2"],
+        point_items=[
+            {"id": "p0", "text": "a", "element_id": "el1"},
+            {
+                "id": "p1",
+                "text": "b（待补充：B）",
+                "element_id": "el2",
+                "needs_supplement": False,
+            },
+            {"id": "p2", "text": "c", "element_id": "el3"},
+        ],
+    )
+    task.outline = OutlineTree(chapters=[node])
+    normalize_chapter_point_items_on_node(task, node)
+    session = ChatSession(id="s3", task_id=wid)
+    from report_writing.chat.writing_supplement_check import run_supplement_check, supplement_check_card
+
+    reply, items, _reg = run_supplement_check(home, session, task, ["1.1"], invoke=None)
+    assert "处还空着" not in reply
+    assert items == []
+    assert supplement_check_card(task, ["1.1"], items=items, home=home) is None
+
+
+def test_element_ids_union_includes_point_item_links(tmp_path: Path):
+    from report_writing.domain.elements import resolve_elements_for_chapter
+    from report_writing.domain.models import ChapterRequirement
+
+    home = tmp_path
+    els = [
+        ElementNode(id="el1", name="A", kind="fixed", value="v1"),
+        ElementNode(id="el2", name="B", kind="fixed", value="v2"),
+        ElementNode(id="el3", name="C", kind="fixed", value="v3"),
+    ]
+    node = OutlineNode(
+        key="1.1",
+        sequence="1.1",
+        title="节",
+        element_ids=["el1", "el2"],
+        point_items=[
+            {"id": "p0", "text": "a", "element_id": "el1"},
+            {"id": "p1", "text": "b", "element_id": "el2"},
+            {"id": "p2", "text": "c", "element_id": "el3"},
+        ],
+    )
+    outline = OutlineTree(chapters=[node])
+    req = ChapterRequirement(key="1.1", title="节", element_ids=["el1", "el2"])
+    resolve_elements_for_chapter(req, els, None, outline=outline, home=home, task_id="t1")
+    assert len(req.element_results) == 3
+    assert {r["id"] for r in req.element_results} == {"el1", "el2", "el3"}
+
+
+def test_run_supplement_check_no_false_count_three_linked_points(tmp_path: Path):
+    home = tmp_path
+    (home / "tasks").mkdir(parents=True)
+    wid = "wThree"
+    path = home / "tasks" / wid
+    ensure_task(path)
+    task = TaskStore(path).load()
+    task.id = wid
+    els = [
+        ElementNode(id="el1", name="A", kind="fixed", value="1"),
+        ElementNode(id="el2", name="B", kind="fixed", value="2"),
+        ElementNode(id="el3", name="C", kind="fixed", value="3"),
+    ]
+    task.element_nodes = els
+    node = OutlineNode(
+        key="1.1",
+        sequence="1.1",
+        title="节",
+        element_ids=["el1", "el2"],
+        point_items=[
+            {"id": "p0", "text": "a", "element_id": "el1"},
+            {
+                "id": "p1",
+                "text": "b（待补充：B）",
+                "element_id": "el2",
+                "needs_supplement": False,
+            },
+            {"id": "p2", "text": "c", "element_id": "el3"},
+        ],
+    )
+    task.outline = OutlineTree(chapters=[node])
+    normalize_chapter_point_items_on_node(task, node)
+    session = ChatSession(id="s3", task_id=wid)
+    from report_writing.chat.writing_supplement_check import run_supplement_check, supplement_check_card
+
+    reply, items, _reg = run_supplement_check(home, session, task, ["1.1"], invoke=None)
+    assert "处还空着" not in reply
+    assert items == []
+    assert supplement_check_card(task, ["1.1"], items=items, home=home) is None
+
+
+def test_element_ids_union_includes_point_item_links(tmp_path: Path):
+    from report_writing.domain.elements import resolve_elements_for_chapter
+    from report_writing.domain.models import ChapterRequirement
+
+    home = tmp_path
+    els = [
+        ElementNode(id="el1", name="A", kind="fixed", value="v1"),
+        ElementNode(id="el2", name="B", kind="fixed", value="v2"),
+        ElementNode(id="el3", name="C", kind="fixed", value="v3"),
+    ]
+    node = OutlineNode(
+        key="1.1",
+        sequence="1.1",
+        title="节",
+        element_ids=["el1", "el2"],
+        point_items=[
+            {"id": "p0", "text": "a", "element_id": "el1"},
+            {"id": "p1", "text": "b", "element_id": "el2"},
+            {"id": "p2", "text": "c", "element_id": "el3"},
+        ],
+    )
+    outline = OutlineTree(chapters=[node])
+    req = ChapterRequirement(key="1.1", title="节", element_ids=["el1", "el2"])
+    resolve_elements_for_chapter(req, els, None, outline=outline, home=home, task_id="t1")
+    assert len(req.element_results) == 3
+    assert {r["id"] for r in req.element_results} == {"el1", "el2", "el3"}

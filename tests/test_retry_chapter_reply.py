@@ -53,6 +53,29 @@ def test_retry_display_title_uses_chinese_outline():
     assert "1.3" in label
 
 
+def test_retry_display_title_rejects_camelcase_slug():
+    class _T:
+        outline = OutlineTree(
+            chapters=[
+                OutlineNode(
+                    key="basicprojectinformation",
+                    sequence="1.1",
+                    title="基本项目信息",
+                )
+            ]
+        )
+        chapters = []
+
+    label = _retry_chapter_display_title(
+        _T(),
+        "basicprojectinformation",
+        {"title": "basicprojectinformation", "chapter_key": "basicprojectinformation"},
+    )
+    assert "基本项目信息" in label
+    assert "basicprojectinformation" not in label.lower()
+    assert "1.1" in label
+
+
 def test_retry_chapter_failure_does_not_claim_success(tmp_path: Path):
     tid = _seed(tmp_path, confirmed=True)
     session = ChatSession(

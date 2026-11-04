@@ -186,11 +186,11 @@ def execute_chapter_search(
                 if gaps:
                     tip = f"　▶ 引用槽位「{name}」：槽位 {('、'.join(str(n) for n in gaps))} 无文件，跳过"
                 elif query:
-                    tip = f"　▶ 引用槽位「{name}」检索：{query[:80]}"
+                    tip = f"　▶ 引用槽位「{name}」RAG 检索：{query[:80]}"
                 else:
-                    tip = f"　▶ 引用槽位「{name}」检索中…"
+                    tip = f"　▶ 引用槽位「{name}」RAG 检索中…"
             elif query:
-                tip = f"　▶ 要素「{name}」检索：{query[:80]}"
+                tip = f"　▶ 要素「{name}」RAG 检索：{query[:80]}"
             else:
                 tip = f"　▶ 要素「{name}」（{kind or '配置'}）解析中…"
             emit("search", "running", chapter.key, chapter.title, {"note": tip})

@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from report_writing.domain.models import WritingTask
 
+STUDY_METHODS = frozenset({"source", "sample", "auto"})
+
 STUDY_SCOPES = frozenset({"whole", "children", "self"})
 
 _RANGE_SEPS = ("到", "至", "-", "—", "~")
@@ -221,3 +223,37 @@ def resolve_study_chapter_keys(
     if mode in STUDY_SCOPES:
         return keys_for_top_sequences(task, seqs, scope=mode)
     return keys_for_top_sequences(task, seqs, children_only=bool(children_only))
+
+
+def infer_study_method(value: str = "", message: str = "") -> str:
+    """归一化分析方式：source=原文，sample=样本，auto=无样本自动分析。"""
+    raw = str(value or "").strip().lower()
+    aliases = {
+        "source": "source",
+        "paste": "source",
+        "text": "source",
+        "original": "source",
+        "原文": "source",
+        "sample": "sample",
+        "样本": "sample",
+        "auto": "auto",
+        "generate": "auto",
+        "自动": "auto",
+    }
+    if raw in aliases:
+        return aliases[raw]
+    text = str(message or "")
+    if any(token in text for token in ("根据原文", "按原文", "原文内容", "粘贴原文", "粘贴文本", "富文本")):
+        return "source"
+    if any(token in text for token in ("依据样本", "按样本", "用样本", "样本分析")):
+        return "sample"
+    if any(token in text for token in ("自动分析", "自动生成要点", "生成写作要点")):
+        return "auto"
+    return ""
+
+
+def bound_study_method(task: WritingTask | None) -> str:
+    """有样本走样本分析，否则自动分析。"""
+    if task is not None and bool(getattr(task, "sample_ready", False)):
+        return "sample"
+    return "auto"

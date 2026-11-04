@@ -238,6 +238,83 @@ def normalize_llm_point_item(row: Any, index: int = 0) -> dict[str, Any] | None:
     return out
 
 
+def _slot_covered_in_points(name: str, points: list[str]) -> bool:
+    key = str(name or "").strip()
+    if not key:
+        return True
+    for line in points:
+        text = str(line or "")
+        if key in text or parse_slot_from_text(text) == key:
+            return True
+    return False
+
+
+def merge_project_slots_into_points(
+    points: list[str] | None,
+    project_slots: list[Any] | None,
+    *,
+    max_extra: int = 8,
+    max_total: int = 14,
+) -> list[str]:
+    """样本章节分析：把 project_slots 落成带「（待补充：…）」的写法要点，便于文档窗与开写前检查。"""
+    out = [str(p).strip() for p in list(points or []) if str(p).strip()]
+    if not project_slots:
+        return out[:max_total]
+    added = 0
+    for item in list(project_slots or []):
+        if added >= max_extra:
+            break
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name or _slot_covered_in_points(name, out):
+            continue
+        hint = str(item.get("hint") or "").strip()
+        if hint:
+            line = f"按本项目填写{name}（待补充：{name}）"
+        else:
+            line = f"写明{name}等关键信息（待补充：{name}）"
+        out.append(line)
+        added += 1
+    return out[:max_total]
+
+
+def aux_prompt_from_project_slots(
+    points: list[str] | None,
+    project_slots: list[Any] | None,
+    *,
+    existing: str = "",
+) -> str:
+    """与无蓝本起草要点一致：在 aux 前缀列出建议补充的资料类型。"""
+    base = str(existing or "").strip()
+    if base and "【建议补充资料】" in base:
+        return base[:800]
+    slot_lines: list[str] = []
+    seen: set[str] = set()
+    for item in list(project_slots or [])[:12]:
+        if isinstance(item, dict):
+            name = str(item.get("name") or "").strip()
+            hint = str(item.get("hint") or "").strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            slot_lines.append(f"资料·{name}" + (f"：{hint}" if hint else ""))
+        elif str(item).strip():
+            t = str(item).strip()
+            if t not in seen:
+                seen.add(t)
+                slot_lines.append(f"资料·{t}")
+    if not slot_lines:
+        return base[:800]
+    prefix = "【建议补充资料】\n" + "\n".join(slot_lines)
+    body = "\n".join(str(p or "").strip() for p in list(points or [])[:8] if str(p or "").strip())
+    if base:
+        return f"{prefix}\n\n{base}"[:800]
+    if body:
+        return f"{prefix}\n\n{body}"[:800]
+    return prefix[:800]
+
+
 def merge_generated_point_items(
     points: list[str] | None,
     raw_items: list[Any] | None,
@@ -352,8 +429,9 @@ def chapter_point_items_from_payload(
     item: dict[str, Any],
     *,
     elements_by_id: dict[str, Any] | None = None,
+    link_chapter_elements_to_points: bool = False,
 ) -> list[dict[str, Any]]:
-    """PUT/GET 大纲：结构化 point_items 与 points 对齐，并按 element_ids 补关联。"""
+    """PUT/GET 大纲：结构化 point_items 与 points 对齐；默认不把章 element_ids 自动挂到要点。"""
     points = item.get("points") or []
     if isinstance(points, str):
         points = [line.strip() for line in points.splitlines() if line.strip()]
@@ -371,7 +449,7 @@ def chapter_point_items_from_payload(
     else:
         items = sync_point_items_from_points(points, [])
     eids = [str(x).strip() for x in (item.get("element_ids") or []) if str(x).strip()]
-    if eids:
+    if eids and link_chapter_elements_to_points:
         items = link_point_items_to_element_ids(items, eids, elements_by_id)
     return items
 
@@ -383,6 +461,32 @@ def elements_by_id_from_task(task: Any) -> dict[str, Any]:
         if eid:
             out[eid] = el
     return out
+
+
+def element_ids_for_chapter_node(
+    node: Any,
+    *,
+    elements_by_id: dict[str, Any] | None = None,
+) -> list[str]:
+    """章 element_ids 与 point_items 上已关联的 element_id 并集（检索/待补与 UI 一致）。"""
+    by_id = dict(elements_by_id or {})
+    ordered: list[str] = []
+    seen: set[str] = set()
+
+    def _add(eid: str) -> None:
+        if not eid or eid in seen:
+            return
+        if by_id and eid not in by_id:
+            return
+        seen.add(eid)
+        ordered.append(eid)
+
+    for raw in list(getattr(node, "element_ids", None) or []):
+        _add(str(raw or "").strip())
+    for row in list(getattr(node, "point_items", None) or []):
+        if isinstance(row, dict):
+            _add(str(row.get("element_id") or "").strip())
+    return ordered
 
 
 def sanitize_point_item_row(row: dict[str, Any], elements_by_id: dict[str, Any] | None) -> dict[str, Any]:
@@ -423,6 +527,7 @@ def normalize_chapter_point_items_on_node(task: Any, node: Any) -> None:
     cleaned = [sanitize_point_item_row(r, by_id) for r in items if isinstance(r, dict)]
     node.point_items = cleaned
     node.points = points_from_point_items(cleaned)
+    # 章 element_ids 与要点 element_id 分开存；检索/待补并集见 element_ids_for_chapter_node
     _repair_id_like_element_names(task, cleaned)
 
 

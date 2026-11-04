@@ -417,8 +417,24 @@ def _maybe_continue_step_writing(
     return reply, cards, events
 
 
+def _resolve_write_chapter_scope(task: WritingTask, selected: list[str]) -> list[str]:
+    """校验勾选章并返回应写入 task 的 scope（不改动 outline 树）。"""
+    from report_writing.chat.gates import _filter_outline_by_selected_keys
+
+    keys = [str(k).strip() for k in (selected or []) if str(k).strip()]
+    if not keys:
+        raise ValueError("请先勾选要写的章节")
+    if task.outline is None or not list(task.outline.chapters or []):
+        raise ValueError("文档副本还没有目录")
+    kept = _filter_outline_by_selected_keys(list(task.outline.chapters or []), keys)
+    if not any(not bool(getattr(n, "structure_only", False)) for n in kept):
+        raise ValueError("没有可写作的已分析章节")
+    return keys
+
+
 def _writing_chapter_keys(task: WritingTask) -> list[str]:
     """按大纲顺序返回本轮应写章节 key（优先 outline，否则 task.chapters）。"""
+    base: list[str] = []
     if task.outline and task.outline.chapters:
         outline_keys = [
             n.key
@@ -428,10 +444,16 @@ def _writing_chapter_keys(task: WritingTask) -> list[str]:
         present = {c.key for c in (task.chapters or []) if c.key}
         ordered = [k for k in outline_keys if k in present]
         if ordered:
-            return ordered
-        if outline_keys:
-            return outline_keys
-    return [c.key for c in (task.chapters or []) if c.key]
+            base = ordered
+        elif outline_keys:
+            base = outline_keys
+    if not base:
+        base = [c.key for c in (task.chapters or []) if c.key]
+    scope = [str(k).strip() for k in (getattr(task, "write_chapter_scope", None) or []) if str(k).strip()]
+    if not scope:
+        return base
+    scope_set = set(scope)
+    return [k for k in base if k in scope_set]
 
 
 def _apply_chapter_config(task: WritingTask, chapter_key: str, payload: dict) -> None:
@@ -556,7 +578,14 @@ def _apply_chapter_config(task: WritingTask, chapter_key: str, payload: dict) ->
             req.structure_only = bool(node.structure_only)
             req.search_terms_separate = bool(getattr(node, "search_terms_separate", False))
             req.knowledge_folder_ids = []
-            req.element_ids = list(node.element_ids or [])
+            from report_writing.domain.point_items_sync import (
+                element_ids_for_chapter_node,
+                elements_by_id_from_task,
+            )
+
+            req.element_ids = element_ids_for_chapter_node(
+                node, elements_by_id=elements_by_id_from_task(task)
+            )
     sync_structure_only_chapter_status(task)
 
 
@@ -680,7 +709,6 @@ def _link_new_element_to_chapter_points(
     from report_writing.domain.point_items_sync import (
         human_label,
         is_element_id_token,
-        link_point_items_to_element_ids,
         points_from_point_items,
         sync_point_items_from_points,
     )
@@ -730,19 +758,30 @@ def _link_new_element_to_chapter_points(
                 prev_items[i] = patched
                 break
     by_id = {item.id: item for item in (task.element_nodes or []) if getattr(item, "id", None)}
-    linked = link_point_items_to_element_ids(
-        prev_items, list(getattr(node, "element_ids", None) or []), by_id
+    eid = str(getattr(element, "id", "") or "").strip()
+    point_linked = point_index >= 0 or any(
+        str(r.get("element_id") or "").strip() == eid for r in prev_items if isinstance(r, dict)
     )
-    node.point_items = linked
-    node.points = points_from_point_items(linked)
+    if point_linked:
+        node.point_items = prev_items
+        node.points = points_from_point_items(prev_items)
+    elif eid:
+        ids = [str(x).strip() for x in (node.element_ids or []) if str(x).strip()]
+        if eid not in ids:
+            node.element_ids = [*ids, eid]
+        if prev_items:
+            node.point_items = prev_items
+            node.points = points_from_point_items(prev_items)
     if task.brief is not None:
         try:
             req = task.brief.chapter(str(getattr(node, "key", "") or ""))
         except KeyError:
             req = None
         if req is not None:
+            from report_writing.domain.point_items_sync import element_ids_for_chapter_node
+
             req.points = list(node.points or [])
-            req.element_ids = list(node.element_ids or [])
+            req.element_ids = element_ids_for_chapter_node(node, elements_by_id=by_id)
 
 
 def _apply_dissociate_chapter_element(
@@ -875,7 +914,7 @@ def clone_blueprint_to_document_copy(
 
     require_outline=False：允许空壳蓝本（新建向导 meta 后立刻建副本）。
     """
-    from report_writing.chat.gates import _filter_outline_by_selected_keys, is_blueprint_valid
+    from report_writing.chat.gates import is_blueprint_valid
     from report_writing.chat.helpers import _load_task
 
     source = _load_task(home, blueprint_id)
@@ -903,22 +942,7 @@ def clone_blueprint_to_document_copy(
     if cloned.outline is not None:
         cloned.outline = type(cloned.outline).from_dict(copy.deepcopy(cloned.outline.to_dict()))
         if chapter_keys is not None:
-            selected = [str(k).strip() for k in chapter_keys if str(k).strip()]
-            if not selected:
-                raise ValueError("请先勾选要写的章节")
-            kept = _filter_outline_by_selected_keys(list(cloned.outline.chapters or []), selected)
-            if not any(not bool(getattr(n, "structure_only", False)) for n in kept):
-                raise ValueError("没有可写作的已分析章节")
-            writable_kept = [n.key for n in kept if not bool(getattr(n, "structure_only", False))]
-            extra = [k for k in writable_kept if k not in set(selected)]
-            if extra:
-                kept = [
-                    n
-                    for n in kept
-                    if bool(getattr(n, "structure_only", False)) or n.key in set(selected)
-                ]
-            cloned.outline.chapters = kept
-            cloned.outline_confirmed = False
+            cloned.write_chapter_scope = _resolve_write_chapter_scope(cloned, chapter_keys)
     from report_writing.domain.elements import strip_project_scoped_folders_on_clone
 
     strip_project_scoped_folders_on_clone(cloned)
@@ -1169,20 +1193,8 @@ def apply_write_chapter_filter(
     writing: WritingTask,
     chapter_keys: list[str],
 ) -> WritingTask:
-    """在已有文档副本上按勾选裁剪目录（开写时复用副本，不重新从库 clone）。"""
-    from report_writing.chat.gates import _filter_outline_by_selected_keys
-    from report_writing.chat.helpers import _load_task
-
-    selected = [str(k).strip() for k in (chapter_keys or []) if str(k).strip()]
-    if not selected:
-        raise ValueError("请先勾选要写的章节")
-    if writing.outline is None or not list(writing.outline.chapters or []):
-        raise ValueError("文档副本还没有目录")
-    kept = _filter_outline_by_selected_keys(list(writing.outline.chapters or []), selected)
-    if not any(not bool(getattr(n, "structure_only", False)) for n in kept):
-        raise ValueError("没有可写作的已分析章节")
-    writing.outline.chapters = kept
-    writing.outline_confirmed = False
+    """在已有文档副本上记录本轮写作 scope（不裁剪 outline，文档窗仍显示完整目录）。"""
+    writing.write_chapter_scope = _resolve_write_chapter_scope(writing, chapter_keys)
     path = home / "tasks" / writing.id
     TaskStore(path).save(writing)
     return _prepare_writing_task(home, writing)

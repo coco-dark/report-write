@@ -483,7 +483,7 @@ export function useWriting() {
       const updated = await request(`/api/writing/tasks/${encodeURIComponent(taskId.value.trim())}/outline`, {
         method: "PUT",
         headers: authHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ chapters }),
+        body: JSON.stringify({ chapters, replace_tree: true }),
       });
       const key = currentTask.value?.outline?.chapters?.[outlineFocus.value]?.key;
       showTask(updated);

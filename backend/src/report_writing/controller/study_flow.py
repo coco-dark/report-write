@@ -806,7 +806,7 @@ def auto_study_selected_chapters(
         keywords: list[str] = []
         describes = ""
         content_blocks: list = []
-        # 大纲上的 structure_only 以文档副本为准：用户取消「仅目录」后禁止启发式/模型再盖回
+        project_slots: list = []
         user_structure_only = bool(getattr(node, "structure_only", False))
         structure_only = user_structure_only
         if on_event is not None:
@@ -847,9 +847,12 @@ def auto_study_selected_chapters(
             located_excerpt = excerpt
             # 大纲未标仅目录：始终生成要点；启发式/模型不得把 structure_only 改回 True
             # （用户在文档副本取消「仅目录」后，分析不得再盖成目录节点）
-            points, keywords, describes, raw_blocks, _reference_text, _parsed_so = parse_points_and_keywords(
+            points, keywords, describes, raw_blocks, _reference_text, _parsed_so, project_slots = parse_points_and_keywords(
                 excerpt, title=node.title, sequence=node.sequence or ""
             )
+            from report_writing.domain.point_items_sync import merge_project_slots_into_points
+
+            points = merge_project_slots_into_points(points, project_slots)
             structure_only = False
             content_blocks = [
                 ContentBlock.model_validate(item) for item in normalize_content_blocks(raw_blocks)
@@ -918,6 +921,7 @@ def auto_study_selected_chapters(
             level=int(node.level or _level_from_sequence(node.sequence or "")),
             accepted=True,
             structure_only=structure_only,
+            project_slots=list(project_slots or []),
         )
         drafts.append(draft)
         # 范围学习：学完一章立刻落盘，文档窗可「运行一章定位一章」看到已分析/要点
@@ -1004,7 +1008,10 @@ def _apply_study_drafts_to_outline(task, drafts: list) -> set[str]:
     from report_writing.controller.points import _keywords_from_title_points
     from report_writing.domain.chapter_locator import CHAPTER_EXCERPT_MAX_CHARS
     from report_writing.domain.models import AutoStudyDraft, ContentBlock
-    from report_writing.domain.point_items_sync import apply_points_to_outline_node
+    from report_writing.domain.point_items_sync import (
+        apply_points_to_outline_node,
+        aux_prompt_from_project_slots,
+    )
 
     if task.outline is None:
         return set()
@@ -1036,6 +1043,15 @@ def _apply_study_drafts_to_outline(task, drafts: list) -> set[str]:
                     list(draft.points),
                     raw_point_items=raw_items if isinstance(raw_items, list) else None,
                 )
+            slots = list(getattr(draft, "project_slots", None) or [])
+            if slots and not structure_only:
+                existing_aux = (getattr(node, "aux_prompt", None) or "").strip()
+                if not existing_aux or "【建议补充资料】" not in existing_aux:
+                    node.aux_prompt = aux_prompt_from_project_slots(
+                        list(node.points or draft.points or []),
+                        slots,
+                        existing=existing_aux,
+                    )
             draft_keywords = [
                 item.strip() for item in (getattr(draft, "keywords", None) or []) if str(item).strip()
             ]

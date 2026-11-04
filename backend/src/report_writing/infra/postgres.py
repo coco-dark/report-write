@@ -165,6 +165,12 @@ CREATE TABLE IF NOT EXISTS writing_blueprint_document (
     blueprint_id varchar(128) NOT NULL PRIMARY KEY,
     document json NOT NULL
 );
+CREATE TABLE IF NOT EXISTS writing_user_llm_config (
+    user_id varchar(64) NOT NULL PRIMARY KEY,
+    document json NOT NULL,
+    updated_at varchar(32) NOT NULL,
+    KEY writing_user_llm_updated_idx (updated_at)
+);
 """
 
 _STATEMENTS = [statement.strip() for statement in _SCHEMA.split(";") if statement.strip()]

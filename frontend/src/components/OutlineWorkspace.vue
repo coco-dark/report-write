@@ -680,7 +680,7 @@ async function persistChapterList(chapters) {
     await request(`/api/writing/tasks/${encodeURIComponent(props.taskId)}/outline`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chapters: serialized }),
+      body: JSON.stringify({ chapters: serialized, replace_tree: true }),
     });
     emit("change", serialized);
   } else {

@@ -184,6 +184,8 @@ class ElementAttachedFile(Entity):
     file_size: int = 0
     created_at: str = ""
     parsed_at: str = ""
+    rag_task_id: str = ""  # RAG 向量任务 id，检索时限定 taskIdIn
+    rag_biz_id: str = ""  # RAG bizId，与 task 成对限定检索范围
 
 
 class MaterialsSlotFill(Entity):
@@ -197,6 +199,8 @@ class MaterialsSlotFill(Entity):
     parse_status: str = ""
     parse_error: str = ""
     parsed_at: str = ""
+    rag_task_id: str = ""
+    rag_biz_id: str = ""
 
 
 class MaterialsPack(Entity):
@@ -322,6 +326,7 @@ class AutoStudyDraft(Entity):
     level: int = 1
     accepted: bool = True
     structure_only: bool = False
+    project_slots: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class OutlineDiffItem(Entity):
@@ -421,6 +426,7 @@ class AutoStudyTextRequest(Entity):
     text: str = ""
     use_sample: bool = False  # 使用蓝本已上传并 RAG 解析的样本
     use_llm: bool = False  # 是否用模型整理目录（默认关，避免覆盖目录页规则结果）
+    re_extract: bool = False  # 用户主动整本重提：先解开 outline_confirmed 再 generate
 
 
 class ConfirmOutlineExtractRequest(Entity):
@@ -587,6 +593,8 @@ class WritingTask(Entity):
     pending_study: list[AutoStudyDraft] = Field(default_factory=list)
     pending_study_tool: StudyDocumentToolResult | None = None
     study_chapter_keys: list[str] = Field(default_factory=list)
+    # 本轮开写仅处理这些章 key；完整 outline 仍用于文档窗展示
+    write_chapter_scope: list[str] = Field(default_factory=list)
     # 开写前/写后待补充项登记（与对话 registry 同步）
     writing_supplement_gaps: list[dict[str, Any]] = Field(default_factory=list)
     user_id: str = ""
@@ -663,6 +671,8 @@ class ConfirmStudyRequest(Entity):
 
 class SaveOutlineRequest(Entity):
     chapters: list[OutlineNode] = Field(default_factory=list)
+    # 增删改结构时为 True；默认 False：已确认大纲若被短列表子集覆盖则按 key 合并，避免分析/写作预览裁掉整棵树
+    replace_tree: bool = False
 
 
 class SaveElementsRequest(Entity):

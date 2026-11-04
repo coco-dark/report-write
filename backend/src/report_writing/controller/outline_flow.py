@@ -246,13 +246,130 @@ def generate_outline(
     return task
 
 
-def save_outline(task_dir: Path, chapters: list[OutlineNode]) -> WritingTask:
+# 分析/写作短预览误盖全量目录时，判定为意外裁剪的下限（少于则视为用户删了几章）
+OUTLINE_ACCIDENTAL_SHRINK_MIN_DROP = 5
+
+
+def _outline_node_keys(chapters: list[OutlineNode] | None) -> set[str]:
+    return {
+        str(getattr(node, "key", "") or "").strip()
+        for node in (chapters or [])
+        if str(getattr(node, "key", "") or "").strip()
+    }
+
+
+def _merge_outline_keep_existing(
+    existing: list[OutlineNode],
+    incoming: list[OutlineNode],
+) -> list[OutlineNode]:
+    """按 existing 顺序保留未出现在 incoming 的节点；同 key 用 incoming 覆盖。"""
+    incoming_by = {
+        str(node.key or "").strip(): node
+        for node in incoming
+        if str(node.key or "").strip()
+    }
+    seen: set[str] = set()
+    merged: list[OutlineNode] = []
+    for node in existing:
+        key = str(node.key or "").strip()
+        if key and key in incoming_by:
+            merged.append(incoming_by[key])
+            seen.add(key)
+        else:
+            merged.append(node)
+            if key:
+                seen.add(key)
+    for node in incoming:
+        key = str(node.key or "").strip()
+        if key and key not in seen:
+            merged.append(node)
+            seen.add(key)
+    return merged
+
+
+def maybe_restore_outline_from_source_blueprint(task_dir: Path, task: WritingTask) -> WritingTask:
+    """写作副本若被裁成源蓝本的小子集，从源蓝本补回缺失章（保留副本上已分析/已写字段）。"""
+    from report_writing.controller.study_flow import _ensure_brief_ready
+    from report_writing.services.doc_outline_cache import invalidate_doc_outline_cache
+
+    bid = str(getattr(task, "source_blueprint_id", "") or "").strip()
+    tid = str(getattr(task, "id", "") or task_dir.name).strip()
+    if not bid or bid == tid:
+        return task
+    if not bool(getattr(task, "outline_confirmed", False)):
+        return task
+    src_path = task_dir.parent / bid
+    if not src_path.exists():
+        return task
+    try:
+        source = TaskStore(src_path).load()
+    except Exception:
+        return task
+    src_chapters = list(source.outline.chapters or []) if source.outline else []
+    cur_chapters = list(task.outline.chapters or []) if task.outline else []
+    if not src_chapters or not cur_chapters:
+        return task
+    src_keys = _outline_node_keys(src_chapters)
+    cur_keys = _outline_node_keys(cur_chapters)
+    missing = len(src_keys) - len(cur_keys)
+    if missing < OUTLINE_ACCIDENTAL_SHRINK_MIN_DROP:
+        return task
+    if not cur_keys or not cur_keys <= src_keys:
+        return task
+    _log.warning(
+        "写作副本目录被裁剪，从源蓝本恢复 task=%s source=%s copy=%s blueprint=%s",
+        tid,
+        bid,
+        len(cur_keys),
+        len(src_keys),
+    )
+    restored = _merge_outline_keep_existing(src_chapters, cur_chapters)
+    task.outline = finalize_outline(restored, preserve_parents=True)
+    if task.outline.chapters:
+        task.outline_confirmed = True
+    _ensure_brief_ready(task)
+    task.refresh_status()
+    TaskStore(task_dir).save(task)
+    invalidate_doc_outline_cache(tid)
+    invalidate_doc_outline_cache(bid)
+    return task
+
+
+def save_outline(
+    task_dir: Path,
+    chapters: list[OutlineNode],
+    *,
+    replace_tree: bool = False,
+) -> WritingTask:
     from report_writing.controller.study_flow import _ensure_brief_ready
     from report_writing.services.doc_outline_cache import invalidate_doc_outline_cache
 
     store = TaskStore(task_dir)
     task = store.load()
-    tree = outline_from_payload([item.to_dict() for item in chapters])
+    incoming = list(chapters or [])
+    existing = list(task.outline.chapters or []) if task.outline else []
+    if (
+        not replace_tree
+        and bool(getattr(task, "outline_confirmed", False))
+        and existing
+        and incoming
+    ):
+        existing_keys = _outline_node_keys(existing)
+        incoming_keys = _outline_node_keys(incoming)
+        drop = len(existing_keys) - len(incoming_keys)
+        if (
+            incoming_keys
+            and incoming_keys <= existing_keys
+            and drop >= OUTLINE_ACCIDENTAL_SHRINK_MIN_DROP
+        ):
+            _log.warning(
+                "拒绝用短目录替换已确认大纲 task=%s existing=%s incoming=%s，改为按 key 合并",
+                getattr(task, "id", task_dir.name),
+                len(existing_keys),
+                len(incoming_keys),
+            )
+            incoming = _merge_outline_keep_existing(existing, incoming)
+    tree = outline_from_payload([item.to_dict() for item in incoming])
     task.outline = tree
     from report_writing.domain.point_items_sync import normalize_chapter_point_items_on_node
 

@@ -57,6 +57,10 @@ class UserLlmConfigPublic(Entity):
     intent_model_name: str = ""
     enabled: bool = False
     using_system_default: bool = True
+    # 实际调用来源（与 enabled / 系统 yml 一致，便于界面说明）
+    active_source: str = "system"  # system | user
+    active_model_name: str = ""
+    system_model_name: str = ""
 
 
 class TokenDayBucket(Entity):

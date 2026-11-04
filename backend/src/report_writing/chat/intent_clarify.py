@@ -55,6 +55,9 @@ _OPTION_ALIASES: dict[str, tuple[str, ...]] = {
     ),
     "scope_rename": ("改当前文档名", "改成这个名字", "改名叫", "改名"),
     "scope_continue": ("继续当前这份", "继续写当前", "继续当前", "当写作题材"),
+    "source": ("根据原文", "原文内容", "粘贴原文", "粘贴文本", "按原文", "富文本"),
+    "sample": ("依据样本", "按样本", "用样本", "样本分析"),
+    "auto": ("自动分析", "自动生成", "没有样本", "生成要点"),
 }
 
 
@@ -924,7 +927,7 @@ def try_handle_pending_message(
     """
     pending = get_pending(session)
     if not pending:
-        return None
+        return _spec_from_study_source_pending(session, message)
 
     source = str(pending.get("source") or "")
     options = list(pending.get("options") or [])
@@ -1243,6 +1246,83 @@ def build_study_scope_clarify(
             "payload": {
                 "chapter_sequences": tops,
                 "study_message": study_message,
+            },
+        },
+        phase_hint="study",
+    )
+
+
+def _spec_from_study_source_pending(session: ChatSession, message: str) -> dict[str, Any] | None:
+    """对话里粘贴了原文：把挂起的「根据原文分析」续上。"""
+    pending = dict((session.freeform or {}).get("study_source_pending") or {})
+    if not pending:
+        return None
+    text = (message or "").strip()
+    if len(text) < 40:
+        return None
+    ff = dict(session.freeform or {})
+    ff.pop("study_source_pending", None)
+    session.freeform = ff
+    payload = {
+        **pending,
+        "study_text": text,
+        "study_method": "source",
+    }
+    return {
+        "candidate": {
+            "kind": "wizard_command",
+            "name": "re_study_chapters",
+            "command": "re_study_chapters",
+            "payload": payload,
+        },
+        "slots": {"study_method": "source", "study_text": text},
+        "option_id": "source",
+        "defaulted": False,
+        "note": "",
+        "source": "study_source",
+    }
+
+
+def build_study_method_clarify(
+    session: ChatSession,
+    *,
+    chapter_keys: list[str],
+    chapter_sequences: list[str],
+    study_message: str,
+    study_scope: str = "",
+    chapter_label: str = "",
+    has_sample: bool = False,
+) -> tuple[str, list[ChatCard]]:
+    label = (chapter_label or "").strip() or "本章"
+    bound_id = "sample" if has_sample else "auto"
+    bound_label = "依据样本分析" if has_sample else "自动分析"
+    question = f"重新分析「{label}」要用哪种方式？"
+    return begin_clarify(
+        session,
+        source="study_method",
+        question=question,
+        options=[
+            {
+                "id": "source",
+                "label": "根据原文内容分析",
+                "slots": {"study_method": "source"},
+            },
+            {
+                "id": bound_id,
+                "label": bound_label,
+                "slots": {"study_method": bound_id},
+            },
+        ],
+        candidate={
+            "kind": "wizard_command",
+            "name": "re_study_chapters",
+            "command": "re_study_chapters",
+            "payload": {
+                "chapter_keys": [str(k).strip() for k in (chapter_keys or []) if str(k).strip()],
+                "chapter_sequences": [str(s).strip() for s in (chapter_sequences or []) if str(s).strip()],
+                "study_message": study_message,
+                "study_scope": str(study_scope or "").strip(),
+                "chapter_label": label,
             },
         },
         phase_hint="study",
@@ -3468,6 +3548,8 @@ def execute_clarify_spec(
 
         study_message = str(payload.get("study_message") or message or "").strip()
         scope = str(slots.get("study_scope") or "").strip()
+        study_method = str(slots.get("study_method") or payload.get("study_method") or "").strip()
+        study_text = str(payload.get("study_text") or slots.get("study_text") or "").strip()
         _emit_process(emit, "好，按你刚确认的来…")
         reply, cards = execute_wizard_command(
             home,
@@ -3476,6 +3558,11 @@ def execute_clarify_spec(
             study_message=study_message,
             chapter_sequences=list(payload.get("chapter_sequences") or []),
             study_scope=scope,
+            study_method=study_method,
+            study_text=study_text,
+            chapter_keys=[
+                str(k).strip() for k in list(payload.get("chapter_keys") or []) if str(k).strip()
+            ],
             invoke=invoke,
         )
     elif kind == "write_command":

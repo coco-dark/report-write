@@ -466,6 +466,13 @@
                 </div>
 
                 <div v-if="detailTab === 'config'" class="cfg-pane" :aria-disabled="blockingLoad">
+                  <div v-if="configChapterMetaBanner.length" class="cfg-meta-banner span-2">
+                    <span
+                      v-for="(line, bi) in configChapterMetaBanner"
+                      :key="`cfg-meta-${bi}`"
+                      class="cfg-meta-line"
+                    >{{ line }}</span>
+                  </div>
                   <div class="cfg-grid" :class="{ 'is-ops-locked': blockingLoad }">
                     <label>
                       <span>章节序号</span>
@@ -524,6 +531,13 @@
                 </div>
 
                 <div v-else-if="detailTab === 'content'" class="cfg-pane" :aria-disabled="blockingLoad">
+                  <div v-if="configChapterMetaBanner.length" class="cfg-meta-banner span-2">
+                    <span
+                      v-for="(line, bi) in configChapterMetaBanner"
+                      :key="`cfg-meta-c-${bi}`"
+                      class="cfg-meta-line"
+                    >{{ line }}</span>
+                  </div>
                   <div class="cfg-grid" :class="{ 'is-ops-locked': blockingLoad }">
                     <template v-if="configDraft.structure_only">
                       <p class="cfg-hint span-2">仅目录节点无需配置写作要点；可在「基本配置」中编辑说明。</p>
@@ -797,9 +811,71 @@
         v-if="libraryPendingDialogVisible && libraryPendingCard"
         :card="libraryPendingCard"
         :session-id="sessionId"
-        @changed="emit('library-pending-changed')"
+        @changed="onLibraryPendingCardChanged"
         @done="onLibraryPendingDone"
       />
+    </el-dialog>
+
+    <el-dialog
+      v-model="restudyDialogVisible"
+      title="重新分析本章"
+      width="640px"
+      destroy-on-close
+      append-to-body
+      align-center
+      class="doc-win-restudy-dialog"
+      @closed="onRestudyDialogClosed"
+    >
+      <div class="restudy-hero">
+        <strong>{{ restudyTarget.label || "当前章节" }}</strong>
+        <p>选择分析方式。根据原文分析时，请把本章内容粘贴到文本框。</p>
+      </div>
+      <div class="restudy-modes">
+        <button
+          type="button"
+          class="restudy-mode"
+          :class="{ active: restudyMethod === 'source' }"
+          @click="restudyMethod = 'source'"
+        >
+          <span class="restudy-mode-title">根据原文内容分析</span>
+          <span class="restudy-mode-desc">粘贴本章原文，按正文提炼写作要点</span>
+        </button>
+        <button
+          type="button"
+          class="restudy-mode"
+          :class="{ active: restudyMethod === boundRestudyMethod }"
+          @click="restudyMethod = boundRestudyMethod"
+        >
+          <span class="restudy-mode-title">{{ hasSample ? "依据样本分析" : "自动分析" }}</span>
+          <span class="restudy-mode-desc">{{
+            hasSample
+              ? sampleNameLocal
+                ? `按已解析样本「${sampleNameLocal}」定位本章`
+                : "按已上传样板定位本章正文"
+              : "没有样本时由模型直接起草本章写作要点"
+          }}</span>
+        </button>
+      </div>
+      <div v-if="restudyMethod === 'source'" class="restudy-pane">
+        <div
+          ref="restudyPasteBox"
+          class="restudy-rich-paste"
+          contenteditable="true"
+          data-placeholder="在此粘贴本章原文（从 Word / 网页复制即可）…"
+          @input="onRestudyPasteInput"
+          @paste="onRestudyRichPaste"
+        />
+      </div>
+      <template #footer>
+        <el-button @click="restudyDialogVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :disabled="restudyMethod === 'source' && !restudyPasteText.trim()"
+          @click="submitRestudyDialog"
+        >
+          开始分析
+        </el-button>
+      </template>
     </el-dialog>
 
     <el-dialog
@@ -844,6 +920,7 @@
 import { ElMessage, ElMessageBox } from "element-plus";
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 
+import { recoverClipboardPlain } from "../chatHtml";
 import { authHeaders, request } from "../api";
 import {
   elementKindLabel,
@@ -855,6 +932,7 @@ import {
   humanLabel,
   linkPointItemsToElements,
   parseSlotFromText,
+  elementIdsFromPointItems,
   pickPointItemsAuthoritative,
   pickRicherPointItems,
   pointItemsFromChapter,
@@ -1065,6 +1143,13 @@ const extraChapters = ref([]);
 const outlineNodes = ref([]);
 const elementNodes = ref([]);
 const outlineConfirmedLocal = ref(false);
+const sampleReadyLocal = ref(false);
+const sampleNameLocal = ref("");
+const restudyDialogVisible = ref(false);
+const restudyMethod = ref("auto");
+const restudyPasteText = ref("");
+const restudyPasteBox = ref(null);
+const restudyTarget = ref({ keys: [], sequences: [], label: "", key: "" });
 const loading = ref(true); // 打开即遮罩，等首轮读数结束再关
 const outlineFullyLoaded = ref(false);
 const saving = ref(false);
@@ -1276,6 +1361,8 @@ const isFreeformDoc = computed(() => {
 });
 /** 库蓝本或无蓝本·依据样本：共用「确认目录 / 依据样本分析」操作 */
 const isSampleStudyDoc = computed(() => isBlueprintDoc.value || isFreeformSampleDoc.value);
+const hasSample = computed(() => Boolean(sampleReadyLocal.value));
+const boundRestudyMethod = computed(() => (hasSample.value ? "sample" : "auto"));
 
 /** 蓝本进度步进：只读当前文档的 wizardStep，不串其它报告 */
 const WIZARD_STEPPER = [
@@ -1403,12 +1490,12 @@ function pickRicherText(nextVal, prevVal) {
   return next || prev || "";
 }
 
-function mergeOutlinePreserveElementIds(prevList, nextList) {
+function mergeOutlinePreserveElementIds(prevList, nextList, { keepMissing = false } = {}) {
   const prevByKey = new Map(
     (prevList || []).map((ch) => [String(ch?.key || "").trim(), ch]).filter(([k]) => k)
   );
   const writtenStatuses = new Set(["confirmed", "awaiting_confirm", "needs_human"]);
-  return (nextList || []).map((ch) => {
+  const mergeOne = (ch) => {
     const key = String(ch?.key || "").trim();
     const prev = prevByKey.get(key);
     const pending = pendingChapterElementIds.get(key);
@@ -1502,7 +1589,32 @@ function mergeOutlinePreserveElementIds(prevList, nextList) {
           }
         : {}),
     };
-  });
+  };
+  const mergedNext = (nextList || []).map(mergeOne);
+  if (!keepMissing) return mergedNext;
+  // 短预览/当前分析子树只覆盖同 key；已加载的其余章必须保留，且维持原顺序
+  const nextByKey = new Map(
+    mergedNext.map((ch) => [String(ch?.key || "").trim(), ch]).filter(([k]) => k)
+  );
+  const seen = new Set();
+  const out = [];
+  for (const prev of prevList || []) {
+    const key = String(prev?.key || "").trim();
+    if (key && nextByKey.has(key)) {
+      out.push(nextByKey.get(key));
+    } else {
+      out.push(prev);
+    }
+    if (key) seen.add(key);
+  }
+  for (const ch of mergedNext) {
+    const key = String(ch?.key || "").trim();
+    if (key && !seen.has(key)) {
+      out.push(ch);
+      seen.add(key);
+    }
+  }
+  return out;
 }
 
 /** 写完某章后立刻更新目录状态（不等待刷新） */
@@ -1583,28 +1695,42 @@ function applyChapterElementIdsLocal(chapterKey, ids, incomingElements, opts = {
   if (Array.isArray(incomingElements) && incomingElements.length) {
     elementNodes.value = mergeElementNodesLocal(elementNodes.value, incomingElements);
   }
+  const isPointScope =
+    String(opts.associateScope || "").trim() === "point" ||
+    Boolean(opts.pointItemLink || pendingPointItemLink.value);
   const linkOpts = {
-    elementIds: list,
+    elementIds: isPointScope ? list : [],
     newElementIds: opts.newElementIds || [],
     pointLink: opts.pointItemLink || pendingPointItemLink.value || null,
+    assignOrphans: false,
   };
   let linkedItems = null;
-  if (Array.isArray(opts.pointItems) && opts.pointItems.length) {
-    linkedItems = linkPointItemsToElements(
-      opts.pointItems.map((row) => ({ ...row })),
-      elementNodes.value,
-      linkOpts
-    );
-  } else if (String(selectedKey.value || "") === key && configDraft.point_items.length) {
-    linkedItems = linkPointItemsToElements(
-      configDraft.point_items,
-      elementNodes.value,
-      linkOpts
-    );
+  if (isPointScope) {
+    const baseItems =
+      Array.isArray(opts.pointItems) && opts.pointItems.length
+        ? opts.pointItems.map((row) => ({ ...row }))
+        : configDraft.point_items.map((row) => ({ ...row }));
+    if (baseItems.length) {
+      linkedItems = linkPointItemsToElements(baseItems, elementNodes.value, {
+        ...linkOpts,
+        elementIds: list.length ? list : linkOpts.elementIds,
+      });
+    }
   }
   if (String(selectedKey.value || "") === key && linkedItems?.length) {
     configDraft.point_items.splice(0, configDraft.point_items.length, ...linkedItems);
     saveHint.value = "";
+  }
+  const chapterIds = isPointScope
+    ? (outlineNodes.value.find((item) => String(item.key || "") === key)?.element_ids || []).map(
+        (id) => String(id || "").trim()
+      ).filter(Boolean)
+    : list;
+  if (isPointScope && !chapterIds.length) {
+    const pending = pendingChapterElementIds.get(key);
+    if (Array.isArray(pending) && pending.length) {
+      chapterIds.push(...pending);
+    }
   }
   const patchPointItems = (ch) => {
     if (!linkedItems?.length) return ch;
@@ -1625,23 +1751,26 @@ function applyChapterElementIdsLocal(chapterKey, ids, incomingElements, opts = {
       i === idx
         ? patchPointItems({
             ...item,
-            element_ids: [...list],
+            element_ids: [...chapterIds],
             config: {
               ...(item.config && typeof item.config === "object" ? item.config : {}),
-              element_ids: [...list],
+              element_ids: [...chapterIds],
             },
           })
         : item
     );
   }
   // 目录尚未到位：写入 extraChapters 占位，等全量大纲合并时仍能回显
-  if (idx < 0 && list.length) {
+  if (idx < 0 && chapterIds.length) {
     const extraIdx = extraChapters.value.findIndex((item) => String(item.key || "") === key);
     if (extraIdx >= 0) {
       extraChapters.value = extraChapters.value.map((item, i) =>
-        i === extraIdx ? { ...item, element_ids: [...list] } : item
+        i === extraIdx ? patchPointItems({ ...item, element_ids: [...chapterIds] }) : item
       );
     }
+  }
+  if (!isPointScope) {
+    rememberPendingElementIds(key, chapterIds);
   }
   pendingPointItemLink.value = null;
 }
@@ -2195,6 +2324,20 @@ function onLibraryPendingDialogClosed() {
   /* keep queue; parent refreshes via library-pending-changed */
 }
 
+function onLibraryPendingCardChanged(payload) {
+  emit("library-pending-changed", payload);
+  const removed = Array.isArray(payload?.element_ids)
+    ? payload.element_ids.map((x) => String(x || "").trim()).filter(Boolean)
+    : [];
+  if (removed.length) {
+    const drop = new Set(removed);
+    elementNodes.value = (elementNodes.value || []).filter(
+      (el) => !drop.has(String(el?.id || ""))
+    );
+    void loadFullOutline({ force: true });
+  }
+}
+
 function onLibraryPendingDone() {
   libraryPendingDialogVisible.value = false;
   emit("library-pending-changed");
@@ -2396,6 +2539,38 @@ const selectedElementIds = computed(() => {
     ch?.element_ids,
     ch?.config?.element_ids
   );
+});
+
+/** 配置完成后在基本/内容 Tab 顶部展示章节说明与要点关联概况 */
+const configChapterMetaBanner = computed(() => {
+  if (configDraft.structure_only) {
+    const d = String(configDraft.describes || "").trim();
+    return d ? [`目录说明：${d.slice(0, 200)}${d.length > 200 ? "…" : ""}`] : ["目录节点：可在下方填写章节说明"];
+  }
+  const lines = [];
+  const describes = String(configDraft.describes || "").trim();
+  if (describes) {
+    lines.push(
+      `章节说明（背景）：${describes.slice(0, 160)}${describes.length > 160 ? "…" : ""}`
+    );
+  } else {
+    lines.push("章节说明（背景）：尚未填写，分析或保存配置后会在此显示");
+  }
+  const total = configDraft.point_items.length;
+  if (total) {
+    let linked = 0;
+    let open = 0;
+    for (const row of configDraft.point_items) {
+      if (rowNeedsPointAssociate(row)) open += 1;
+      else if (String(row?.element_id || "").trim()) linked += 1;
+    }
+    lines.push(`写作要点：共 ${total} 条，已关联要素 ${linked} 条${open ? `，待关联 ${open} 条` : ""}`);
+  }
+  const aux = String(configDraft.aux_prompt || "").trim();
+  if (aux) {
+    lines.push(`补充提示词：${aux.slice(0, 80)}${aux.length > 80 ? "…" : ""}`);
+  }
+  return lines;
 });
 
 const configLinkedElements = computed(() => {
@@ -2827,13 +3002,13 @@ const chapterActions = computed(() => {
     if (!outlineConfirmed.value) {
       acts.push({ id: "confirm_outline", label: "确认目录", primary: true });
     } else if (chapterNeedsStudy(ch)) {
-      acts.push({ id: "study_chapter", label: "保存并分析本章", primary: true });
+      acts.push({ id: "study_chapter", label: "分析本章", primary: true });
       if (!chapterIsStructure(ch)) {
         acts.push({ id: "associate_elements", label: "关联要素" });
       }
     } else if (!chapterIsStructure(ch)) {
       appendChapterWriteActions(acts, ch);
-      acts.push({ id: "study_chapter", label: "保存并重新分析本章" });
+      acts.push({ id: "study_chapter", label: "重新分析本章" });
       acts.push({ id: "associate_elements", label: "关联要素" });
     }
     return acts;
@@ -2847,17 +3022,15 @@ const chapterActions = computed(() => {
     // 与蓝本对齐：未配要点也可先关联要素；配要点后再开写本章
     if (chapterNeedsStudy(ch)) {
       acts.push({
-        id: "generate_points",
-        label: "生成写作要点",
+        id: "study_chapter",
+        label: "分析本章",
         primary: true,
-        scope: "chapter",
       });
       acts.push({ id: "associate_elements", label: "关联要素" });
     } else {
       acts.push({
-        id: "generate_points",
-        label: "重新生成写作要点",
-        scope: "chapter",
+        id: "study_chapter",
+        label: "重新分析本章",
       });
       appendChapterWriteActions(acts, ch);
       acts.push({ id: "associate_elements", label: "关联要素" });
@@ -2936,18 +3109,11 @@ function ensureChapterParents(list) {
 function applyChapterPreview(preview, { switchTopology = false, allowShrink = false } = {}) {
   const list = ensureChapterParents(preview || []);
   if (!list.length) return;
-  // 全量已拉取后，禁止被短预览（旧的 80 章截断）盖回去
-  if (
-    !allowShrink &&
-    outlineFullyLoaded.value &&
-    outlineNodes.value.length > list.length
-  ) {
-    return;
-  }
-  if (!allowShrink && outlineNodes.value.length > list.length) {
-    return;
-  }
-  outlineNodes.value = mergeOutlinePreserveElementIds(outlineNodes.value, list);
+  const prev = outlineNodes.value || [];
+  // 向导前 8 章、写作进度焦点章、当前分析子树都可能比全量目录短：
+  // 只合入同 key 的要点/状态，禁止把 200 章换成 2 章。
+  const keepMissing = !allowShrink && prev.length > list.length;
+  outlineNodes.value = mergeOutlinePreserveElementIds(prev, list, { keepMissing });
   extraChapters.value = outlineNodes.value.map((ch) => ({
     key: ch.key,
     sequence: ch.sequence,
@@ -3305,7 +3471,7 @@ watch(
   }
 );
 
-// live/卡片章节变化时同步预览（含同会话重生导致章数变少；要点生成后 points 长度变化也要合入）
+// live/卡片章节变化时同步要点与状态；目录变短时不得替换已加载的全量树
 watch(
   () => {
     const ch = activeDoc.value?.chapters || [];
@@ -3325,7 +3491,7 @@ watch(
     const preview = activeDoc.value?.chapters || [];
     if (!preview.length) return;
     // 只同步章节预览，不强制切 tab / remount 拓扑（否则 live 更新会卡顿）
-    applyChapterPreview(preview, { switchTopology: false, allowShrink: true });
+    applyChapterPreview(preview, { switchTopology: false, allowShrink: false });
   }
 );
 
@@ -3521,6 +3687,7 @@ function applyLocate(cmd) {
         newElementIds: cmd.newElementIds,
         pointItemLink: cmd.pointItemLink,
         pointItems: cmd.pointItems,
+        associateScope: cmd.associateScope,
       });
     } else if (incoming.length) {
       elementNodes.value = mergeElementNodesLocal(elementNodes.value, incoming);
@@ -3642,6 +3809,94 @@ function emitWizard(payload) {
     working_task_id: wid || undefined,
     writingTaskId: wid || undefined,
     ...payload,
+  });
+}
+
+function openRestudyDialog({ keys, sequences, label, key } = {}) {
+  const chapterKeys = (keys || []).map((k) => String(k || "").trim()).filter(Boolean);
+  if (!chapterKeys.length) {
+    ElMessage.warning("请先选择章节");
+    return;
+  }
+  restudyTarget.value = {
+    keys: chapterKeys,
+    sequences: (sequences || []).map((s) => String(s || "").trim()).filter(Boolean),
+    label: String(label || "").trim() || "当前章节",
+    key: String(key || chapterKeys[0] || "").trim(),
+  };
+  restudyMethod.value = boundRestudyMethod.value;
+  restudyPasteText.value = "";
+  restudyDialogVisible.value = true;
+  nextTick(() => {
+    if (restudyPasteBox.value) restudyPasteBox.value.innerHTML = "";
+  });
+}
+
+function onRestudyDialogClosed() {
+  restudyPasteText.value = "";
+  if (restudyPasteBox.value) restudyPasteBox.value.innerHTML = "";
+}
+
+function onRestudyPasteInput(event) {
+  const el = event?.target;
+  restudyPasteText.value = String(el?.innerText || el?.textContent || "");
+}
+
+function onRestudyRichPaste(event) {
+  const recovered = recoverClipboardPlain(event);
+  if (!recovered.trim()) return;
+  event.preventDefault();
+  const box = restudyPasteBox.value;
+  if (!box) return;
+  const selection = window.getSelection();
+  const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+  if (range && box.contains(range.commonAncestorContainer)) {
+    range.deleteContents();
+    const node = document.createTextNode(recovered);
+    range.insertNode(node);
+    range.setStartAfter(node);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  } else {
+    box.innerText = recovered;
+  }
+  restudyPasteText.value = box.innerText || recovered;
+}
+
+async function submitRestudyDialog() {
+  const target = restudyTarget.value || {};
+  const keys = (target.keys || []).map((k) => String(k || "").trim()).filter(Boolean);
+  const method = String(restudyMethod.value || boundRestudyMethod.value).trim();
+  if (!keys.length) {
+    restudyDialogVisible.value = false;
+    return;
+  }
+  if (method === "source" && !String(restudyPasteText.value || "").trim()) {
+    ElMessage.warning("请先粘贴本章原文");
+    return;
+  }
+  if (!(await flushConfigBeforeWrite())?.ok) return;
+  const focusKey = String(target.key || keys[0] || "").trim();
+  if (focusKey) selectChapter(focusKey, "config");
+  restudyDialogVisible.value = false;
+  if (method === "auto") {
+    emitWrite("generate_freeform_points", {
+      chapterKeys: keys,
+      chapterKey: focusKey || undefined,
+    });
+    return;
+  }
+  emitWizard({
+    step: "study",
+    wizard_command: "re_study_chapters",
+    chapter_keys: keys,
+    chapter_sequences: target.sequences || [],
+    study_message: target.label || "",
+    study_scope: keys.length === 1 ? "self" : "selected",
+    study_method: method,
+    study_text: method === "source" ? String(restudyPasteText.value || "").trim() : "",
+    locate_chapter_key: focusKey,
   });
 }
 
@@ -3933,17 +4188,13 @@ async function runPhaseAction(act) {
       emitWizard({ step: "outline_confirm", wizard_command: "go_outline_confirm" });
       return;
     }
-    if (!(await flushConfigBeforeWrite())?.ok) return;
-    selectChapter(key, "config");
-    const seq = String(selectedChapter.value?.sequence || selectedOutlineNode.value?.sequence || "").trim();
-    emitWizard({
-      step: "study",
-      wizard_command: "re_study_chapters",
-      chapter_keys: [key],
-      chapter_sequences: seq ? [seq] : [],
-      study_message: chapterLabel(selectedChapter.value),
-      study_scope: "self",
-      locate_chapter_key: key,
+    openRestudyDialog({
+      keys: [key],
+      sequences: [
+        String(selectedChapter.value?.sequence || selectedOutlineNode.value?.sequence || "").trim(),
+      ].filter(Boolean),
+      label: chapterLabel(selectedChapter.value || selectedOutlineNode.value),
+      key,
     });
     return;
   }
@@ -4014,13 +4265,18 @@ async function runPhaseAction(act) {
     return;
   }
   if (id === "confirm" || id === "retry_search" || id === "associate_elements") {
+    if (id === "associate_elements") {
+      pendingPointItemLink.value = null;
+      emitWrite("associate_elements", { associateScope: "chapter" });
+      return;
+    }
     emitWrite(id);
   }
 }
 
 async function persistFromTopology(chapters) {
   if (!Array.isArray(chapters)) return taskId.value ? { outline: { chapters: outlineNodes.value } } : null;
-  return persistOutlineNodes(chapters);
+  return persistOutlineNodes(chapters, { replaceTree: true });
 }
 
 function onTopologySelect(index) {
@@ -4051,14 +4307,14 @@ function onTopologyAdd(index) {
     material_files: [],
     knowledge_folder_ids: [],
   });
-  persistOutlineNodes(list, { selectKey: key });
+  persistOutlineNodes(list, { selectKey: key, replaceTree: true });
 }
 
 function onTopologyRemove(index) {
   const list = outlineNodes.value.map((item) => ({ ...item }));
   if (index < 0 || index >= list.length) return;
   list.splice(index, 1);
-  persistOutlineNodes(list, { selectKey: list[Math.max(0, index - 1)]?.key || "" });
+  persistOutlineNodes(list, { selectKey: list[Math.max(0, index - 1)]?.key || "", replaceTree: true });
 }
 
 async function saveElementNodes(elements) {
@@ -4695,7 +4951,7 @@ async function unlinkCurrentElement() {
   }
 }
 
-async function persistOutlineNodes(nodes, { selectKey = "" } = {}) {
+async function persistOutlineNodes(nodes, { selectKey = "", replaceTree = false } = {}) {
   const tid = outlineSourceTaskId();
   if (!tid) return null;
   const ownedBusy = !saving.value;
@@ -4707,7 +4963,7 @@ async function persistOutlineNodes(nodes, { selectKey = "" } = {}) {
     const updated = await request(`/api/writing/tasks/${encodeURIComponent(tid)}/outline`, {
       method: "PUT",
       headers: authHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ chapters: nodes }),
+      body: JSON.stringify({ chapters: nodes, replace_tree: Boolean(replaceTree) }),
     });
     outlineNodes.value = (updated?.outline?.chapters || nodes).map((item) => ({ ...item }));
     extraChapters.value = outlineNodes.value.map((ch) => ({
@@ -4763,7 +5019,7 @@ async function addChapter() {
       material_files: [],
       knowledge_folder_ids: [],
     });
-    await persistOutlineNodes(nodes, { selectKey: key });
+    await persistOutlineNodes(nodes, { selectKey: key, replaceTree: true });
     detailTab.value = "config";
     saveHint.value = "已新增章节";
     emit("config-saved", {
@@ -4814,7 +5070,7 @@ async function removeSelectedChapters() {
     const next = nodes.filter((item) => !drop.has(String(item.key || "").trim()));
     if (next.length === nodes.length) throw new Error("未找到所选章节");
     const remain = next[0]?.key || "";
-    await persistOutlineNodes(next, { selectKey: remain });
+    await persistOutlineNodes(next, { selectKey: remain, replaceTree: true });
     checkedKeys.value = [];
     saveHint.value = `已删除 ${drop.size} 章`;
     emit("config-saved", {
@@ -4848,7 +5104,7 @@ async function removeChapter() {
     }
     const next = nodes.filter((item) => String(item.key || "") !== key);
     if (next.length === nodes.length) throw new Error("未找到该章节");
-    await persistOutlineNodes(next, { selectKey: next[0]?.key || "" });
+    await persistOutlineNodes(next, { selectKey: next[0]?.key || "", replaceTree: true });
     saveHint.value = "已删除";
     emit("config-saved", {
       taskId: persistTid,
@@ -5000,6 +5256,7 @@ function associatePointItemElement(row, index) {
     saveHint.value = `请为待补项「${String(row.slot).trim()}」关联要素`;
   }
   emitWrite("associate_elements", {
+    associateScope: "point",
     pointItemId: pendingPointItemLink.value.id,
     pointIndex: pendingPointItemLink.value.index,
     pointSlot: pendingPointItemLink.value.slot,
@@ -5176,11 +5433,17 @@ async function patchChapterConfigOnTask(tid, key, chapterFields) {
   }
   // 调用方带了本章关联就以它为准。服务端 element_ids 常是空数组，
   // 若优先用服务端，界面上已挂的「建设规模」不会进大纲，写作检索就当没关联。
-  const prevIds = Array.isArray(chapterFields.element_ids)
+  let prevIds = Array.isArray(chapterFields.element_ids)
     ? chapterFields.element_ids.map((id) => String(id || "").trim()).filter(Boolean)
     : Array.isArray(prev.element_ids)
       ? prev.element_ids.map((id) => String(id || "").trim()).filter(Boolean)
       : [];
+  const idSet = new Set(prevIds);
+  for (const row of point_items) {
+    const eid = String(row?.element_id || "").trim();
+    if (eid) idSet.add(eid);
+  }
+  prevIds = [...idSet];
   const parentKey = String(chapterFields.parent || "").trim();
   let parentSeq = "";
   let level = Number(prev.level) > 0 ? Number(prev.level) : 1;
@@ -5237,21 +5500,24 @@ async function saveChapterConfig(opts = {}) {
       await refreshChapterMetaFromPoints();
     }
     const local = outlineNodes.value.find((item) => String(item.key || "") === key) || {};
+    const draftItems = configDraft.structure_only ? [] : draftPointItemsForSave();
+    const idsFromPoints = elementIdsFromPointItems(draftItems);
+    const idsFromSelect = pickElementIds(
+      selectedElementIds.value,
+      local.element_ids,
+      local.config?.element_ids
+    );
     const fields = {
       sequence: configDraft.sequence,
       title: configDraft.title,
       parent: String(configDraft.parent || "").trim(),
-      point_items: configDraft.structure_only ? [] : draftPointItemsForSave(),
+      point_items: draftItems,
       describes: configDraft.describes,
       aux_prompt: configDraft.aux_prompt,
       reference_text: configDraft.reference_text,
       fixed_output: configDraft.fixed_output,
       structure_only: configDraft.structure_only,
-      element_ids: selectedElementIds.value.length
-        ? [...selectedElementIds.value]
-        : Array.isArray(local.element_ids)
-          ? [...local.element_ids]
-          : [],
+      element_ids: [...new Set([...idsFromSelect, ...idsFromPoints])],
     };
     let primaryChapter = null;
     let primaryNodes = null;
@@ -5574,6 +5840,15 @@ async function loadFullOutline({ force = false } = {}) {
         if (force || confirmed) {
           outlineConfirmedLocal.value = confirmed;
         }
+      }
+      if (data && Object.prototype.hasOwnProperty.call(data, "sample_ready")) {
+        sampleReadyLocal.value = Boolean(data.sample_ready);
+        sampleNameLocal.value = String(data.sample_name || "").trim();
+      } else if (isSampleStudyDoc.value) {
+        sampleReadyLocal.value = true;
+      } else {
+        sampleReadyLocal.value = false;
+        sampleNameLocal.value = "";
       }
       if (token !== fetchToken) return;
       // 切文档后丢弃过期响应（副本 id 或库蓝本 id 都算当前文档）
@@ -6625,6 +6900,21 @@ onUnmounted(() => {
   font-size: 13px;
   line-height: 1.55;
 }
+.cfg-meta-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  border-radius: 8px;
+  background: #f0f4ff;
+  border: 1px solid #dbeafe;
+}
+.cfg-meta-line {
+  font-size: 12px;
+  line-height: 1.45;
+  color: #334155;
+}
 .cfg-hint {
   font-size: 12px;
   color: #047857;
@@ -7070,5 +7360,71 @@ onUnmounted(() => {
     linear-gradient(135deg, transparent 60%, #cbd5e1 60%) no-repeat;
   background-position: 4px 4px, 1px 1px;
   background-size: 10px 10px, 10px 10px;
+}
+.restudy-hero {
+  margin-bottom: 14px;
+}
+.restudy-hero strong {
+  display: block;
+  font-size: 15px;
+  color: #0f172a;
+}
+.restudy-hero p {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: #64748b;
+  line-height: 1.5;
+}
+.restudy-modes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.restudy-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+  padding: 12px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #f8fafc;
+  cursor: pointer;
+}
+.restudy-mode.active {
+  border-color: #4e6ef2;
+  background: #eef2ff;
+  box-shadow: 0 0 0 3px rgba(78, 110, 242, 0.12);
+}
+.restudy-mode-title {
+  font-size: 14px;
+  font-weight: 650;
+  color: #0f172a;
+}
+.restudy-mode-desc {
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.45;
+}
+.restudy-rich-paste {
+  min-height: 180px;
+  max-height: 320px;
+  overflow: auto;
+  padding: 12px 14px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 12px;
+  background: #fff;
+  line-height: 1.6;
+  font-size: 13px;
+  outline: none;
+}
+.restudy-rich-paste:empty::before {
+  content: attr(data-placeholder);
+  color: #94a3b8;
+}
+.restudy-rich-paste:focus {
+  border-color: #4e6ef2;
+  box-shadow: 0 0 0 3px rgba(78, 110, 242, 0.12);
 }
 </style>

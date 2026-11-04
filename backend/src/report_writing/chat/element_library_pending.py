@@ -179,6 +179,108 @@ def dismiss_pending(
     return removed
 
 
+def _strip_elements_from_task_outline(task: WritingTask, drop_ids: set[str]) -> bool:
+    """从大纲各章去掉 element_ids / point_items 上的关联。"""
+    if not drop_ids:
+        return False
+    outline = getattr(task, "outline", None)
+    chapters = list(getattr(outline, "chapters", None) or [])
+    if not chapters:
+        return False
+    from report_writing.domain.point_items_sync import (
+        normalize_chapter_point_items_on_node,
+        text_needs_supplement,
+    )
+
+    dirty = False
+    for node in chapters:
+        prev_ids = list(getattr(node, "element_ids", None) or [])
+        next_ids = [x for x in prev_ids if str(x).strip() and str(x).strip() not in drop_ids]
+        if len(next_ids) != len(prev_ids):
+            node.element_ids = next_ids
+            dirty = True
+        items = list(getattr(node, "point_items", None) or [])
+        if not items:
+            continue
+        row_dirty = False
+        for row in items:
+            if not isinstance(row, dict):
+                continue
+            eid = str(row.get("element_id") or "").strip()
+            if eid not in drop_ids:
+                continue
+            row.pop("element_id", None)
+            row.pop("element_name", None)
+            if text_needs_supplement(str(row.get("text") or "")):
+                row["needs_supplement"] = True
+            else:
+                row.pop("needs_supplement", None)
+            row_dirty = True
+        if row_dirty:
+            normalize_chapter_point_items_on_node(task, node)
+            dirty = True
+    return dirty
+
+
+def remove_elements_from_task(home: Path, task_id: str, element_ids: list[str]) -> int:
+    """从任务要素表与大纲关联中删除指定要素（不可恢复）。"""
+    from report_writing.domain.elements import save_elements
+    from report_writing.services.store import TaskStore
+
+    tid = str(task_id or "").strip()
+    drop = {str(x).strip() for x in (element_ids or []) if str(x).strip()}
+    if not tid or not drop:
+        return 0
+    path = home / "tasks" / tid
+    if not path.is_dir():
+        return 0
+    try:
+        store = TaskStore(path)
+        task = store.load()
+    except Exception:
+        return 0
+    before_nodes = list(task.element_nodes or [])
+    next_nodes = [n for n in before_nodes if str(getattr(n, "id", "") or "").strip() not in drop]
+    outline_dirty = _strip_elements_from_task_outline(task, drop)
+    if len(next_nodes) == len(before_nodes) and not outline_dirty:
+        return 0
+    save_elements(task, next_nodes)
+    store.save(task)
+    return len(before_nodes) - len(next_nodes)
+
+
+def delete_pending_elements(
+    session: ChatSession,
+    pending_ids: list[str],
+    *,
+    home: Path | None = None,
+) -> dict[str, Any]:
+    """从待办删除并从任务移除要素（与「暂不收录」不同：章节上也不再保留该要素）。"""
+    ff = dict(session.freeform or {})
+    pending = list_pending(session)
+    ids = {str(x).strip() for x in (pending_ids or []) if str(x).strip()}
+    removing = [p for p in pending if str(p.get("pending_id") or "") in ids]
+    kept = [p for p in pending if str(p.get("pending_id") or "") not in ids]
+    by_task: dict[str, list[str]] = {}
+    for row in removing:
+        tid = str(row.get("task_id") or "").strip()
+        eid = str((row.get("element") or {}).get("id") or "").strip()
+        if tid and eid:
+            by_task.setdefault(tid, []).append(eid)
+    removed_elements = 0
+    if home is not None:
+        for tid, eids in by_task.items():
+            removed_elements += remove_elements_from_task(home, tid, eids)
+    ff["element_library_pending"] = kept
+    session.freeform = ff
+    return {
+        "removed_pending": len(removing),
+        "removed_elements": removed_elements,
+        "task_ids": list(by_task.keys()),
+        "element_ids": [eid for eids in by_task.values() for eid in eids],
+    }
+
+
 def pending_library_card(
     session: ChatSession,
     *,

@@ -46,10 +46,29 @@
             type="info"
             :closable="false"
             show-icon
-            title="当前使用系统默认百炼配置；开启「使用我的配置」并填写 Key 与模型名后生效。"
+            class="mb"
+          >
+            <template #title>
+              当前实际调用：<strong>系统默认百炼</strong>
+              <span v-if="llm.active_model_name || llm.system_model_name">
+                · 模型 {{ llm.active_model_name || llm.system_model_name }}
+              </span>
+            </template>
+            <p class="alert-body">
+              关闭「使用我的模型配置」后不会使用下方已保存的 Key（仅作草稿保留）。
+              个人配置保存后写入 <strong>MySQL</strong>（表 writing_user_llm_config），不再写入本地 llm.json。
+              系统 Key 来自 <code>config/bailian.local.yml</code>，若与你在用户中心填过的是同一把 Key，账单上仍会看到同一账号，这不代表开关未生效。
+            </p>
+          </el-alert>
+          <el-alert
+            v-else
+            type="success"
+            :closable="false"
+            show-icon
+            :title="`当前实际调用：你的配置 · 模型 ${llm.active_model_name || llm.model_name || '—'}`"
             class="mb"
           />
-          <el-form label-position="top" class="narrow">
+          <el-form label-position="top" class="narrow" :class="{ 'form-disabled': !llmForm.enabled }">
             <el-form-item label="使用我的模型配置">
               <el-switch v-model="llmForm.enabled" />
             </el-form-item>
@@ -397,5 +416,18 @@ h3 {
 }
 .mb {
   margin-bottom: 14px;
+}
+.alert-body {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.alert-body code {
+  font-size: 12px;
+}
+.form-disabled :deep(.el-input__wrapper),
+.form-disabled :deep(.el-select__wrapper),
+.form-disabled :deep(.el-input-number) {
+  opacity: 0.72;
 }
 </style>

@@ -4,8 +4,8 @@
     <p class="card-hint">
       {{
         localRows.some((r) => r.metaFromCreate)
-          ? "勾选要收入的要素。名称+分类+标签与库中完全相同时会提示修改；分类/标签/作用已带入时可直接收入。"
-          : "勾选要收入的要素。名称+分类+标签与库中完全相同会判重复。分类、标签、作用可选。"
+          ? "勾选要收入的要素。名称+分类+标签与库中完全相同时会提示修改；分类/标签/作用已带入时可直接收入。不需要的要素可点「删除」从文档移除。"
+          : "勾选要收入的要素。名称+分类+标签与库中完全相同会判重复。不需要的要素可点「删除」从文档移除；「暂不收录」仅移出待办并保留章节配置。"
       }}
     </p>
     <div v-if="localRows.length" class="pending-bulk">
@@ -41,6 +41,14 @@
         <span v-if="row.purpose" class="meta-purpose">{{ row.purpose }}</span>
         <button type="button" class="meta-edit-link" @click="row.showEdit = !row.showEdit">
           {{ row.showEdit ? "收起修改" : "改一下" }}
+        </button>
+        <button
+          type="button"
+          class="meta-delete-link"
+          :disabled="busy"
+          @click="deleteRow(row)"
+        >
+          删除
         </button>
       </div>
       <el-row v-if="!row.metaFromCreate || row.showEdit" :gutter="8" class="pending-fields">
@@ -88,6 +96,16 @@
         </el-col>
       </el-row>
       <p v-if="row.identityHint" class="field-tip warn-tip">{{ row.identityHint }}</p>
+      <div v-if="!row.metaFromCreate" class="pending-row-actions">
+        <button
+          type="button"
+          class="meta-delete-link"
+          :disabled="busy"
+          @click="deleteRow(row)"
+        >
+          删除
+        </button>
+      </div>
     </div>
     <div class="pending-actions">
       <el-button type="primary" round :loading="busy" :disabled="!checkedCount" @click="importSelected">
@@ -149,7 +167,7 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 
 import { authHeaders, request } from "../api";
 import { elementKindLabel } from "../elementUi";
@@ -539,6 +557,43 @@ async function retryConflicts() {
   }
 }
 
+async function deleteRow(row) {
+  if (!row?.pending_id || busy.value) return;
+  const name = String(row.element?.name || row.element?.id || "该要素").trim();
+  try {
+    await ElMessageBox.confirm(
+      `确定删除「${name}」？将从文档副本移除该要素及章节关联，且不可恢复。`,
+      "删除要素",
+      {
+        confirmButtonText: "删除",
+        cancelButtonText: "取消",
+        type: "warning",
+      }
+    );
+  } catch {
+    return;
+  }
+  busy.value = true;
+  try {
+    const data = await request("/api/writing/element-library/delete-pending", {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        session_id: props.sessionId,
+        pending_ids: [row.pending_id],
+      }),
+    });
+    localRows.value = localRows.value.filter((r) => r.pending_id !== row.pending_id);
+    ElMessage.success("已删除该要素");
+    emit("changed", data);
+    if (!localRows.value.length) emit("done");
+  } catch (e) {
+    ElMessage.error(e.message || "删除失败");
+  } finally {
+    busy.value = false;
+  }
+}
+
 async function dismissSelected() {
   const rows = selectedRows();
   if (!rows.length) {
@@ -700,5 +755,23 @@ async function dismissSelected() {
 }
 .meta-edit-link:hover {
   text-decoration: underline;
+}
+.meta-delete-link {
+  border: 0;
+  background: transparent;
+  color: #b91c1c;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.meta-delete-link:hover:not(:disabled) {
+  text-decoration: underline;
+}
+.meta-delete-link:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.pending-row-actions {
+  margin-top: 4px;
 }
 </style>

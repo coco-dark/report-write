@@ -713,6 +713,9 @@ def execute_wizard_command(
     study_message: str = "",
     chapter_sequences: list[str] | None = None,
     study_scope: str = "",
+    study_method: str = "",
+    study_text: str = "",
+    chapter_keys: list[str] | None = None,
     invoke=None,
 ) -> tuple[str, list[ChatCard]]:
     """子 Agent 工具统一入口：wizard_command → 卡片与回复。"""
@@ -755,6 +758,13 @@ def execute_wizard_command(
         body["chapter_sequences"] = list(chapter_sequences or [])
         if str(study_scope or "").strip():
             body["study_scope"] = str(study_scope).strip()
+        if str(study_method or "").strip():
+            body["study_method"] = str(study_method).strip()
+        if str(study_text or "").strip():
+            body["study_text"] = str(study_text)
+        keys = [str(k).strip() for k in (chapter_keys or []) if str(k).strip()]
+        if keys:
+            body["chapter_keys"] = keys
         if invoke is not None:
             body["_intent_invoke"] = invoke
     return _action_blueprint_wizard(home, session, body)
@@ -1196,10 +1206,94 @@ def _action_blueprint_wizard(
                 task=task,
                 message=msg,
             )
+        from report_writing.chat.study_chapter_resolve import infer_study_method
+
+        method = infer_study_method(
+            str(payload.get("study_method") or payload.get("study_source") or ""),
+            msg,
+        )
+        has_sample = bool(getattr(task, "sample_ready", False))
+        chapter_label = ""
+        by_key = {
+            str(getattr(n, "key", "") or "").strip(): n
+            for n in list(getattr(getattr(task, "outline", None), "chapters", None) or [])
+        }
+        if len(keys) == 1:
+            node = by_key.get(keys[0])
+            if node is not None:
+                chapter_label = (
+                    f"{str(getattr(node, 'sequence', '') or '').strip()} "
+                    f"{str(getattr(node, 'title', '') or '').strip()}"
+                ).strip() or keys[0]
+        elif keys:
+            chapter_label = f"已选 {len(keys)} 章"
+        if method not in {"source", "sample", "auto"}:
+            from report_writing.chat.intent_clarify import build_study_method_clarify
+
+            return build_study_method_clarify(
+                session,
+                chapter_keys=keys,
+                chapter_sequences=list(seqs or []),
+                study_message=msg,
+                study_scope=resolved_scope,
+                chapter_label=chapter_label,
+                has_sample=has_sample,
+            )
+        if method == "sample" and not has_sample:
+            method = "auto"
+        if method == "auto":
+            from report_writing.chat.actions import _action_generate_freeform_points
+
+            ff = dict(session.freeform or {})
+            ff.pop("study_source_pending", None)
+            session.freeform = ff
+            if work_id:
+                session.task_id = work_id
+            return _action_generate_freeform_points(
+                home,
+                session,
+                {
+                    "task_id": work_id,
+                    "chapter_keys": keys,
+                    "focus_chapter_key": keys[0] if keys else "",
+                },
+            )
+        if method == "source":
+            study_text = str(payload.get("study_text") or payload.get("text") or "").strip()
+            if not study_text:
+                pending = {
+                    "chapter_keys": keys,
+                    "chapter_sequences": list(seqs or []),
+                    "study_scope": resolved_scope,
+                    "study_message": msg,
+                    "chapter_label": chapter_label,
+                    "task_id": work_id,
+                    "blueprint_id": blueprint_id,
+                    "working_task_id": work_id,
+                }
+                session.freeform = {
+                    **(session.freeform or {}),
+                    "study_source_pending": pending,
+                }
+                return (
+                    f"好，按原文分析「{chapter_label or '本章'}」。"
+                    "请把这一章的原文粘贴到下方文本框，再点「开始分析」。",
+                    [
+                        ChatCard(
+                            type="study_source_paste",
+                            title="根据原文内容分析",
+                            payload=pending,
+                        )
+                    ],
+                )
         wizard["step"] = "study"
+        wizard["study_method"] = method
         wizard["trigger_chapter_study"] = keys
         session.freeform = {**(session.freeform or {}), "blueprint_wizard": wizard}
         session.blueprint_id = blueprint_id
+        ff_clear = dict(session.freeform or {})
+        ff_clear.pop("study_source_pending", None)
+        session.freeform = ff_clear
         from report_writing.chat.study_chapter_resolve import parse_study_sequences_from_message
 
         tops = [str(s).strip() for s in seqs if str(s).strip()] or parse_study_sequences_from_message(
@@ -1218,15 +1312,16 @@ def _action_blueprint_wizard(
             )
         else:
             hint = f"共 {len(keys)} 章"
+        method_hint = "按原文" if method == "source" else "依据样本"
         return (
-            f"收到，我先按你说的范围来学：{hint}。"
+            f"收到，我先{method_hint}来学：{hint}。"
             "章节目录和进度请在右侧文档窗口查看，学完了再跟我说下一批也行。",
             [
                 _blueprint_wizard_card(
                     blueprint_id=blueprint_id,
                     step="study",
                     title="依据模版编写 · 分析要点",
-                    extra={**wizard, "chapter_study_keys": keys},
+                    extra={**wizard, "chapter_study_keys": keys, "study_method": method},
                 )
             ],
         )

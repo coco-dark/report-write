@@ -5,20 +5,10 @@ from __future__ import annotations
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
-from report_writing.api.deps import data_home
+from report_writing.api.deps import load_task, task_dir, task_root
 from report_writing.services.store import TaskStore
 
 router = APIRouter(tags=["element_images"])
-
-
-def _load_task(task_id: str):
-    tid = str(task_id or "").strip()
-    if not tid:
-        raise HTTPException(status_code=400, detail="需要 task_id")
-    path = data_home() / "tasks" / tid
-    if not (path / "task.json").is_file():
-        raise HTTPException(status_code=404, detail="任务不存在")
-    return TaskStore(path).load()
 
 
 def _ensure_image_element_stub(task, element_id: str):
@@ -34,12 +24,12 @@ def _ensure_image_element_stub(task, element_id: str):
     stub = ElementNode(id=eid, name="图片要素", kind="image", image_source="upload")
     merged[eid] = stub
     task.element_nodes = list(merged.values())
-    TaskStore(data_home() / "tasks" / task.id).save(task)
+    TaskStore(task_dir(task.id)).save(task)
     return stub
 
 
 def _save_element(task, element_id: str, mutator):
-    store = TaskStore(data_home() / "tasks" / task.id)
+    store = TaskStore(task_dir(task.id))
     merged = {e.id: e for e in (task.element_nodes or []) if e.id}
     node = merged.get(element_id)
     if node is None:
@@ -54,12 +44,13 @@ def _save_element(task, element_id: str, mutator):
 def get_task_element_image(task_id: str, element_id: str):
     from report_writing.services.element_images import absolute_image_path
 
-    task = _load_task(task_id)
+    home = task_root()
+    task = load_task(task_id)
     eid = str(element_id or "").strip()
     node = next((e for e in (task.element_nodes or []) if e.id == eid), None)
     if node is None:
         raise HTTPException(status_code=404, detail="要素不存在")
-    path = absolute_image_path(data_home(), task.id, node)
+    path = absolute_image_path(home, task.id, node)
     if path is None or not path.is_file():
         raise HTTPException(status_code=404, detail="图片不存在")
     media = "image/png"
@@ -81,13 +72,14 @@ async def upload_task_element_image(
 ) -> dict:
     from report_writing.services.element_images import save_image_bytes
 
-    task = _load_task(task_id)
+    home = task_root()
+    task = load_task(task_id)
     eid = str(element_id or "").strip()
     _ensure_image_element_stub(task, eid)
     raw = await file.read()
     try:
         rel = save_image_bytes(
-            data_home(),
+            home,
             task.id,
             eid,
             raw,
@@ -109,12 +101,13 @@ async def upload_task_element_image(
 def generate_task_element_image(task_id: str, element_id: str, body: dict | None = None) -> dict:
     from report_writing.services.element_images import generate_image_from_prompt
 
-    task = _load_task(task_id)
+    home = task_root()
+    task = load_task(task_id)
     eid = str(element_id or "").strip()
     node = _ensure_image_element_stub(task, eid)
     prompt = str((body or {}).get("prompt") or node.prompt or node.name or "").strip()
     try:
-        rel = generate_image_from_prompt(data_home(), task.id, eid, prompt)
+        rel = generate_image_from_prompt(home, task.id, eid, prompt)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 

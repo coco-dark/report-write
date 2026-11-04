@@ -235,6 +235,27 @@ def post_import_batch(body: dict) -> dict:
     }
 
 
+@router.post("/api/writing/element-library/delete-pending")
+def post_delete_pending(body: dict) -> dict:
+    """从待收录移除，并从任务删除要素节点及章节关联（不可恢复）。"""
+    from report_writing.chat.element_library_pending import delete_pending_elements
+    from report_writing.services.chat_session import get_session, save_session
+
+    session_id = str(body.get("session_id") or "").strip()
+    if not session_id:
+        raise HTTPException(status_code=400, detail="需要 session_id")
+    ids = body.get("pending_ids")
+    if not isinstance(ids, list) or not ids:
+        raise HTTPException(status_code=400, detail="需要 pending_ids")
+    home = task_root()
+    session = get_session(home, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    result = delete_pending_elements(session, ids, home=home)
+    save_session(home, session)
+    return result
+
+
 @router.post("/api/writing/element-library/dismiss-pending")
 def post_dismiss_pending(body: dict) -> dict:
     from report_writing.chat.element_library_pending import dismiss_pending

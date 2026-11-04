@@ -437,6 +437,11 @@ def execute_dispatch_tool(
                 study_message=text,
                 chapter_sequences=clean_seqs,
                 study_scope=str(args.get("study_scope") or args.get("scope") or ""),
+                study_method=str(args.get("study_method") or args.get("study_source") or ""),
+                study_text=str(args.get("study_text") or args.get("text") or ""),
+                chapter_keys=[
+                    str(k).strip() for k in list(args.get("chapter_keys") or []) if str(k).strip()
+                ],
                 invoke=invoke,
             )
         except ValueError as error:

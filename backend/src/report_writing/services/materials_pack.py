@@ -691,6 +691,15 @@ def parse_slot_file(home: Path, pack_id: str, slot_no: int, *, force: bool = Fal
         fill.parse_status = "parsed"
         fill.parse_error = ""
         fill.parsed_at = _now()
+        try:
+            from report_writing.services.rag_materials import ensure_file_vectorized, rag_meta_from_record
+
+            vrec = ensure_file_vectorized(path)
+            meta = rag_meta_from_record(vrec)
+            fill.rag_task_id = meta.get("rag_task_id") or ""
+            fill.rag_biz_id = meta.get("rag_biz_id") or ""
+        except Exception as vec_error:
+            _log.warning("槽位文件 RAG 向量化留待检索时执行 %s: %s", path.name, vec_error)
     except Exception as error:
         fill.parse_status = "error"
         fill.parse_error = str(error)[:1000]
@@ -728,11 +737,17 @@ def _read_slot_paragraphs(path: Path) -> list[str]:
             return []
 
 
-def search_in_slot_file(path: Path, query: str, *, limit: int = 5) -> list[str]:
-    """在槽位文件正文中按要素检索词取摘录（优先已解析缓存）。"""
+def search_in_slot_file(path: Path, query: str, *, limit: int = 5, biz_type: str = "002") -> list[str]:
+    """槽位文件 RAG hybridSearch；失败或无命中时回落解析正文关键词匹配。"""
     q = (query or "").strip()
     if not path.is_file():
         return []
+    if q:
+        from report_writing.services.rag_materials import search_file_rag_excerpts
+
+        rag_hits = search_file_rag_excerpts(path, q, limit=limit, biz_type=biz_type)
+        if rag_hits:
+            return rag_hits
     paragraphs = _read_slot_paragraphs(path)
     body = "\n".join(paragraphs or [])
     if not body.strip():

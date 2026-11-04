@@ -16,6 +16,7 @@ from report_writing.infra.rag_parse import file_domain, rag_domain
 
 _log = logging.getLogger("uvicorn.error")
 _MANIFEST = ".rag-tasks.json"
+_FILE_VECTOR_MANIFEST_SUFFIX = ".rag-vector.json"
 _POLL_SECONDS = 5
 _MAX_POLLS = 60
 _RATE_LIMIT_RETRIES = 5
@@ -65,11 +66,14 @@ class RagMaterialIndex:
         body = search_materials(query, biz_ids, task_ids, limit)
         hits: list[CorpusHit] = []
         names = {item["task_id"]: item["source_file"] for item in self._tasks}
+        allowed_tasks = set(task_ids)
         for index, record in enumerate(_records(body), start=1):
             excerpt = _record_text(record)
             if not excerpt:
                 continue
             task_id = _record_task_id(record)
+            if allowed_tasks and task_id not in allowed_tasks:
+                continue
             hits.append(
                 CorpusHit(
                     id=f"rag-{index}",
@@ -101,27 +105,198 @@ def search_materials(query: str, biz_ids: list[str], task_ids: list[int], limit:
     )
 
 
+def load_file_vector_record(path: Path) -> dict | None:
+    manifest_path = file_vector_manifest_path(path)
+    if not manifest_path.is_file():
+        return None
+    try:
+        loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return loaded if isinstance(loaded, dict) else None
+
+
+def search_scope_from_record(record: dict | None) -> tuple[list[str], list[int]]:
+    """从向量化 manifest 取出检索限定用的 bizId / taskId 列表。"""
+    if not isinstance(record, dict):
+        return [], []
+    biz_ids: list[str] = []
+    task_ids: list[int] = []
+    for raw in list(record.get("search_biz_ids") or record.get("biz_ids") or []):
+        text = str(raw or "").strip()
+        if text and text not in biz_ids:
+            biz_ids.append(text)
+    primary_biz = str(record.get("rag_biz_id") or record.get("biz_id") or "").strip()
+    if primary_biz and primary_biz not in biz_ids:
+        biz_ids.insert(0, primary_biz)
+    for raw in list(record.get("search_task_ids") or record.get("task_ids") or []):
+        try:
+            tid = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if tid > 0 and tid not in task_ids:
+            task_ids.append(tid)
+    primary_task = record.get("rag_task_id", record.get("task_id"))
+    try:
+        tid = int(primary_task or 0)
+    except (TypeError, ValueError):
+        tid = 0
+    if tid > 0 and tid not in task_ids:
+        task_ids.insert(0, tid)
+    return biz_ids, task_ids
+
+
+def rag_meta_from_record(record: dict | None) -> dict[str, str]:
+    biz_ids, task_ids = search_scope_from_record(record)
+    return {
+        "rag_biz_id": biz_ids[0] if biz_ids else "",
+        "rag_task_id": str(task_ids[0]) if task_ids else "",
+    }
+
+
+def search_materials_scoped(query: str, record: dict, limit: int) -> list[str]:
+    """hybridSearch 后只保留 manifest 中登记 taskId 的片段，避免串到其它资料。"""
+    biz_ids, task_ids = search_scope_from_record(record)
+    if not query.strip() or not task_ids:
+        return []
+    want = set(task_ids)
+    body = search_materials(query, biz_ids, task_ids, max(limit, 1) * 3)
+    texts: list[str] = []
+    for rec in _records(body):
+        tid = _record_task_id(rec)
+        if want and tid not in want:
+            continue
+        text = _record_text(rec)
+        if text:
+            texts.append(text[:800])
+        if len(texts) >= limit:
+            break
+    return texts[:limit]
+
+
+def file_vector_manifest_path(path: Path) -> Path:
+    return Path(str(path) + _FILE_VECTOR_MANIFEST_SUFFIX)
+
+
+def ensure_file_vectorized(path: Path, *, biz_type: str = "002") -> dict:
+    """单文件向量化（旁路 manifest），供要素文件 / 资料包槽位 RAG 检索复用。"""
+    if not path.is_file():
+        raise ValueError(f"文件不存在：{path}")
+    manifest_path = file_vector_manifest_path(path)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+    cached: dict | None = None
+    if manifest_path.is_file():
+        try:
+            loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                cached = loaded
+        except (OSError, json.JSONDecodeError):
+            cached = None
+    relative = path.name
+    record = _ready_record(path, relative, cached, biz_type)
+    manifest_path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+    return record
+
+
+def search_file_rag_excerpts(
+    path: Path,
+    query: str,
+    *,
+    limit: int = 5,
+    biz_type: str = "002",
+) -> list[str]:
+    """对单个本地文件做 hybridSearch；失败时返回空列表，由调用方 fallback。"""
+    q = (query or "").strip()
+    if not q or not path.is_file():
+        return []
+    try:
+        record = ensure_file_vectorized(path, biz_type=biz_type)
+        return search_materials_scoped(q, record, limit)
+    except Exception as error:
+        _log.warning("要素 RAG 检索失败 %s: %s", path.name, error)
+        return []
+
+
+def _biz_id_for_file(path: Path, digest: str) -> str:
+    """每个本地文件独立 bizId，检索时与 vector taskId 成对限定范围。"""
+    path_key = hashlib.sha256(str(path.resolve()).encode("utf-8")).hexdigest()[:12]
+    return f"rw-{path_key}-{digest[:8]}"
+
+
+def _vector_ids_from_created(created: dict, requested_biz_id: str) -> tuple[str, int]:
+    task_raw = created.get("id") or created.get("taskId") or created.get("task_id") or 0
+    try:
+        task_id = int(task_raw or 0)
+    except (TypeError, ValueError):
+        task_id = 0
+    biz_id = str(
+        created.get("bizId")
+        or created.get("biz_id")
+        or created.get("biz")
+        or requested_biz_id
+        or ""
+    ).strip()
+    return biz_id, task_id
+
+
+def _finalize_vector_record(
+    *,
+    path: Path,
+    relative: str,
+    stored_type: str,
+    digest: str,
+    biz_id: str,
+    task_id: int,
+    uploaded: str,
+) -> dict:
+    biz = str(biz_id or "").strip()
+    tid = int(task_id or 0)
+    return {
+        "source_file": relative,
+        "source_path": str(path.resolve()),
+        "biz_type": stored_type,
+        "biz_id": biz,
+        "task_id": tid,
+        "rag_biz_id": biz,
+        "rag_task_id": tid,
+        "search_biz_ids": [biz] if biz else [],
+        "search_task_ids": [tid] if tid > 0 else [],
+        "digest": digest,
+        "url": uploaded,
+    }
+
+
 def _ready_record(path: Path, relative: str, cached: dict | None, biz_type: str) -> dict:
     digest = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
     stored_type = file_biz_type(relative, biz_type)
-    if cached and cached.get("digest") == digest and cached.get("task_id") and _task_done(int(cached["task_id"])):
-        return {**cached, "source_file": relative, "biz_type": stored_type}
-    biz_id = f"writing-{digest}"
+    if cached and cached.get("digest") == digest:
+        cached_tid = cached.get("rag_task_id", cached.get("task_id"))
+        try:
+            tid_ok = int(cached_tid or 0) > 0
+        except (TypeError, ValueError):
+            tid_ok = False
+        if tid_ok and _task_done(int(cached_tid)):
+            merged = {**cached, "source_file": relative, "biz_type": stored_type}
+            biz_ids, task_ids = search_scope_from_record(merged)
+            if biz_ids and task_ids:
+                return merged
+    biz_id = _biz_id_for_file(path, digest)
     uploaded = upload_material(path)
     created = create_vector_task(uploaded, biz_id)
-    task_id = int(created.get("id") or 0)
+    biz_id, task_id = _vector_ids_from_created(created, biz_id)
     if task_id <= 0:
         raise ValueError(f"{path.name} 的向量任务没有返回编号")
     if not _summary_done(created):
         _wait_until_done(task_id, path.name)
-    return {
-        "source_file": relative,
-        "biz_type": stored_type,
-        "biz_id": biz_id,
-        "task_id": task_id,
-        "digest": digest,
-        "url": uploaded,
-    }
+    return _finalize_vector_record(
+        path=path,
+        relative=relative,
+        stored_type=stored_type,
+        digest=digest,
+        biz_id=biz_id,
+        task_id=task_id,
+        uploaded=uploaded,
+    )
 
 
 def upload_material(path: Path) -> str:

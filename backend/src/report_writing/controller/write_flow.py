@@ -80,6 +80,7 @@ def write_from_study(task_dir: Path, dataset_dir: Path, on_event=None) -> Writin
             materials_pack_id=pack_id,
             home=home,
             task_id=task.id,
+            biz_type=normalize_biz_type(task.biz_type or "002"),
         )
     managed = run_supervisor(
         phase="write",

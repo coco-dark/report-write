@@ -72,6 +72,8 @@ def _to_model(raw: dict[str, Any]) -> ElementAttachedFile:
             "file_size": int(raw.get("file_size") or 0),
             "created_at": str(raw.get("created_at") or ""),
             "parsed_at": str(raw.get("parsed_at") or ""),
+            "rag_task_id": str(raw.get("rag_task_id") or ""),
+            "rag_biz_id": str(raw.get("rag_biz_id") or ""),
         }
     )
 
@@ -171,6 +173,13 @@ def parse_file(home: Path, file_id: str, *, force: bool = False) -> ElementAttac
         record["parse_status"] = "parsed"
         record["parse_error"] = ""
         record["parsed_at"] = _now()
+        try:
+            from report_writing.services.rag_materials import ensure_file_vectorized, rag_meta_from_record
+
+            vrec = ensure_file_vectorized(path)
+            record.update(rag_meta_from_record(vrec))
+        except Exception as vec_error:
+            _log.warning("要素文件 RAG 向量化留待检索时执行 %s: %s", path.name, vec_error)
     except Exception as error:
         record["parse_status"] = "error"
         record["parse_error"] = str(error)[:1000]
@@ -199,7 +208,12 @@ def delete_file(home: Path, file_id: str) -> bool:
     attached = _to_model(removed)
     path = resolve_path(home, attached)
     if path is not None:
-        for extra in (path, Path(str(path) + ".rag-parse.md"), Path(str(path) + ".rag-parse.html")):
+        for extra in (
+            path,
+            Path(str(path) + ".rag-parse.md"),
+            Path(str(path) + ".rag-parse.html"),
+            Path(str(path) + ".rag-vector.json"),
+        ):
             try:
                 if extra.is_file():
                     extra.unlink()
@@ -231,8 +245,11 @@ def search_parsed_files(
     query: str,
     *,
     limit: int = 5,
+    biz_type: str = "002",
 ) -> tuple[str, list[str]]:
-    """返回 (拼接摘录, 未解析文件名列表)。"""
+    """返回 (拼接摘录, 未解析文件名列表)。已解析文件优先 RAG hybridSearch。"""
+    from report_writing.services.rag_materials import search_file_rag_excerpts
+
     q = (query or "").strip()
     parts: list[str] = []
     unparsed: list[str] = []
@@ -255,6 +272,13 @@ def search_parsed_files(
         if not q:
             parts.append(f"【{name}】\n{body[:1200]}")
             continue
+        src_path = resolve_path(home, attached)
+        if src_path is not None:
+            rag_hits = search_file_rag_excerpts(src_path, q, limit=limit, biz_type=biz_type)
+            if rag_hits:
+                block = "\n".join(rag_hits)
+                parts.append(f"【{name}】\n{block}")
+                continue
         tokens = [t for t in re.split(r"[\s,，、;；]+", q) if t]
         paragraphs = [p.strip() for p in re.split(r"\n{2,}", body) if p.strip()]
         scored: list[tuple[int, str]] = []

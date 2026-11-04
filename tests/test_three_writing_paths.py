@@ -320,7 +320,7 @@ def test_path_select_re_study_specific_chapter(tmp_path: Path):
     hit = execute_dispatch_tool(
         tmp_path,
         session,
-        {"tool": "re_study_chapters", "args": {"chapter_sequences": ["1"]}},
+        {"tool": "re_study_chapters", "args": {"chapter_sequences": ["1"], "study_method": "sample"}},
         "重学第1章",
         emit=None,
         invoke=None,

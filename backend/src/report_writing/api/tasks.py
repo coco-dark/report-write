@@ -44,6 +44,7 @@ from report_writing.controller import (
     generate_outline,
     generate_outline_from_sample,
     import_outline,
+    maybe_restore_outline_from_source_blueprint,
     outline_as_text,
     outline_from_pasted_text,
     parse_points_and_keywords,
@@ -330,7 +331,11 @@ def delete_blueprint_sample(task_id: str) -> WritingTask:
 def put_outline(task_id: str, body: SaveOutlineRequest) -> WritingTask:
     load_task(task_id)
     try:
-        return save_outline(task_dir(task_id), body.chapters)
+        return save_outline(
+            task_dir(task_id),
+            body.chapters,
+            replace_tree=bool(getattr(body, "replace_tree", False)),
+        )
     except (RuntimeError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -406,7 +411,7 @@ def post_parse_points(task_id: str, body: ParsePointsRequest) -> dict:
             )
             if matched and excerpt.strip():
                 source = excerpt
-        points, keywords, describes, content_blocks, reference_text, structure_only = parse_points_and_keywords(
+        points, keywords, describes, content_blocks, reference_text, structure_only, _slots = parse_points_and_keywords(
             source, title=body.title, sequence=body.sequence
         )
         # 参考正文固定为切章结果（或原文），防止模型串到同名其它章
@@ -577,7 +582,8 @@ def stream_write(task_id: str) -> StreamingResponse:
 
 @router.get("/api/writing/tasks/{task_id}", response_model=WritingTask)
 def get_task(task_id: str) -> WritingTask:
-    return load_task(task_id)
+    task = load_task(task_id)
+    return maybe_restore_outline_from_source_blueprint(task_dir(task_id), task)
 
 
 @router.get("/api/writing/tasks/{task_id}/draft-preview")
@@ -666,6 +672,7 @@ def get_doc_outline(
                 return out
 
     task = load_task(task_id)
+    task = maybe_restore_outline_from_source_blueprint(task_dir(task_id), task)
     from report_writing.chat.cards import _chapter_draft_text
     from report_writing.domain.models import ChapterStatus
     from report_writing.services.writing_task_catalog import (
@@ -804,6 +811,8 @@ def get_doc_outline(
     payload = {
         "id": task.id,
         "outline_confirmed": bool(task.outline_confirmed),
+        "sample_ready": bool(getattr(task, "sample_ready", False)),
+        "sample_name": str(getattr(task, "sample_name", "") or ""),
         "chapter_count": len(chapters),
         "chapters": chapters,
         "element_nodes": elements,
@@ -965,15 +974,35 @@ def _task_has_outline(task) -> bool:
     return bool(task.outline and (task.outline.chapters or []))
 
 
+def _unset_outline_confirmed_for_regen(task_id: str) -> None:
+    """整本从样本重提前解开确认，与向导 re_extract_outline 一致。"""
+    from report_writing.services.store import TaskStore
+
+    store = TaskStore(task_dir(task_id))
+    if not store.path.is_dir():
+        return
+    task = store.load()
+    if not getattr(task, "outline_confirmed", False):
+        return
+    task.outline_confirmed = False
+    task.refresh_status()
+    store.save(task)
+
+
 @router.post("/api/writing/tasks/{task_id}/study/extract-outline/text/stream")
 def stream_extract_outline_text(task_id: str, body: AutoStudyTextRequest) -> StreamingResponse:
     task = load_task(task_id)
     selected = [str(item) for item in (body.chapter_keys or []) if str(item).strip()]
     use_sample = bool(body.use_sample)
-    # 已确认目录时禁止静默整本 regenerate（须先走 re_extract 解开确认）
+    re_extract = bool(body.re_extract)
+    if re_extract and use_sample and not selected:
+        _unset_outline_confirmed_for_regen(task_id)
+        task = load_task(task_id)
+    # 已确认目录时禁止静默整本 regenerate（须 re_extract 或向导先解开确认）
     block_full_regen = bool(
         use_sample
         and not selected
+        and not re_extract
         and getattr(task, "outline_confirmed", False)
         and _task_has_outline(task)
     )

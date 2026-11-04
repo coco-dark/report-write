@@ -670,6 +670,10 @@ def test_writing_chapter_keys_follow_outline_order():
     )
     assert _writing_chapter_keys(task) == ["b", "a"]
 
+    scoped = task.model_copy(deep=True)
+    scoped.write_chapter_scope = ["a"]
+    assert _writing_chapter_keys(scoped) == ["a"]
+
 
 def test_analysis_choice_cards_survive_handoff_overwrite(tmp_path: Path):
     """选蓝本后即使 Agent 再调 handoff，仍应保留「仅写已分析」。"""

@@ -12,7 +12,9 @@
   >
     <template #header>
       <div class="dlg-head">
-        <span class="dlg-title">为本章关联要素</span>
+        <span class="dlg-title">{{
+          associateScope === "point" ? "为本条写作要点关联要素" : "为本章关联要素"
+        }}</span>
         <span v-if="chapterLabel" class="dlg-chapter">{{ chapterLabel }}</span>
       </div>
     </template>
@@ -20,8 +22,10 @@
     <el-alert type="info" :closable="false" show-icon class="intro-alert">
       {{
         seedCreateDraft
-          ? "已根据待补项预填要素信息，请核对后保存并关联到本章；也可切到「选择关联」勾选已有要素。"
-          : "本章只选择要启用的要素。新建要素须先完成配置并保存，才会进入任务拓扑。"
+          ? "已根据待补项预填要素信息，请核对后保存并关联到本条要点；也可切到「选择关联」勾选已有要素。"
+          : associateScope === "point"
+            ? "所选要素只关联到当前写作要点，不会自动挂到整章或其它要点。"
+            : "所选要素关联到整章（章级），不会自动挂到各条写作要点；要点内请单独点「关联要素」。"
       }}
     </el-alert>
 
@@ -189,6 +193,8 @@ const props = defineProps({
   taskId: { type: String, default: "" },
   /** 从要点待补项生成的要素草稿（打开时直接进入配置确认） */
   seedCreateDraft: { type: Object, default: null },
+  /** chapter=章级关联；point=仅挂到指定写作要点 */
+  associateScope: { type: String, default: "chapter" },
 });
 
 const emit = defineEmits(["update:modelValue", "confirm"]);

@@ -80,6 +80,12 @@ def put_my_llm_config(body: UserLlmConfig) -> dict:
         return save_llm_config(home, current_user_id(), body).to_dict()
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        from report_writing.services.user_llm_catalog import UserLlmConfigStoreError
+
+        if isinstance(error, UserLlmConfigStoreError):
+            raise HTTPException(status_code=503, detail=str(error)) from error
+        raise
 
 
 @router.get("/api/writing/users/me/token-usage")

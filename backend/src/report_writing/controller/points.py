@@ -63,7 +63,8 @@ def _chapter_analysis_prompt(heading: str, excerpt: str) -> str:
         "0) structure_only：纯目录/无正文 → true。\n"
         "1) describes（80～280 字）：功能与组织；点明固定栏目 vs 项目填报；不写样板实例。\n"
         "2) writing_style（2～5）：语气/节奏/是否表格为主。\n"
-        "3) points（5～12）：可执行写法；提「填哪类信息」，不写样板里的具体工程名/型号/数值。\n"
+        "3) points（5～12）：可执行写法；提「填哪类信息」，不写样板里的具体工程名/型号/数值。"
+        "缺本项目资料时在对应条目中用「（待补充：资料类型名）」标记（类型名与 project_slots.name 一致）。\n"
         "4) keywords（5～10，2～12 字）：规范/方法/专题术语；禁止专名与型号串。\n"
         "5) project_slots：本章写作必须从「本项目资料」取值的元数据清单（可空）。"
         "每项 name/kind/hint/required；name 用类型名（工程名称、设备型号…），不要填样板实例值。\n"
@@ -265,7 +266,7 @@ def _polish_keywords(title: str, points: list[str], keywords: list[str]) -> list
 
 def parse_writing_points(text: str, *, title: str = "", sequence: str = "") -> list[str]:
     """粘贴原文，让模型抽出本章写作要点；无模型时按行切分。"""
-    points, _keywords, _describes, _blocks, _ref, _structure = parse_points_and_keywords(
+    points, _keywords, _describes, _blocks, _ref, _structure, _slots = parse_points_and_keywords(
         text, title=title, sequence=sequence
     )
     return points
@@ -273,7 +274,7 @@ def parse_writing_points(text: str, *, title: str = "", sequence: str = "") -> l
 
 def parse_points_and_keywords(
     text: str, *, title: str = "", sequence: str = ""
-) -> tuple[list[str], list[str], str, list[dict], str, bool]:
+) -> tuple[list[str], list[str], str, list[dict], str, bool, list[dict]]:
     """同一次解析：简述 + 写法要点 + 检索词 + 版式块 + 参考正文 + 是否纯目录。
 
     提示词对齐 anyuan V2 ChapterOutlineAgent：要点写「怎么写」、检索词可跨项目复用，
@@ -296,6 +297,7 @@ def parse_points_and_keywords(
             [],
             cleaned[:8000],
             False,
+            [],
         )
     heading = (
         f"章节序号={sequence or '（未知）'}\n"
@@ -337,6 +339,7 @@ def parse_points_and_keywords(
                 [],
                 (reference or cleaned)[:8000],
                 True,
+                list(project_slots or []),
             )
         if not points:
             points = _points_from_plain(cleaned)
@@ -349,7 +352,7 @@ def parse_points_and_keywords(
         if not reference:
             reference = excerpt[:_REFERENCE_LIMIT]
         blocks = normalize_content_blocks(blocks)
-        return points, keywords, describes, blocks, reference, False
+        return points, keywords, describes, blocks, reference, False, list(project_slots or [])
     except Exception as error:
         _log.warning("模型解析写作要点失败，改用文本切分：%s", error)
         points = _points_from_plain(cleaned)
@@ -360,6 +363,7 @@ def parse_points_and_keywords(
             [],
             cleaned[:8000],
             False,
+            [],
         )
 
 

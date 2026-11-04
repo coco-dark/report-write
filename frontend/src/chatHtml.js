@@ -211,6 +211,76 @@ export function htmlToPlain(html) {
     .trim();
 }
 
+function looksLikeWordHtml(html) {
+  return /mso-|Mso|supportLists|xmlns:w=/i.test(html || "");
+}
+
+function firstLineSequence(text) {
+  const line = (text || "").split("\n").map((s) => s.trim()).find(Boolean) || "";
+  const match = line.match(/^(\d+(?:\.\d+)*)/);
+  return match ? match[1] : "";
+}
+
+/** Word 复制片段时 text/plain 常从 1 重排；HTML 的 supportLists / mso-list 仍带屏幕序号。 */
+export function wordHtmlToPlain(html) {
+  if (!html) return "";
+  let text = html;
+  const markerText = (inner) => {
+    const tmp = document.createElement("div");
+    tmp.innerHTML = inner || "";
+    let plain = (tmp.textContent || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+    if (!plain) return "";
+    const match = plain.match(/^(\d+(?:\.\d+)*\.?|[一二三四五六七八九十百]+[、.]?)\s*/);
+    if (match) return `${match[1].replace(/\.$/, "")} `;
+    return `${plain} `;
+  };
+  text = text.replace(/<!--\[if\s*!supportLists\]-->([\s\S]*?)<!--\[endif\]-->/gi, (_, inner) =>
+    markerText(inner)
+  );
+  text = text.replace(/<span\b[^>]*mso-list\s*:\s*Ignore[^>]*>([\s\S]*?)<\/span>/gi, (_, inner) =>
+    markerText(inner)
+  );
+  text = text
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|h[1-6]|li|tr)\s*>/gi, "\n")
+    .replace(/<\/ol\s*>/gi, "\n")
+    .replace(/<\/ul\s*>/gi, "\n");
+  const box = document.createElement("div");
+  box.innerHTML = text;
+  return (box.innerText || box.textContent || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+/g, " ").trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+/** 粘贴原文分析：优先保留 Word HTML 中的真实序号。 */
+export function recoverClipboardPlain(event) {
+  const plain = (event?.clipboardData?.getData("text/plain") || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n");
+  const html = event?.clipboardData?.getData("text/html") || "";
+  if (looksLikeWordHtml(html)) {
+    const fromWord = wordHtmlToPlain(html);
+    if (fromWord.trim()) {
+      const plainSeq = firstLineSequence(plain);
+      const wordSeq = firstLineSequence(fromWord);
+      if (!plain.trim()) return fromWord;
+      if (wordSeq && plainSeq === "1" && wordSeq !== "1") return fromWord;
+      if (wordSeq && wordSeq.includes(".") && !plainSeq.includes(".")) return fromWord;
+      if (wordSeq && Number(wordSeq.split(".")[0]) > Number((plainSeq || "0").split(".")[0])) {
+        return fromWord;
+      }
+      if (wordSeq) return fromWord;
+    }
+  }
+  if (plain.trim()) return plain.trim();
+  if (html.trim()) return wordHtmlToPlain(html);
+  return "";
+}
+
 /** 粘贴：优先保留安全 HTML，否则纯文本。 */
 export function clipboardToHtml(event) {
   const html = event.clipboardData?.getData("text/html") || "";

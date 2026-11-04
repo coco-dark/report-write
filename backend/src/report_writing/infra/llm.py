@@ -77,9 +77,11 @@ def live_intent_model(*, label: str = "intent") -> BaseChatModel | None:
 
     home = data_home_path()
     cfg = get_llm_config(home, current_user_id())
-    intent_name = normalize_model_name(
-        (cfg.intent_model_name or "").strip() or load_bailian_intent_model_name()
-    )
+    intent_name = ""
+    if cfg.enabled:
+        intent_name = normalize_model_name((cfg.intent_model_name or "").strip())
+    if not intent_name:
+        intent_name = normalize_model_name(load_bailian_intent_model_name())
     data = base.model_dump()
     data["model_name"] = intent_name
     data["max_tokens"] = intent_max_tokens()

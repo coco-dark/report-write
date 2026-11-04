@@ -73,6 +73,37 @@ export function pointsTextFromChapter(node, ch, cfg) {
   return pointsFromPointItems(pointItemsFromChapter(node, ch, cfg)).join("\n");
 }
 
+export function pendingSupplementLabelsFromPointItems(items) {
+  const labels = [];
+  const seen = new Set();
+  for (const row of items || []) {
+    if (!row || typeof row !== "object") continue;
+    const text = String(row.text || row.label || "").trim();
+    if (!text) continue;
+    const need =
+      Boolean(row.needs_supplement) ||
+      textNeedsSupplement(text) ||
+      (!String(row.element_id || "").trim() && parseSlotFromText(text));
+    if (!need) continue;
+    const label =
+      humanLabel(row.slot, row.element_name, parseSlotFromText(text)) ||
+      parseSlotFromText(text);
+    if (!label || seen.has(label)) continue;
+    seen.add(label);
+    labels.push(label);
+  }
+  return labels;
+}
+
+/** 样本/依据文档分析完成后，会话过程条展示待补资料摘要 */
+export function studySupplementProcessMessage(pointItems) {
+  const labels = pendingSupplementLabelsFromPointItems(pointItems);
+  if (!labels.length) return "";
+  const show = labels.slice(0, 8);
+  const extra = labels.length > show.length ? ` 等 ${labels.length} 项` : "";
+  return `　待补充资料：${show.join("、")}${extra}`;
+}
+
 export function normalizePointItemRow(row, index = 0) {
   if (typeof row === "string") {
     const text = row.trim();
@@ -125,13 +156,88 @@ export function pickRicherPointItems(...candidates) {
   return best.map((r, i) => normalizePointItemRow(r, i)).filter(Boolean);
 }
 
-/** 大纲/配置真源已有 point_items 时只用真源，避免进度卡旧列表（条数更多）盖回删除结果 */
-export function pickPointItemsAuthoritative(outlineCandidates, ...fallbackCandidates) {
-  const outline = (outlineCandidates || []).filter((a) => Array.isArray(a));
-  if (outline.length) {
-    return pickRicherPointItems(...outline);
+function pointItemMergeKey(row, index = 0) {
+  const id = String(row?.id || row?.key || "").trim();
+  if (id) return `id:${id}`;
+  const text = String(row?.text || row?.label || "").trim();
+  if (text) return `text:${text}`;
+  return `idx:${index}`;
+}
+
+/** 结构以 base 为准，element_id / element_name 从各来源按 id/文本/行号合并，避免大纲旧稿冲掉刚关联的要素 */
+export function mergePointItemElementLinks(baseItems, ...otherLists) {
+  const base = (baseItems || [])
+    .map((row, i) => normalizePointItemRow(row, i))
+    .filter(Boolean);
+  if (!base.length) return [];
+  const linkByKey = new Map();
+  const ingest = (list) => {
+    (list || []).forEach((row, i) => {
+      const norm = normalizePointItemRow(row, i);
+      if (!norm) return;
+      const eid = String(norm.element_id || "").trim();
+      if (!eid) return;
+      const payload = {
+        element_id: eid,
+        needs_supplement: false,
+      };
+      const ename = humanLabel(norm.element_name, norm.slot);
+      if (ename) payload.element_name = ename;
+      linkByKey.set(pointItemMergeKey(norm, i), payload);
+    });
+  };
+  for (const list of otherLists) {
+    if (Array.isArray(list) && list.length) ingest(list);
   }
-  return pickRicherPointItems(...fallbackCandidates);
+  return base.map((row, i) => {
+    const key = pointItemMergeKey(row, i);
+    let link = linkByKey.get(key);
+    if (!link) {
+      for (const list of otherLists) {
+        if (!Array.isArray(list) || !list[i]) continue;
+        const norm = normalizePointItemRow(list[i], i);
+        const eid = String(norm?.element_id || "").trim();
+        if (eid) {
+          link = {
+            element_id: eid,
+            needs_supplement: false,
+          };
+          const ename = humanLabel(norm.element_name, norm.slot);
+          if (ename) link.element_name = ename;
+          break;
+        }
+      }
+    }
+    if (!link) return row;
+    return { ...row, ...link };
+  });
+}
+
+/**
+ * 大纲条数/结构优先；进度卡或会话里已写入的 element_id 仍合并进来。
+ * 避免「有大纲 point_items 但无关联」时完全忽略进度卡上的关联。
+ */
+export function pickPointItemsAuthoritative(outlineCandidates, ...fallbackCandidates) {
+  const outline = (outlineCandidates || []).filter((a) => Array.isArray(a) && a.length);
+  const fallbacks = (fallbackCandidates || []).filter((a) => Array.isArray(a) && a.length);
+  const base = outline.length
+    ? pickRicherPointItems(...outline)
+    : pickRicherPointItems(...fallbacks);
+  if (!base.length) return [];
+  return mergePointItemElementLinks(base, ...fallbacks, ...outline);
+}
+
+/** 从 point_items 行汇总本章 element_ids（与后端 element_ids_for_chapter_node 对齐） */
+export function elementIdsFromPointItems(items) {
+  const out = [];
+  const seen = new Set();
+  for (const row of items || []) {
+    const eid = String(row?.element_id || "").trim();
+    if (!eid || seen.has(eid)) continue;
+    seen.add(eid);
+    out.push(eid);
+  }
+  return out;
 }
 
 /** 章节配置表格：优先 point_items，否则由 points 生成 */
@@ -166,6 +272,8 @@ export function pointItemsSignature(items) {
 
 /** 关联要素后：按待补项名 / 本次新增 id / 指定行，写入 point_items.element_id */
 export function linkPointItemsToElements(items, elements, options = {}) {
+  const assignOrphans = options.assignOrphans !== false;
+  const pointOnly = Boolean(options.pointLink);
   const list = (items || [])
     .filter((row) => row && typeof row === "object")
     .map((row) => ({ ...row }));
@@ -203,6 +311,9 @@ export function linkPointItemsToElements(items, elements, options = {}) {
       (linkIndex >= 0 && linkIndex === i) ||
       (linkId && String(next.id || "") === linkId);
     if (!eid && elementIds.length) {
+      if (pointOnly && !isTargetRow) {
+        return next;
+      }
       if (isTargetRow && (newIds.length || linkIndex >= 0 || linkId)) {
         if (newIds.length) {
           eid = newIds.find((id) => !assignedNew.has(id)) || newIds[0];
@@ -214,7 +325,7 @@ export function linkPointItemsToElements(items, elements, options = {}) {
       }
       if (!eid) {
         const slot = humanLabel(next.slot, next.element_name);
-        if (slot) {
+        if (slot && !pointOnly) {
           for (const id of elementIds) {
             const el = byId.get(id);
             if (!el) continue;
@@ -243,7 +354,7 @@ export function linkPointItemsToElements(items, elements, options = {}) {
     out.map((r) => String(r?.element_id || "").trim()).filter(Boolean)
   );
   const orphanIds = elementIds.filter((id) => !usedIds.has(id));
-  if (!orphanIds.length) return out;
+  if (!assignOrphans || !orphanIds.length) return out;
 
   const patched = out.map((row) => ({ ...row }));
   for (const eid of orphanIds) {

@@ -759,6 +759,8 @@ def _action_start_writing(
     # 逐步续写：已有任务且仍有待写章时不重复问节奏
     existing_id = str(session.task_id or "").strip()
     skip_pace_clarify = False
+    if len(prefer_keys) == 1:
+        skip_pace_clarify = True
     if existing_id and (_normalize_writing_pace(writing_pace) or _session_writing_pace(session)) == WRITING_PACE_STEP:
         existing_task = _load_task(home, existing_id)
         if existing_task is not None and _pending_write_keys(existing_task):
@@ -798,8 +800,8 @@ def _action_start_writing(
         writing = _load_task(home, existing_id)
         if writing is not None and _pending_write_keys(writing):
             task_keys = set(_writing_chapter_keys(writing))
-            if prefer_keys and not set(prefer_keys).issubset(task_keys) and len(task_keys) > len(prefer_keys):
-                # 旧任务是全量克隆，丢弃后按勾选重建
+            if prefer_keys and not set(prefer_keys).issubset(task_keys):
+                # 勾选范围与副本 scope 不一致（含旧版曾裁剪目录的副本），按勾选重建 scope
                 writing = None
                 session.task_id = ""
             else:
@@ -1004,6 +1006,17 @@ def _action_start_writing(
     else:
         keys_to_run = pending or all_keys
         pace_tip = "全部书写：本轮写完待写章节"
+    if prefer_keys:
+        want = {str(k).strip() for k in prefer_keys if str(k).strip()}
+        if want:
+            keys_to_run = [k for k in keys_to_run if k in want]
+            if not keys_to_run:
+                task_key_set = set(_writing_chapter_keys(writing))
+                keys_to_run = [k for k in prefer_keys if k in task_key_set]
+            if len(prefer_keys) == 1 and keys_to_run:
+                pace_tip = "本轮只写勾选的 1 章"
+            elif keys_to_run and want:
+                pace_tip = f"本轮写勾选的 {len(keys_to_run)} 章"
     if not keys_to_run:
         from report_writing.chat.resource_readiness import export_phase_cards, robot_export_ready
         from report_writing.services.robots import get_robot
@@ -1481,12 +1494,26 @@ def _action_add_chapter_element(home: Path, session: ChatSession, payload: dict)
     return reply, merge_cards_with_configure(session, cards)
 
 
+def _looks_like_chapter_slug(text: str, key: str = "") -> bool:
+    t = str(text or "").strip()
+    k = str(key or "").strip()
+    if not t:
+        return True
+    if k and t.lower() == k.lower():
+        return True
+    if any("\u4e00" <= ch <= "\u9fff" for ch in t):
+        return False
+    return bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", t))
+
+
 def _retry_chapter_display_title(task, chapter_key: str, payload: dict | None = None) -> str:
     """用户可见章名：优先大纲中文标题，勿回落英文 slug（下划线会被 Markdown 吃成斜体）。"""
     body = dict(payload or {})
     seq = str(body.get("sequence") or "").strip()
     title = str(body.get("title") or body.get("chapter_title") or "").strip()
     key = str(chapter_key or "").strip()
+    if title and _looks_like_chapter_slug(title, key):
+        title = ""
     outline = getattr(task, "outline", None)
     node = next(
         (n for n in list(getattr(outline, "chapters", None) or []) if str(getattr(n, "key", "") or "") == key),
@@ -1495,13 +1522,12 @@ def _retry_chapter_display_title(task, chapter_key: str, payload: dict | None = 
     if node is not None:
         seq = seq or str(getattr(node, "sequence", "") or "").strip()
         node_title = str(getattr(node, "title", "") or "").strip()
-        if node_title:
+        if node_title and not _looks_like_chapter_slug(node_title, key):
             title = node_title
     if not title:
         state = next((c for c in (task.chapters or []) if c.key == key), None)
         state_title = str(getattr(state, "title", "") or "").strip() if state else ""
-        # 与 key 相同或含下划线的英文 slug 不当作展示名
-        if state_title and state_title != key and "_" not in state_title:
+        if state_title and not _looks_like_chapter_slug(state_title, key):
             title = state_title
     label = f"{seq} {title}".strip() if seq and title else (title or seq)
     return label or "本章"

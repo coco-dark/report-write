@@ -86,13 +86,16 @@ def sync_brief_from_outline(task: WritingTask) -> None:
         chapter.parent = node.parent
         chapter.material_files = list(node.material_files or [])
         chapter.knowledge_folder_ids = []
-        chapter.element_ids = list(node.element_ids or [])
         from report_writing.domain.point_items_sync import (
             aux_prompt_for_writing_from_node,
             describes_for_writing_from_node,
+            element_ids_for_chapter_node,
+            elements_by_id_from_task,
             points_for_writing_from_node,
         )
 
+        by_id = elements_by_id_from_task(task)
+        chapter.element_ids = element_ids_for_chapter_node(node, elements_by_id=by_id)
         write_points = points_for_writing_from_node(node)
         chapter.points = write_points
         chapter.generate = "\n".join(write_points)
@@ -127,17 +130,20 @@ def resolve_elements_for_chapter(
     materials_pack_id: str = "",
     home: Path | None = None,
     task_id: str = "",
+    biz_type: str = "002",
 ) -> ChapterRequirement:
     by_id = {item.id: item for item in elements if item.id}
     results = []
     element_ids = [str(item).strip() for item in (requirement.element_ids or []) if str(item).strip()]
-    # brief 上的关联可能落后于大纲：界面已挂上的槽位要素以大纲为准，避免检索被跳过
+    # brief 上的关联可能落后于大纲：合并章 element_ids 与 point_items 关联
     if outline is not None:
+        from report_writing.domain.point_items_sync import element_ids_for_chapter_node
+
         node = next((item for item in outline.chapters if item.key == requirement.key), None)
-        for extra in list(getattr(node, "element_ids", None) or []) if node is not None else []:
-            extra_id = str(extra or "").strip()
-            if extra_id and extra_id not in element_ids:
-                element_ids.append(extra_id)
+        if node is not None:
+            for extra_id in element_ids_for_chapter_node(node, elements_by_id=by_id):
+                if extra_id not in element_ids:
+                    element_ids.append(extra_id)
     for element_id in element_ids:
         node = by_id.get(element_id)
         if node is None:
@@ -154,6 +160,7 @@ def resolve_elements_for_chapter(
             materials_pack_id=materials_pack_id,
             home=home,
             task_id=task_id,
+            biz_type=biz_type,
         )
         node.result = value
         kind = (node.kind or "").strip()
@@ -278,6 +285,7 @@ def _resolve_file_slot(
     *,
     materials_pack_id: str = "",
     home: Path | None = None,
+    biz_type: str = "002",
 ) -> str:
     """按资料包槽位文件 + 要素预设检索词取摘录。
 
@@ -313,7 +321,7 @@ def _resolve_file_slot(
         if path is None:
             # 槽位未对齐 / 未上传：不对该槽做任何搜索
             continue
-        excerpts = search_in_slot_file(path, query or path.name, limit=3)
+        excerpts = search_in_slot_file(path, query or path.name, limit=3, biz_type=biz_type)
         if excerpts:
             label = str(
                 getattr(slot, "name", None)
@@ -338,6 +346,7 @@ def _resolve_one(
     materials_pack_id: str = "",
     home: Path | None = None,
     task_id: str = "",
+    biz_type: str = "002",
 ) -> str:
     kind = (node.kind or "fixed").strip()
     if kind == "kv":
@@ -367,6 +376,7 @@ def _resolve_one(
             node,
             materials_pack_id=materials_pack_id,
             home=home,
+            biz_type=biz_type,
         )
     if kind in {"file", "rag_search"}:
         # file：要素上挂载多文件，需手动解析；rag_search 为旧 kind 兼容
@@ -380,6 +390,7 @@ def _resolve_one(
             list(getattr(node, "files", None) or []),
             query,
             limit=5,
+            biz_type=biz_type,
         )
         return text
     if kind == "llm_generate":
@@ -419,6 +430,8 @@ def _resolve_one(
             project_folder_ids=project_folder_ids,
             materials_pack_id=materials_pack_id,
             home=home,
+            task_id=task_id,
+            biz_type=biz_type,
         )
     return (node.value or "").strip()
 
@@ -435,6 +448,8 @@ def _resolve_ref(
     project_folder_ids: list[str] | None = None,
     materials_pack_id: str = "",
     home: Path | None = None,
+    task_id: str = "",
+    biz_type: str = "002",
 ) -> str:
     ref_key = (node.ref_key or "").strip()
     if not ref_key or ref_key in seen:
@@ -462,6 +477,7 @@ def _resolve_ref(
             materials_pack_id=materials_pack_id,
             home=home,
             task_id=task_id,
+            biz_type=biz_type,
         )
     if outline is None:
         return ""

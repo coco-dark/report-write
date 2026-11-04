@@ -181,13 +181,15 @@ def _gaps_from_point_items(
         text = str(row.get("text") or row.get("label") or "").strip()
         slot = str(row.get("slot") or row.get("element_name") or "").strip()
         eid = str(row.get("element_id") or "").strip()
-        needs = bool(row.get("needs_supplement"))
-        if not needs and text and not SUPPLEMENT_TODO_RE.search(text):
-            if not eid:
-                continue
+        if eid and eid in by_id:
+            continue
         if _point_row_has_linked_element(task, chapter_key, row, by_id):
             continue
-        if needs or SUPPLEMENT_TODO_RE.search(text) or slot or "{{配置要素}}" in text:
+        from report_writing.domain.point_items_sync import point_item_row_needs_supplement
+
+        if not point_item_row_needs_supplement(row):
+            continue
+        if slot or "{{配置要素}}" in text or SUPPLEMENT_TODO_RE.search(text):
             m = SUPPLEMENT_SLOT_RE.search(text)
             slot_from_text = (m.group(1) or "").strip() if m and m.lastindex else ""
             out.append(
@@ -857,13 +859,14 @@ def run_supplement_check(
 
     TaskStore(home / "tasks" / task.id).save(task)
     open_items = effective_open_gaps(task, registry, home)
+    display_items = gaps_still_open_for_task(task, open_items, home)
     reply = (
         "开写前我对齐了各章**写作要点**与每条要点**关联的配置要素**，"
-        f"{'下面有 ' + str(len(open_items)) + ' 处还空着' if open_items else '目前看不出必须补的配置'}；"
+        f"{'下面有 ' + str(len(display_items)) + ' 处还空着' if display_items else '目前看不出必须补的配置'}；"
         "补上后检索会更准，**不补也可以先写**（正文里会用待补充占位）。"
         "（此检查仅在开始写作前进行。）"
     )
-    return reply, open_items, registry
+    return reply, display_items, registry
 
 
 def supplement_check_card(

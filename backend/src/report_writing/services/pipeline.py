@@ -178,6 +178,7 @@ def run_chapters(
                 materials_pack_id=pack_id,
                 home=home,
                 task_id=task.id,
+                biz_type=normalize_biz_type(task.biz_type or "002"),
             )
 
     if search_only:

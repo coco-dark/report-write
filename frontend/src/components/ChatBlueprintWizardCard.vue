@@ -118,9 +118,10 @@
           确认目录
         </el-button>
       </div>
-      <ul v-if="processLines.length" class="mini-log">
-        <li v-for="(line, i) in processLines" :key="i">{{ line }}</li>
+      <ul v-if="activityLines.length" ref="activityLogEl" class="mini-log activity-log">
+        <li v-for="(line, i) in activityLines" :key="`${i}-${line}`">{{ line }}</li>
       </ul>
+      <p v-else-if="outlineUiBusy" class="hint tiny-hint">正在提取，进度会一条条显示在下方。</p>
     </div>
 
     <div v-else-if="step === 'study'" class="wizard-pane wizard-study-pane">
@@ -217,6 +218,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { authHeaders, readStream, request } from "../api";
 import ChatFlowPipeline from "./ChatFlowPipeline.vue";
 import { mergeWizardPayload, normalizeWizardStep, wizardStepIndex } from "../utils/blueprintWizardSteps";
+import { studySupplementProcessMessage } from "../pointItemsSync";
 
 const STEP_DONE_LABEL = {
   meta: "已填写蓝本名称",
@@ -415,7 +417,10 @@ const outlineExtractMarked = computed(
     (blueprintId.value && outlineExtractInflightBids.has(blueprintId.value))
 );
 const outlineUiBusy = computed(
-  () => busy.value || (step.value === "outline" && outlineExtractMarked.value)
+  () =>
+    busy.value ||
+    (outlineExtractMarked.value &&
+      (step.value === "outline" || step.value === "outline_confirm"))
 );
 const outlineAlreadyExtracted = computed(() => {
   if (wizardStepIndex(step.value) > wizardStepIndex("outline")) return true;
@@ -484,7 +489,9 @@ function looksLikeOutlineProgressLine(line) {
   const text = String(line || "").trim();
   if (!text) return false;
   return (
-    /提取目录|目录提取|正在从样板|继续提取|识别章节|生成大纲|目录已/.test(text) ||
+    /提取目录|目录提取|正在从样板|正在重新提取|继续提取|识别章节|生成大纲|目录已|解析文档|目录结构|第二轮|第一轮/.test(
+      text
+    ) ||
     /^▶/.test(text) ||
     /^✓/.test(text)
   );
@@ -713,7 +720,9 @@ async function reconcileOutlineStepWithTask() {
 watch(
   () => (Array.isArray(props.processLog) ? props.processLog.slice() : []),
   (lines) => {
-    if (props.disabled || isHistorical.value) return;
+    const inflight =
+      blueprintId.value && outlineExtractInflightBids.has(blueprintId.value);
+    if (props.disabled || (isHistorical.value && !inflight)) return;
     if (!Array.isArray(lines) || !lines.length) return;
     // 初次灌入会话已有过程日志（含提取目录进度）
     if (!processLines.value.length) {
@@ -734,8 +743,11 @@ watch(
 watch(
   () => [outlineExtractMarked.value, step.value, props.disabled, isHistorical.value],
   () => {
-    if (props.disabled || isHistorical.value) return;
-    if (step.value !== "outline" || !outlineExtractMarked.value) return;
+    const inflight =
+      blueprintId.value && outlineExtractInflightBids.has(blueprintId.value);
+    if (props.disabled || (isHistorical.value && !inflight)) return;
+    if (!outlineExtractMarked.value) return;
+    if (step.value !== "outline" && step.value !== "outline_confirm") return;
     if (!busy.value) {
       runningLabel.value = runningLabel.value || "正在从样板提取目录…";
       if (!/提取|目录/.test(String(runningLabel.value))) {
@@ -777,11 +789,13 @@ function tryAutoOutlineExtract() {
   const wantExtract = reExtract || trigger;
   const token = `${props.card?.card_id || ""}:${wantExtract}:${reExtract}:${step.value}`;
   const chapterN = Array.isArray(payload.value?.chapters) ? payload.value.chapters.length : 0;
-  if (wizardStepIndex(step.value) > wizardStepIndex("outline")) return;
+  const onExtractStep =
+    wizardStepIndex(step.value) <= wizardStepIndex("outline") ||
+    (reExtract && wizardStepIndex(step.value) <= wizardStepIndex("outline_confirm"));
+  if (!onExtractStep) return;
   // 重新提取：仅当 pending 仍在且本地尚未同步完成本次结果时重跑
   if (outlineSyncedFromTask.value === blueprintId.value && !reExtract) return;
   if (
-    step.value === "outline" &&
     blueprintId.value &&
     wantExtract &&
     (chapterN === 0 || reExtract) &&
@@ -822,6 +836,10 @@ watch(
   isHistorical,
   (hist) => {
     if (!hist) return;
+    if (blueprintId.value && outlineExtractInflightBids.has(blueprintId.value)) {
+      // 提取流仍在跑：进度改由 blueprintWizardLog / 最新卡承接，勿清本地行
+      return;
+    }
     // 变为历史快照：清掉本卡进行中态，避免 10-29-01 仍闪「提取中」而当前在跑 10-29-03
     busy.value = false;
     runningLabel.value = "处理中…";
@@ -1177,7 +1195,7 @@ async function saveOutlineChapters(chapters) {
     const updated = await request(`/api/writing/tasks/${encodeURIComponent(operationalTaskId.value)}/outline`, {
       method: "PUT",
       headers: authHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ chapters }),
+      body: JSON.stringify({ chapters, replace_tree: true }),
     });
     taskData.value = updated;
     if ((updated?.outline?.chapters || []).length) {
@@ -1273,6 +1291,19 @@ function trackStreamEvent(event) {
   // 范围学习：每章落盘进度 → 定位该章并软刷新目录状态
   if (event.type === "study_chapter_progress" && event.chapter) {
     emitStudyLocate(event.chapter);
+    const analyzed = Number(event.study_analyzed || 0);
+    const unanalyzed = Number(event.study_unanalyzed || 0);
+    const total = Number(event.total || analyzed + unanalyzed || 0);
+    const key = String(event.chapter || "").trim();
+    const line =
+      total > 0
+        ? `▶ 分析进度 ${analyzed}/${total} · ${key}`
+        : `▶ 正在分析「${key}」…`;
+    pushProcess(line);
+    const supLine = studySupplementProcessMessage(
+      Array.isArray(event.point_items) ? event.point_items : []
+    );
+    if (supLine) pushProcess(supLine);
     emit("live-step", {
       blueprint_id: blueprintId.value,
       step: step.value,
@@ -1290,7 +1321,11 @@ function trackStreamEvent(event) {
     const seq = String(result.sequence || "").trim();
     const title = String(event.title || "").trim();
     const label = [seq, title].filter(Boolean).join(" ") || title || event.chapter || event.step || "步骤";
-    const outlineStep = String(event.step || "").trim() === "outline" || step.value === "outline";
+    const outlineStep =
+      String(event.step || "").trim() === "outline" ||
+      step.value === "outline" ||
+      step.value === "outline_confirm" ||
+      outlineExtractMarked.value;
     if (event.status === "running") {
       const line = outlineStep
         ? total > 0
@@ -1319,6 +1354,14 @@ function trackStreamEvent(event) {
             : `✓ 「${label}」${note ? ` · ${note}` : "完成"}`
           : `${label}完成`;
       pushProcess(line);
+      const supFromDone = studySupplementProcessMessage(
+        Array.isArray(result.point_items)
+          ? result.point_items
+          : (Array.isArray(result.points)
+              ? result.points.map((text, i) => ({ id: `p${i}`, text: String(text || "") }))
+              : [])
+      );
+      if (supFromDone) pushProcess(supFromDone);
       // 本章分析完成仍停在该章，等下一章 running 再切
       if (event.chapter) emitStudyLocate(event.chapter);
     }
@@ -1486,27 +1529,6 @@ async function runOutline({ resume = false, force = false } = {}) {
         }
       : {}),
   });
-  if (!resume || forceRe) {
-    try {
-      // 提取进行中只同步 active/pending，不要再带 wizard_command：
-      // 否则每次都会插「重新提取」回复卡 + softSync，叠出多路 extract 流。
-      await persistWizardAction({
-        step: "outline",
-        blueprint_id: blueprintId.value,
-        outline_extract_active: true,
-        ...(forceRe
-          ? {
-              pending_wizard_command: "re_extract_outline",
-              chapters: [],
-              chapter_count: 0,
-              outline_confirmed: false,
-            }
-          : {}),
-      });
-    } catch {
-      /* 提取仍继续，结束时再落 outline_done */
-    }
-  }
   try {
     const response = await fetch(
       `/api/writing/tasks/${encodeURIComponent(operationalTaskId.value)}/study/extract-outline/text/stream`,
@@ -1518,6 +1540,7 @@ async function runOutline({ resume = false, force = false } = {}) {
           text: "",
           use_sample: true,
           use_llm: true,
+          re_extract: forceRe,
         }),
       }
     );
@@ -1576,10 +1599,11 @@ async function runOutline({ resume = false, force = false } = {}) {
     loadTaskForOutline().catch(() => {});
   } catch (error) {
     ElMessage.error(error.message || "提取目录失败");
-    // 失败也保留 active，方便切回后重试续跑
-    bumpLiveStep("outline", {
-      outline_extract_active: true,
+    pushProcess(`✗ ${error.message || "提取目录失败"}`);
+    bumpLiveStep(forceRe ? "outline_confirm" : "outline", {
+      outline_extract_active: false,
       trigger_outline_extract: false,
+      pending_wizard_command: "",
     });
   } finally {
     outlineExtractInflightBids.delete(blueprintId.value);
