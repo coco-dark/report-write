@@ -84,6 +84,7 @@ handle_chat → run_chat_control
 | B10 | 目录收集器只认显式 `confirm` / `regenerate`；口语补槽在 `submit_outline` | 已做 |
 | B11 | 定名收集器 / 入职观察不再用 `wants_generate_outline` 分类改道；只认生成目录短语 | 已做 |
 | B12 | `skip_blueprint` 遇「再写一份」另开文档；定名已推断类型｜标题则确认；已确认目录的向导不再拽回确认步 | 已做 |
+| B13 | `ask_entry_path` 只观察/挂卡（`apply_plan=False`）；链式 skip/大纲/向导留给总控读 `suggested_next_tools` | 已做 |
 
 ### Phase C
 

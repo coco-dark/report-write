@@ -270,7 +270,7 @@ def _hang_entry_path_after_named(
         home=state.home,
         emit=state.emit,
         after_doc_name_confirm=after_doc_name_confirm,
-        apply_plan=bool((message or state.last_user_message or "").strip()),
+        apply_plan=False,
     )
 
 
@@ -487,6 +487,7 @@ def build_chat_tools(state: ChatControlState) -> list:
             invoke=intent_fn if intent_fn is not None else state.invoke,
             home=state.home,
             emit=state.emit,
+            apply_plan=False,
         )
         # 一句多意图：首句定名后的残余路径 / follow spec
         ff = dict(state.session.freeform or {})
@@ -3460,10 +3461,21 @@ class ChatControlScriptModel(ScriptedChatModel):
                             },
                         )
                 nxt = str(data.get("suggested_next_tool") or "").strip()
+                args: dict = {}
+                if nxt:
+                    raw_args = data.get("suggested_args")
+                    if isinstance(raw_args, dict):
+                        args = raw_args
+                elif isinstance(data.get("suggested_next_tools"), list):
+                    steps = [
+                        s
+                        for s in data.get("suggested_next_tools") or []
+                        if isinstance(s, dict) and str(s.get("tool") or "").strip()
+                    ]
+                    if steps:
+                        nxt = str(steps[0].get("tool") or "").strip()
+                        args = dict(steps[0].get("args") or {})
                 if nxt and nxt != tool_name:
-                    args = data.get("suggested_args")
-                    if not isinstance(args, dict):
-                        args = {}
                     return self.call(nxt, args)
                 if data.get("ok") is False and "doc_name" in (data.get("missing_slots") or []):
                     from report_writing.chat.session_documents import quick_title_from_write_message

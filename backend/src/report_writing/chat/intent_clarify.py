@@ -2243,12 +2243,13 @@ def build_entry_freeform_mode_clarify(
     home: Path | None = None,
     invoke=None,
     emit=None,
+    apply_plan: bool = True,
 ) -> tuple[str, list[ChatCard]]:
     from report_writing.chat.session_documents import peek_pending_entry, stash_pending_entry
 
     msg = (message or "").strip()
     tip = (title_hint or "").strip()
-    if _auto_freeform_outline_ready(session, msg, invoke=invoke):
+    if apply_plan and _auto_freeform_outline_ready(session, msg, invoke=invoke):
         auto = _apply_auto_freeform_and_dispatch(
             home,
             session,
@@ -2734,16 +2735,17 @@ def build_entry_path_clarify(
         if pep == "template" or message_wants_own_template(tail):
             mark_focus_entry_branch(session, "without_blueprint")
             mark_focus_entry_path(session, "template")
-            from report_writing.chat.resource_actions import _begin_blueprint_wizard
+            if apply_plan:
+                from report_writing.chat.resource_actions import _begin_blueprint_wizard
 
-            return _begin_blueprint_wizard(
-                session,
-                title_hint=tip,
-                home=home,
-                force_new=False,
-                user_message=tail,
-                invoke=invoke,
-            )
+                return _begin_blueprint_wizard(
+                    session,
+                    title_hint=tip,
+                    home=home,
+                    force_new=False,
+                    user_message=tail,
+                    invoke=invoke,
+                )
         if ep_done == "freeform" or pep == "freeform":
             from report_writing.chat.session_documents import mark_focus_freeform_mode
 
@@ -2761,16 +2763,17 @@ def build_entry_path_clarify(
                 working = tip or quick_title_from_write_message(tail or msg)
                 if working:
                     _aw(session, working, home=home, message=tail or msg)
-            auto = _apply_auto_freeform_and_dispatch(
-                home,
-                session,
-                message=tail,
-                title_hint=tip,
-                invoke=invoke,
-                emit=emit,
-            )
-            if auto is not None:
-                return auto
+            if apply_plan:
+                auto = _apply_auto_freeform_and_dispatch(
+                    home,
+                    session,
+                    message=tail,
+                    title_hint=tip,
+                    invoke=invoke,
+                    emit=emit,
+                )
+                if auto is not None:
+                    return auto
     suggested = list((session.freeform or {}).get("suggested_next_tools") or [])
     # 无工作名、也未正式定名时才问起名；有工作名则直接问写作方式
     from report_writing.chat.session_documents import (
@@ -2791,7 +2794,8 @@ def build_entry_path_clarify(
     wiz_step_now = str(wiz_now.get("step") or "").strip()
     wizard_in_progress = bool(wiz_step_now)
     if (
-        (not wizard_in_progress)
+        apply_plan
+        and (not wizard_in_progress)
         and _template_path_declared(session, msg or probe_msg)
         and (
             not is_writing_document_named(session)
@@ -2829,7 +2833,7 @@ def build_entry_path_clarify(
             session, message=probe_msg, title_hint=tip
         )
     if focus_needs_freeform_mode(session):
-        if _auto_freeform_outline_ready(session, probe_msg, invoke=invoke):
+        if apply_plan and _auto_freeform_outline_ready(session, probe_msg, invoke=invoke):
             auto = _apply_auto_freeform_and_dispatch(
                 home,
                 session,
@@ -2847,6 +2851,7 @@ def build_entry_path_clarify(
             home=home,
             invoke=invoke,
             emit=emit,
+            apply_plan=apply_plan,
         )
     if suggested:
         title_now = tip or str((session.freeform or {}).get("title") or "").strip()
@@ -2865,7 +2870,7 @@ def build_entry_path_clarify(
                 f"好，文档「{name_show}」名称已确认。蓝本已选好，请在右侧文档窗口选章或开始分析。",
                 [],
             )
-        if home is not None:
+        if apply_plan and home is not None:
             from report_writing.domain.models import ChatPhase
 
             if str(session.phase or "") == ChatPhase.FREEFORM_OUTLINE.value:

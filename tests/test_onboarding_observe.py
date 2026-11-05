@@ -130,6 +130,36 @@ def test_ask_entry_path_observation_fields(tmp_path: Path):
     assert data.get("pending_clarify") != "doc_name"
 
 
+def test_ask_entry_path_does_not_auto_dispatch_onboarding(tmp_path: Path, monkeypatch):
+    from report_writing.agents.chat_control import ChatControlState, build_chat_tools
+    from report_writing.chat.session_documents import confirm_writing_document_name
+
+    def _boom(*_a, **_k):
+        raise AssertionError("ask_entry_path must not auto-dispatch onboarding tools")
+
+    monkeypatch.setattr(
+        "report_writing.chat.intent_clarify.dispatch_suggested_onboarding_tools",
+        _boom,
+    )
+    monkeypatch.setattr(
+        "report_writing.chat.intent_clarify._apply_auto_freeform_and_dispatch",
+        _boom,
+    )
+    (tmp_path / "tasks").mkdir(parents=True)
+    session = ChatSession(id="obs_no_dispatch", phase=ChatPhase.INTENT.value)
+    confirm_writing_document_name(
+        session, "lzb的述职报告", home=tmp_path, message="名字叫做lzb的述职报告 你帮我生成大纲"
+    )
+    state = ChatControlState(home=tmp_path, session=session)
+    tools = {t.name: t for t in build_chat_tools(state)}
+    raw = tools["ask_entry_path"].invoke(
+        {"message": "名字叫做lzb的述职报告 你帮我生成大纲"}
+    )
+    data = json.loads(raw)
+    assert data.get("ok") is True
+    assert "目录我先帮你搭" not in str(data.get("reply_hint") or "")
+
+
 def test_unnamed_blueprint_library_intent_suggests_match():
     from report_writing.chat.session_documents import (
         observe_new_document_gaps,
