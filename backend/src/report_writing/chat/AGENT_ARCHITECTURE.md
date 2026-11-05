@@ -16,8 +16,8 @@
 
 | 名字看起来像「意图」 | 实际职责 | 口语要不要它 |
 |----------------------|----------|----------------|
-| **`clarify_flow`**（旧名 `intent_clarify`） | **选择卡**：选项、pending、点选后续跑 | 要（UX） |
-| **`tool_dispatch`**（旧名 `intent_dispatch`） | **按 tool 名执行**（卡片/按钮/单测已经决定了 tool+args） | 要（执行器） |
+| **`clarify_flow`** | **选择卡**：选项、pending、点选后续跑（卡片 type 仍为 `intent_clarify`） | 要（UX） |
+| **`tool_dispatch`** | **按 tool 名执行**（卡片/按钮/单测已经决定了 tool+args） | 要（执行器） |
 | `intent_router` | 会话标志：写作路径、是否跳过蓝本 | 要（状态） |
 | `intent_invoke` / 配置 `intent.max_tokens` | 窄 JSON 小模型入口（解析点了哪一项、抽槽） | 要（省成本） |
 | `clarify_llm` | 固定 schema：澄清回复、scope、文档名、向导 command | 要 |
@@ -31,7 +31,7 @@
 
 | 层 | 模块 | 是否 LangChain Agent | 说明 |
 |----|------|----------------------|------|
-| **口语闭环** | `agents/react.run_react` → `run_langchain_chat_control` | **是** | 理解用户说什么 + 选 Tool + 读 observation |
+| **口语闭环** | `agents/react.run_react` → `run_langchain_chat_control` | **是** | `create_agent` + middleware（链路日志 / 模型调用上限）；选 Tool + 读 observation |
 | **卡片/按钮** | `action` 写入 Agent user JSON | **是** | 点选当一轮对话；Agent 调同名 Tool；未调到才兜底 |
 | **选择卡 UX** | `clarify_flow` pending + `resolve_intent_clarify` Tool | 否（执行）/是（决策） | 挂卡仍是 UX；点选由总控分析 |
 | **调度执行** | `tool_dispatch.execute_dispatch_tool` | 否 | tool+args 已确定后的执行 |
@@ -104,7 +104,7 @@ handle_chat → run_chat_control
 
 P1 必须覆盖：口语「写一份…」→ 生成目录；点选自动大纲 / 用模版 / 创建蓝本；「再写一份」隔离后由 Agent hop；shortcut 在零 ToolMessage 时仍保 UX。
 
-P0–P6 与 Phase D1/D2 已落地。`wants_*` 只作测试别名；选择卡/执行器实现在 `clarify_flow` / `tool_dispatch`，旧 `intent_*` 模块名为兼容 re-export。
+P0–P6 与 Phase D/E 已落地。`wants_*` 只作测试别名；选择卡/执行器在 `clarify_flow` / `tool_dispatch`。`run_react` 经 LangChain middleware 写链路日志并限制模型调用次数。`intent_turn_plan` / `intent_multi_plan` 夹具仍保留。
 
 ### Phase C
 
@@ -117,9 +117,9 @@ P0–P6 与 Phase D1/D2 已落地。`wants_*` 只作测试别名；选择卡/执
 
 | 项 | 做什么 | 状态 |
 |----|--------|------|
-| D1 | 选择卡实现迁到 `clarify_flow.py`；`intent_clarify` 仅兼容 re-export | 已做 |
-| D2 | 执行器实现迁到 `tool_dispatch.py`；`intent_dispatch` 仅兼容 re-export | 已做 |
-| E | middleware；删掉兼容 shim；`intent_turn_plan` / `intent_multi_plan` 夹具仍保留 | 待做 |
+| D1 | 选择卡实现迁到 `clarify_flow.py` | 已做 |
+| D2 | 执行器实现迁到 `tool_dispatch.py` | 已做 |
+| E | `create_agent` middleware（链路日志 + 模型调用上限）；删除 `intent_clarify` / `intent_dispatch` shim；`intent_turn_plan` / `intent_multi_plan` 夹具仍保留 | 已做 |
 
 ## 不做的事
 

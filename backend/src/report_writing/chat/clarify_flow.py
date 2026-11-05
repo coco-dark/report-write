@@ -1,7 +1,7 @@
 """选择卡状态机：槽位不清时挂选项，用户点选后再执行。
 
 不是口语「意图分类」。点选结果走 `tool_dispatch.execute_dispatch_tool`；未挂卡的口语交给 Agent。
-旧模块名 `intent_clarify` 仅作兼容 re-export。
+卡片 `type` 与 session pending 键仍为 `intent_clarify`（产品契约）。
 """
 
 from __future__ import annotations

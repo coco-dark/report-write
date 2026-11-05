@@ -2,7 +2,6 @@
 
 `execute_dispatch_tool` / `execute_intent_plan` 在 tool+args **已经确定** 之后调用。
 口语主路径由 Agent 选 Tool；缺参走 observation / missing_slots。
-旧模块名 `intent_dispatch` 仅作兼容 re-export。
 """
 
 from __future__ import annotations

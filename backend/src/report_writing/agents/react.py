@@ -4,6 +4,7 @@
 - system_prompt：角色与策略（不含工具枚举）
 - tools：语义在 Tool.description
 - user 消息：本轮上下文 + 用户原话
+- middleware：链路日志 + 模型调用上限（不改 UX / 卡片类型）
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
 
+from report_writing.agents.react_middleware import build_react_middleware
 from report_writing.domain.models import MAX_AGENT_STEPS
 
 
@@ -32,29 +34,37 @@ def run_react(
 ) -> dict[str, Any]:
     """LangChain Agent 图：model → tools → ToolMessage → … → 结束。"""
     if session is not None:
-        from report_writing.chat.agent_chain_log import log_react_round, log_react_tool_calls
+        from report_writing.chat.agent_chain_log import log_react_round
 
         log_react_round(session, emit, agent=name, system_prompt=prompt, user_text=user_text)
     from report_writing.chat.user_process import emit_user_process
 
     emit_user_process(emit, "写作助手正在决定调用哪些步骤…")
-    agent = create_agent(model, tools, system_prompt=prompt, name=name)
     needed = max(rounds or MAX_AGENT_STEPS, 1)
     limit = needed * 4 + 4
+    agent = create_agent(
+        model,
+        tools,
+        system_prompt=prompt,
+        name=name,
+        middleware=build_react_middleware(
+            session=session,
+            emit=emit,
+            agent=name,
+            model_call_limit=limit,
+        ),
+    )
     try:
         result = agent.invoke(
             {"messages": [{"role": "user", "content": user_text}]},
             config={"recursion_limit": limit},
         )
     except Exception as error:
-        if error.__class__.__name__ != "GraphRecursionError":
+        kind = error.__class__.__name__
+        if kind not in {"GraphRecursionError", "ModelCallLimitExceededError"}:
             raise
         raise RuntimeError(f"{name} 在 {limit} 步内没有结束") from error
     messages = result["messages"]
-    if session is not None:
-        from report_writing.chat.agent_chain_log import log_react_tool_calls
-
-        log_react_tool_calls(session, emit, agent=name, messages=messages)
     return {"messages": messages}
 
 

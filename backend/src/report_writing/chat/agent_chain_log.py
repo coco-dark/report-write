@@ -199,6 +199,22 @@ def log_react_round(
     )
 
 
+def log_react_tool_result(
+    session: ChatSession,
+    emit: EmitFn | None,
+    *,
+    tool: str,
+    content: str,
+) -> None:
+    log_chain(
+        session,
+        emit,
+        step="tool_result",
+        summary=f"工具结果·{tool or '?'}",
+        detail={"tool": tool, "content_preview": _truncate(str(content or ""), 600)},
+    )
+
+
 def log_react_tool_calls(
     session: ChatSession,
     emit: EmitFn | None,
@@ -206,8 +222,11 @@ def log_react_tool_calls(
     agent: str,
     messages: list[Any],
 ) -> None:
+    """事后回放（无 middleware 时）。create_agent 路径改由 ReactChainLogMiddleware 实时写。"""
     if not messages:
         return
+    from langchain_core.messages import ToolMessage
+
     for message in messages:
         tool_calls = getattr(message, "tool_calls", None) or []
         for call in tool_calls:
@@ -224,19 +243,12 @@ def log_react_tool_calls(
                 args=args if isinstance(args, dict) else {"raw": _truncate(str(args), 400)},
                 source=f"react:{agent}",
             )
-        name = getattr(message, "name", None)
-        if name and isinstance(message, type) and "Tool" in type(message).__name__:
-            pass
-    from langchain_core.messages import ToolMessage
-
-    for message in messages:
         if isinstance(message, ToolMessage):
-            log_chain(
+            log_react_tool_result(
                 session,
                 emit,
-                step="tool_result",
-                summary=f"工具结果·{message.name or '?'}",
-                detail={"tool": message.name, "content_preview": _truncate(str(message.content or ""), 600)},
+                tool=message.name or "?",
+                content=str(message.content or ""),
             )
 
 

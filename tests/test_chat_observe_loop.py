@@ -427,11 +427,15 @@ def test_clarify_llm_reexports_narrow_classifiers():
     assert not hasattr(clarify_llm, "classify_turn_plan_llm")
 
 
-def test_clarify_flow_and_tool_dispatch_reexport_legacy_modules():
-    from report_writing.chat import clarify_flow, intent_clarify, intent_dispatch, tool_dispatch
+def test_clarify_flow_and_tool_dispatch_have_no_legacy_shims():
+    import importlib.util
 
-    assert clarify_flow.get_pending is intent_clarify.get_pending
-    assert tool_dispatch.execute_dispatch_tool is intent_dispatch.execute_dispatch_tool
+    from report_writing.chat import clarify_flow, tool_dispatch
+
+    assert callable(clarify_flow.get_pending)
+    assert callable(tool_dispatch.execute_dispatch_tool)
+    assert importlib.util.find_spec("report_writing.chat.intent_clarify") is None
+    assert importlib.util.find_spec("report_writing.chat.intent_dispatch") is None
 
 
 def test_run_chat_control_does_not_auto_dispatch_onboarding(tmp_path: Path, monkeypatch):
