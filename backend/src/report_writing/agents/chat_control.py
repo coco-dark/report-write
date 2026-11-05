@@ -2885,7 +2885,6 @@ def build_agent_user_text(
             "勿把一句操作指令 submit_points 或只回复书写节奏。"
         )
         from report_writing.chat.helpers import is_vague_freeform_meta
-        from report_writing.chat.intent_router import is_save_freeform_blueprint_intent
         from report_writing.chat.session_documents import (
             focus_needs_entry_path,
             is_writing_document_named,
@@ -2901,11 +2900,6 @@ def build_agent_user_text(
                 "已定名但缺写作入口：下一步唯一 Tool 是 ask_entry_path（或等用户点选入口卡）；"
                 "禁止再调 remember_writing_goal / set_session_meta 只回「记下了」。"
             )
-        elif message and is_save_freeform_blueprint_intent(message):
-            body["routing_hint"] = (
-                "用户很可能要保存当前无蓝本任务为蓝本：优先 save_freeform_as_blueprint；"
-                "不要 blueprint_subagent / 创建蓝本向导（上传样板建全新蓝本）。"
-            )
     from report_writing.chat.turn_context import build_writing_turn_context, merge_turn_context_into_agent_body
     from report_writing.chat.writing_brief import brief_to_dict_for_body
 
@@ -2918,6 +2912,17 @@ def build_agent_user_text(
     snap = (session.freeform or {}).get("session_gaps_snapshot")
     if isinstance(snap, dict) and snap.get("context_line"):
         body["session_gaps"] = snap
+    suggested = list((session.freeform or {}).get("suggested_next_tools") or [])
+    if not suggested and isinstance(snap, dict):
+        suggested = list(snap.get("suggested_tools") or [])
+    if suggested:
+        body["suggested_next_tools"] = suggested
+        extra = (
+            "session 上有 suggested_next_tools：本轮按序调用这些 Tool 并读 observation；"
+            "不要只口头复述队列，也不要另起一套计划。"
+        )
+        prev = str(body.get("routing_hint") or "").strip()
+        body["routing_hint"] = f"{prev} {extra}".strip() if prev else extra
     return json.dumps(body, ensure_ascii=False)
 
 
@@ -3109,9 +3114,9 @@ def run_chat_control(
     user_text: str,
     system_prompt: str,
 ) -> str:
-    """运行一轮对话总控：确定性前置（UI/澄清卡/入职续跑）→ LangChain Agent 闭环。
+    """运行一轮对话总控：确定性前置（UI/澄清卡）→ LangChain Agent 闭环。
 
-    没有「意图分类」层：不根据整句口语预先列出 tool JSON。
+    没有「意图分类」层；入职队列 suggested_next_tools 交给 Agent 读观察后自行调用。
     """
     action, message, _phase = _parse_user_message_from_agent_text(user_text)
     state.last_user_message = message
@@ -3190,9 +3195,6 @@ def run_chat_control(
             return (reply or "").strip() or "好的。"
 
     if not (state.user_action or action) and message:
-        from report_writing.chat.intent_clarify import (
-            dispatch_suggested_onboarding_tools,
-        )
         from report_writing.chat.session_documents import (
             ensure_write_onboarding_started,
             focus_has_active_writing_context,
@@ -3228,19 +3230,6 @@ def run_chat_control(
             invoke=intent_llm,
             emit=state.emit,
         )
-        dispatch_hit = dispatch_suggested_onboarding_tools(
-            state.home,
-            state.session,
-            message=message,
-            invoke=intent_llm,
-            emit=state.emit,
-        )
-        if dispatch_hit is not None:
-            reply, cards, events = dispatch_hit
-            state.cards.extend(cards or [])
-            state.events.extend(events)
-            _record_oral_route(state, "onboarding_dispatch")
-            return (reply or "").strip() or "好的。"
 
     return run_langchain_chat_control(
         model=model,

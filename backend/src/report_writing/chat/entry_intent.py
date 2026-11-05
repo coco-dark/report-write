@@ -1,4 +1,4 @@
-"""入口口语意图：统一走 intent_llm（无 intent_router 正则表）。"""
+"""入口窄分类：有 invoke 时只走 LLM；短语表仅离线兜底。"""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ def _entry(
     session: ChatSession | None = None,
 ) -> dict[str, Any]:
     from report_writing.chat.intent_context import pack_classifier_context
-    from report_writing.chat.intent_llm import classify_entry_routing_llm
+    from report_writing.chat.clarify_llm import classify_entry_routing_llm
 
     ctx = pack_classifier_context(session) if session else {}
     return classify_entry_routing_llm(
@@ -59,8 +59,23 @@ def is_create_blueprint_intent(
     session: ChatSession | None = None,
 ) -> bool:
     t = (message or "").strip()
-    if t and any(k in t for k in ("模版", "模板", "参考模版", "参考模板", "按模版", "按模板", "我有模版", "我有模板")):
-        return True
+    if invoke is None:
+        return bool(
+            t
+            and any(
+                k in t
+                for k in (
+                    "模版",
+                    "模板",
+                    "参考模版",
+                    "参考模板",
+                    "按模版",
+                    "按模板",
+                    "我有模版",
+                    "我有模板",
+                )
+            )
+        )
     return _entry(message, invoke=invoke, session=session).get("intent") == "create_blueprint"
 
 
@@ -136,7 +151,7 @@ def pick_auto_blueprint_id(
     *,
     invoke: InvokeFn | None = None,
 ) -> str:
-    from report_writing.chat.intent_llm import pick_blueprint_id_llm
+    from report_writing.chat.clarify_llm import pick_blueprint_id_llm
 
     return pick_blueprint_id_llm(message, matches, invoke=invoke)
 

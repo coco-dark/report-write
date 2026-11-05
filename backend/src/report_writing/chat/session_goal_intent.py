@@ -1,4 +1,4 @@
-"""会话写作目标：口语信号走意图模型（与 session_goal 存储/合并逻辑分离）。"""
+"""会话写作目标：窄 JSON（记住目标 / 类型｜标题）。有 invoke 时不走短语表。"""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ def is_explicit_remember_goal_message(
     session: ChatSession | None = None,
 ) -> bool:
     from report_writing.chat.intent_context import pack_classifier_context
-    from report_writing.chat.intent_llm import classify_explicit_remember_goal_llm
+    from report_writing.chat.clarify_llm import classify_explicit_remember_goal_llm
 
     ctx = pack_classifier_context(session) if session is not None else {}
     return classify_explicit_remember_goal_llm(
@@ -34,7 +34,7 @@ def doc_meta_patch_from_message(
     context: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     from report_writing.chat.intent_context import pack_classifier_context
-    from report_writing.chat.intent_llm import classify_doc_meta_line_llm
+    from report_writing.chat.clarify_llm import classify_doc_meta_line_llm
 
     ctx = dict(context or {})
     if session is not None and not ctx:

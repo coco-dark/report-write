@@ -62,7 +62,7 @@
 |------|------|------|
 | Observe | `session_gaps.observe_session_gaps` | missing **镜像** `focus_needs_*` |
 | Snapshot | `session_gaps.refresh_session_gaps` | 写入 `freeform.session_gaps_snapshot`，给 Agent 读 |
-| 默认 onboarding | match_first | `suggest_next_tools` 队列由确定性 dispatch 续跑 |
+| 默认 onboarding | match_first | `suggest_next_tools` 写入 Agent 上下文；口语主路径不自动 dispatch |
 
 **禁止**：用 gaps 强制挂卡、或用 gaps.missing 覆盖 Agent 选 Tool。
 

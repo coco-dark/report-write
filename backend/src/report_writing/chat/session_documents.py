@@ -1941,13 +1941,7 @@ def preferred_entry_path_resolved(session: ChatSession, message: str = "", *, in
                 or quick_title_from_write_message(msg)
             )
             if (named_in_orig and gen_orig) or (named_in_msg and gen_msg):
-                from report_writing.chat.freeform_intent import lexical_freeform_intent
-
-                if lexical_freeform_intent(msg) == "generate_outline" or (
-                    original != msg
-                    and lexical_freeform_intent(original) == "generate_outline"
-                ):
-                    return "freeform"
+                return "freeform"
         try:
             from report_writing.chat.freeform_outline import outline_top_chapter_count
 
@@ -2155,10 +2149,7 @@ def prepare_observed_onboarding(
             if path_ep == "template" and message_wants_own_template(msg):
                 mark_focus_entry_path(session, "template")
             elif path_ep == "freeform":
-                from report_writing.chat.freeform_intent import lexical_freeform_intent
-
-                if lexical_freeform_intent(msg) == "generate_outline":
-                    mark_focus_entry_path(session, "freeform")
+                mark_focus_entry_path(session, "freeform")
     elif branch == "with_blueprint":
         path_ep = preferred_entry_path_resolved(session, msg, invoke=invoke) or "match"
         if path_ep:

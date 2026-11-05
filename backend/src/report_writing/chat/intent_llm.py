@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import warnings
 from pathlib import Path
 from typing import Any, Callable
 
@@ -600,7 +601,7 @@ def classify_chat_control_plan_llm_scored(
     return plan.tools, plan.confidence
 
 
-def classify_turn_plan_llm(  # 遗留：口语主路径不调用
+def classify_turn_plan_llm(
     message: str,
     *,
     session: Any = None,
@@ -608,7 +609,12 @@ def classify_turn_plan_llm(  # 遗留：口语主路径不调用
     freeform_path: bool | None = None,
     session_gaps: Any = None,
 ):
-    """整轮 JSON 计划（含 slots / missing / uncertain）。失败返回空 TurnPlan。"""
+    """遗留整轮 JSON 计划。口语主路径不调用。失败返回空 TurnPlan。"""
+    warnings.warn(
+        "classify_turn_plan_llm is leftover; oral chat uses create_agent",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     from report_writing.chat.intent_turn_plan import TurnPlan, parse_turn_plan
     from report_writing.domain.models import ChatSession as _ChatSession
 
@@ -663,7 +669,12 @@ def classify_chat_control_plan_llm(
     invoke: InvokeFn | None,
     min_steps: int = 1,
 ) -> list[dict[str, Any]]:
-    """统一调度计划：返回已按 CHAT_CONTROL_PLAN_POLICY 排序的 [{tool, args}, …]；不足 min_steps 或失败返回 []。"""
+    """遗留统一调度计划。口语主路径不调用。不足 min_steps 或失败返回 []。"""
+    warnings.warn(
+        "classify_chat_control_plan_llm is leftover; oral chat uses create_agent",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     steps, _confidence = classify_chat_control_plan_llm_scored(
         message,
         phase=phase,

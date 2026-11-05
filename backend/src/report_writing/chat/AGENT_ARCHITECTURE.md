@@ -35,8 +35,7 @@
 | **确定性入口** | UI `action`、`_try_ui_action_shortcut` | 否 | 点按钮 = 直接调同名 Tool |
 | **选择卡** | `intent_clarify` + pending | 否 | 结构化选项/续跑 |
 | **调度执行** | `intent_dispatch.execute_dispatch_tool` | 否 | tool+args 已确定后的执行 |
-| **入职续跑** | `dispatch_suggested_onboarding_tools` | 否 | 执行 `suggested_next_tools` 队列，不是猜意图 |
-| **只读观察** | `session_gaps` | 否 | 写入 user JSON 的 `session_gaps`，供 Agent 读 |
+| **只读观察** | `session_gaps` + `suggested_next_tools` | 否 | 写入 Agent user JSON；口语不自动执行队列 |
 | **子域** | `subagents/runner.run_domain_subagent` | **是** | 总控 Tool 委派 |
 | **章流水线** | `agents/supervisor` | **是** | `call_study/search/write/check` |
 
@@ -44,8 +43,9 @@
 
 ```
 handle_chat → run_chat_control
-  → pending 选择卡 / UI shortcut / 寒暄 / onboarding 队列（确定性）
-  → run_langchain_chat_control（create_agent + build_chat_tools）
+  → pending 选择卡 / UI shortcut / 寒暄
+  → ensure_write_onboarding_started（只记账，不派 Tool）
+  → run_langchain_chat_control（create_agent；读 suggested_next_tools）
 ```
 
 ## 配置
@@ -72,17 +72,17 @@ handle_chat → run_chat_control
 
 | 项 | 做什么 | 状态 |
 |----|--------|------|
-| B1 | `clarify_llm.py` 作为窄分类器入口；`intent_llm` 兼容 re-export | 已做入口 |
+| B1 | `clarify_llm.py` 作为窄分类器入口；`intent_llm` 兼容 re-export | 已做 |
 | B2 | Tool 内缺参 → `missing_slots` observation，少调分类器选 Tool | 改名等已做；写作 Tool 仍有补槽 LLM |
-| B3 | `dispatch_suggested_onboarding_tools` 可切到 Agent 读 `session_gaps` | 未做（行为保留） |
-| B4 | `session_goal_intent` / `entry_intent` 有 invoke 时不静默 lexical | 未做 |
+| B3 | 口语主路径不再 `dispatch_suggested_onboarding_tools`；Agent 读 `suggested_next_tools` | 已做（函数仍供 force_new 同轮续跑） |
+| B4 | `entry_intent` / 入职 path 有 invoke 时不静默 lexical | 已做 |
 
-### Phase C 剩余
+### Phase C
 
-| 项 | 做什么 |
-|----|--------|
-| C2 | `classify_turn_plan_llm` 标 deprecated；`test_intent_multi_plan` 打 `legacy_plan` |
-| C4 | 配置项彻底移除（下一轮） |
+| 项 | 做什么 | 状态 |
+|----|--------|------|
+| C2 | `classify_turn_plan_llm` / `classify_chat_control_plan_llm` 发 DeprecationWarning | 已做 |
+| C4 | 从 yml 彻底移除 `intent_plan` 键 | 未做 |
 
 ### Phase D / E
 

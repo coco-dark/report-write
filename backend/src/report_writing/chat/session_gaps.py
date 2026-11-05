@@ -1,7 +1,6 @@
-"""Session Intent Loop — Phase 0：只读观察与快照。
+"""会话缺口只读观察：写入 snapshot，供 Agent user JSON 阅读。
 
-- missing 镜像 focus_needs_* / 入口 gaps，**不**写入 plan.missing、**不**改变 TurnPlan→ReAct 顺序。
-- refresh 写入 freeform.session_gaps_snapshot，供 LLM 上下文 / 调试 / 前端可解释性。
+不驱动 Tool 选择，不替代 create_agent。
 """
 
 from __future__ import annotations

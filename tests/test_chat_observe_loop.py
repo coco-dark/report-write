@@ -119,33 +119,25 @@ def test_react_rename_retries_after_missing_title_observation(tmp_path: Path):
 
 
 class _MultiHopWriteModel(ScriptedChatModel):
-    """开写多跳：定名 → skip_blueprint，每跳读 observation。"""
+    """开写多跳：先 skip_blueprint（用户说不用蓝本），再读 observation。"""
 
     role: str = "multi_hop_write"
 
     def decide(self, messages: list[BaseMessage]) -> AIMessage:
         tool_msgs = [m for m in messages if isinstance(m, ToolMessage)]
-        if len(tool_msgs) >= 2:
+        if tool_msgs:
             try:
                 data = json.loads(tool_msgs[-1].content or "{}")
             except json.JSONDecodeError:
                 data = {}
-            return self.finish(str(data.get("reply_hint") or "可以开始搭目录了。"))
-        if len(tool_msgs) == 1:
-            try:
-                data = json.loads(tool_msgs[0].content or "{}")
-            except json.JSONDecodeError:
-                data = {}
-            assert data.get("ok") is True
-            assert (data.get("observation") or "").strip()
-            return self.call("skip_blueprint", {})
-        return self.call(
-            "set_session_meta",
-            {"title": "调研报告", "category": "研究报告", "message": "写一份调研报告"},
-        )
+            assert (data.get("observation") or data.get("reply_hint") or "").strip()
+            return self.finish(str(data.get("reply_hint") or "好，按无蓝本继续。"))
+        return self.call("skip_blueprint", {"message": "不用蓝本"})
 
 
 def test_react_open_write_multi_hop_reads_observation(tmp_path: Path):
+    from report_writing.chat.intent_router import user_chose_skip_blueprint
+
     session = ChatSession(id="s-hop", phase=ChatPhase.INTENT.value)
     state = ChatControlState(home=tmp_path, session=session)
     user_text = json.dumps(
@@ -159,7 +151,7 @@ def test_react_open_write_multi_hop_reads_observation(tmp_path: Path):
         system_prompt="",
     )
     assert (reply or "").strip()
-    assert get_session_goal(session).get("doc_title") == "调研报告"
+    assert user_chose_skip_blueprint(session)
 
 
 class _FailThenClarifyModel(ScriptedChatModel):
@@ -334,3 +326,56 @@ def test_clarify_llm_reexports_narrow_classifiers():
 
     assert clarify_llm.classify_clarify_reply_llm is intent_llm.classify_clarify_reply_llm
     assert not hasattr(clarify_llm, "classify_turn_plan_llm")
+
+
+def test_run_chat_control_does_not_auto_dispatch_onboarding(tmp_path: Path, monkeypatch):
+    def _boom(*_a, **_k):
+        raise AssertionError("oral path must not auto-dispatch suggested_next_tools")
+
+    monkeypatch.setattr(
+        "report_writing.chat.intent_clarify.dispatch_suggested_onboarding_tools",
+        _boom,
+    )
+    session = _session_named(tmp_path)
+    session.freeform = {
+        **dict(session.freeform or {}),
+        "suggested_next_tools": [{"tool": "match_blueprints", "args": {}}],
+    }
+    state = ChatControlState(home=tmp_path, session=session)
+    user_text = json.dumps(
+        {
+            "action": "",
+            "message": "继续准备",
+            "session": {"phase": session.phase, "task_id": session.task_id},
+        },
+        ensure_ascii=False,
+    )
+    reply = run_chat_control(
+        model=_FinishOnlyModel(),
+        state=state,
+        user_text=user_text,
+        system_prompt="",
+    )
+    assert "好的" in (reply or "")
+    assert (session.freeform or {}).get("suggested_next_tools")
+
+
+def test_agent_user_text_exposes_suggested_next_tools(tmp_path: Path):
+    from report_writing.agents.chat_control import build_agent_user_text
+
+    session = _session_named(tmp_path)
+    session.freeform = {
+        **dict(session.freeform or {}),
+        "suggested_next_tools": [{"tool": "match_blueprints", "args": {}}],
+    }
+    body = json.loads(
+        build_agent_user_text(
+            action="",
+            payload={},
+            message="帮我写一份安全报告",
+            session=session,
+            home=tmp_path,
+        )
+    )
+    assert body.get("suggested_next_tools")
+    assert "suggested_next_tools" in str(body.get("routing_hint") or "")
