@@ -80,6 +80,7 @@ handle_chat → run_chat_control
 | B6 | `match_blueprints` 不再代选；明确选用走 `select_blueprint` | 已做 |
 | B7 | 无匹配不再在 match 内代开模版向导；总控再调 `begin_blueprint_wizard` | 已做 |
 | B8 | 无大纲时 `submit_points` 不再 skip_blueprint / 代生成目录；回流 `submit_outline` | 已做 |
+| B9 | 要点收集器不再用 `wants_skip/generate_points` 改道；跳过/生成走对应 Tool | 已做 |
 
 ### Phase C
 

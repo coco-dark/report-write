@@ -2823,8 +2823,6 @@ def _collect_freeform_points(
         finish_points_phase_cards,
         freeform_points_help_card,
         llm_draft_chapter_points,
-        wants_generate_points,
-        wants_skip_points,
     )
     from report_writing.chat.gates import _parse_chapter_keys
     from report_writing.chat.helpers import _load_task
@@ -2857,10 +2855,8 @@ def _collect_freeform_points(
         if not target_keys:
             target_keys = [focus]
 
-    phase = str(session.phase or "")
-    tid = str(session.task_id or "").strip()
-    do_skip = skip or wants_skip_points(text, invoke=invoke, phase=phase, task_id=tid)
-    do_generate = generate or wants_generate_points(text, invoke=invoke, phase=phase, task_id=tid)
+    do_skip = bool(skip)
+    do_generate = bool(generate)
 
     if do_skip:
         meta["points_step"] = "skipped"
@@ -2877,14 +2873,7 @@ def _collect_freeform_points(
                 [freeform_points_help_card(session, task)] if task else [],
             )
         if task is None or not task.outline or not list(getattr(task.outline, "chapters", None) or []):
-            # 无目录却被调到生成要点：改走起草目录（结构恢复，非口语意图判决）
             outline_msg = text.strip() if text.strip() else "帮我生成目录大纲"
-            from report_writing.chat.freeform_intent import wants_generate_outline
-
-            if not wants_generate_outline(
-                outline_msg, invoke=invoke, phase=phase, session=session
-            ):
-                outline_msg = "帮我生成目录大纲"
             return _collect_freeform_outline(
                 home,
                 session,
@@ -2953,11 +2942,6 @@ def _collect_freeform_points(
         return reply, cards
 
     if text:
-        from report_writing.chat.freeform_outline import looks_like_outline_directory
-
-        if looks_like_outline_directory(text):
-            session.phase = ChatPhase.FREEFORM_OUTLINE.value
-            return _collect_freeform_outline(home, session, text, invoke=invoke)
         return (
             "收到。若是在补充写作要点，请说明针对哪一章或贴分章说明；"
             "若是加要素、记背景，我会按对话理解后帮你落到对应章节。",

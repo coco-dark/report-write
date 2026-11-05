@@ -498,6 +498,25 @@ def test_submit_points_suggests_other_tool_without_silent_reroute(tmp_path: Path
     )
 
 
+def test_submit_points_skip_phrase_suggests_skip_tool(tmp_path: Path):
+    session = _session_named(tmp_path)
+    session.phase = ChatPhase.FREEFORM_POINTS.value
+
+    def invoke(system: str, _user: str) -> str:
+        if "无蓝本写作流程" in system or "动作分类" in system:
+            return json.dumps({"intent": "skip_points", "confidence": 0.9})
+        return json.dumps({"tool": "none", "confidence": 0.1})
+
+    state = ChatControlState(
+        home=tmp_path, session=session, invoke=invoke, intent_invoke=invoke
+    )
+    tools = {t.name: t for t in build_chat_tools(state)}
+    raw = tools["submit_points"].invoke({"message": "先跳过要点直接开写"})
+    data = json.loads(raw)
+    assert data.get("ok") is False
+    assert data.get("suggested_next_tool") == "skip_freeform_points"
+
+
 def test_submit_points_without_outline_suggests_submit_outline(tmp_path: Path):
     session = ChatSession(id="s-pts", phase=ChatPhase.FREEFORM_POINTS.value, freeform={})
     state = ChatControlState(home=tmp_path, session=session, invoke=lambda _s, _u: "{}")

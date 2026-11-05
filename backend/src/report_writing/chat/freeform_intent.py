@@ -190,3 +190,53 @@ def wants_freeform_help_draft(
     session: ChatSession | None = None,
 ) -> bool:
     return _classify(message, phase=phase, session=session, invoke=invoke) == "help_draft"
+
+
+def suggest_tool_instead_of_submit_points_freeform(
+    message: str,
+    *,
+    session: ChatSession | None = None,
+    invoke: InvokeFn | None = None,
+) -> dict | None:
+    """submit_points 被误调：跳过/生成要点/目录/开写应收口到对应 Tool，不在收集器里改道。"""
+    text = (message or "").strip()
+    if not text:
+        return None
+    from report_writing.chat.freeform_outline import looks_like_outline_directory
+
+    if looks_like_outline_directory(text):
+        return {
+            "tool": "submit_outline",
+            "args": {"outline_text": text},
+        }
+    phase = str(getattr(session, "phase", "") or "") if session is not None else ""
+    tid = str(getattr(session, "task_id", "") or "").strip() if session is not None else ""
+    outlined = bool((getattr(session, "freeform", None) or {}).get("outline_confirmed"))
+    for intent in classify_freeform_actions(
+        text, invoke=invoke, phase=phase, task_id=tid, session=session
+    ):
+        if intent == "skip_points":
+            return {"tool": "skip_freeform_points", "args": {"task_id": tid}}
+        if intent == "generate_points":
+            return {"tool": "generate_freeform_points", "args": {"task_id": tid}}
+        if intent == "generate_outline":
+            return {
+                "tool": "submit_outline",
+                "args": {
+                    "regenerate": True,
+                    "outline_text": text,
+                    "revision_instructions": text,
+                },
+            }
+        if intent == "confirm_outline":
+            return {"tool": "submit_outline", "args": {"confirm": True}}
+        if intent == "start_writing":
+            return {"tool": "start_writing", "args": {}}
+        if intent == "help_draft":
+            if not outlined:
+                return {
+                    "tool": "submit_outline",
+                    "args": {"regenerate": True, "outline_text": text},
+                }
+            return {"tool": "generate_freeform_points", "args": {"task_id": tid}}
+    return None

@@ -2032,6 +2032,24 @@ def build_chat_tools(state: ChatControlState) -> list:
                 suggested_next_tool=nxt,
                 suggested_args=_suggested_args_for_tool(nxt, payload, msg),
             )
+        from report_writing.chat.freeform_intent import suggest_tool_instead_of_submit_points_freeform
+
+        freeform_hit = suggest_tool_instead_of_submit_points_freeform(
+            msg, session=state.session, invoke=intent_llm
+        )
+        if freeform_hit is not None:
+            nxt = str(freeform_hit.get("tool") or "").strip()
+            args = dict(freeform_hit.get("args") or {})
+            return _obs_fail(
+                missing_slots=["points_text"],
+                reply_hint="这句更像目录/要点操作，我按对应动作继续。",
+                observation=(
+                    f"submit_points 不适合本句。下一步 Tool：{nxt}。"
+                    "跳过要点用 skip_freeform_points，生成要点用 generate_freeform_points。"
+                ),
+                suggested_next_tool=nxt,
+                suggested_args=args,
+            )
         if not str(state.session.task_id or "").strip():
             return _obs_fail(
                 missing_slots=["outline"],
