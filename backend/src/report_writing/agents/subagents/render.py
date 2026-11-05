@@ -13,9 +13,8 @@ from report_writing.agents.scripted import ScriptedChatModel
 from report_writing.agents.state import ChatControlState
 from report_writing.agents.subagents.runner import run_domain_subagent
 
-INSTRUCTIONS = """你是「渲染模版（HTML 导出）」领域子助手。只通过工具操作。
-导出 Word 前用户要选/配渲染模版 → list_render_templates 或 begin_render_template_wizard。
-开写阶段不要强推渲染模版。完成后口语总结。"""
+INSTRUCTIONS = """你是「渲染模版（HTML 导出）」领域子助手。只通过已绑定 Tool 操作；何时调用见各 Tool description。
+导出 Word 前用户要选/配渲染模版。开写阶段不要强推渲染模版。完成后口语总结。"""
 
 
 def _dump(data: dict[str, Any]) -> str:

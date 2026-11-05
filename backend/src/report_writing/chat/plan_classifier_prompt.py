@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from report_writing.chat.tool_registry import intent_catalog_lines
-
 
 def turn_plan_system_prompt(
     allowed: list[str],
@@ -44,16 +42,15 @@ def turn_plan_system_prompt(
         "禁止低置信静默 start_writing、选蓝本、破坏性删除或收录入库。\n"
     )
     if include_tool_catalog:
-        from report_writing.chat.intent_action_chain import CHAT_CONTROL_PLAN_POLICY
+        from report_writing.chat.tool_registry import CHAT_CONTROL_TOOL_DOCS
 
-        hints = {
-            tid: f"pipeline_rank={CHAT_CONTROL_PLAN_POLICY.pipeline_rank.get(tid, 999)}"
+        lines = [
+            f"- {tid}: {CHAT_CONTROL_TOOL_DOCS[tid]}"
             for tid in allowed
-            if tid in CHAT_CONTROL_PLAN_POLICY.pipeline_rank
-        }
-        extra = intent_catalog_lines(hints) if hints else ""
-        if extra:
-            system += "\n## Tool id 执行顺序参考\n" + extra + "\n"
+            if tid in CHAT_CONTROL_TOOL_DOCS
+        ]
+        if lines:
+            system += "\n## Tool 含义（摘要）\n" + "\n".join(lines[:40]) + "\n"
     if freeform_path:
         system += (
             "\n## 当前已走无蓝本\n"

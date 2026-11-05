@@ -1540,6 +1540,23 @@ def build_chat_tools(state: ChatControlState) -> list:
         cat = (category or "").strip()
         tip = (title or "").strip()
         has_pipe = bool(msg) and ("｜" in msg or "|" in msg)
+        import re
+
+        if not (title or "").strip() and msg and re.search(
+            r"(改个名字|改名叫|改名为|重命名|标题改|名字改|文档名改)",
+            msg.replace(" ", ""),
+        ):
+            return _dump(
+                {
+                    "ok": False,
+                    "missing_slots": ["title"],
+                    "reply_hint": "改名的话跟我说新名字就行，例如：改名叫 2026个人述职报告。",
+                    "observation": (
+                        "set_session_meta 改名须结构化参数 title=新名，message=原话可选。"
+                        "禁止仅传 message 让后端从话里猜标题；请再次调用并传入 title。"
+                    ),
+                }
+            )
         from report_writing.chat.session_documents import (
             sanitize_candidate_document_title,
             title_contains_action_clause,
@@ -2399,7 +2416,9 @@ def build_chat_tools(state: ChatControlState) -> list:
 
     if user_chose_skip_blueprint(state.session):
         tools = [t for t in tools if getattr(t, "name", None) != "match_blueprints"]
-    return tools
+    from report_writing.chat.tool_registry import apply_chat_control_tool_descriptions
+
+    return apply_chat_control_tool_descriptions(tools)
 
 
 def build_system_prompt(
