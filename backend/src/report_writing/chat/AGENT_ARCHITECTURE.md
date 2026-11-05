@@ -86,6 +86,26 @@ handle_chat → run_chat_control
 | B12 | `skip_blueprint` 遇「再写一份」另开文档；定名已推断类型｜标题则确认；已确认目录的向导不再拽回确认步 | 已做 |
 | B13 | `ask_entry_path` 只观察/挂卡（`apply_plan=False`）；链式 skip/大纲/向导留给总控读 `suggested_next_tools` | 已做 |
 
+### 完整链路修复（P0–P6）
+
+目标链：口语或点选 → `handle_chat` 组装 user JSON（`action` / `message` / `session_gaps` / `suggested_next_tools` / `pending_clarify`）→ `create_agent` → 控制 Tool 返回 `ok` 或 `missing_slots` → Agent 按 `suggested_next_tool(s)` 再跳或收尾。未出现 ToolMessage 且 `action` 在白名单 → `run_ui_action_shortcut`。
+
+澄清卡仍是 UX：点选把 `action=resolve_intent_clarify` 写入 user JSON；该 Tool **只落槽 / 改 session 标志**，不得调用 skip / outline / match / wizard 执行体。
+
+| 阶段 | 做什么 | 状态 |
+|------|--------|------|
+| P0 | 契约：控制 Tool 只改本 Tool 的 session；缺槽 `missing_slots`；下一跳只写 observation。禁止 Tool 内 `execute_dispatch_tool` 另一个总控 Tool | 待做 |
+| P1 | 入职链：`execute_clarify_spec` 去掉 skip+outline 实跑；`continue_after_new_document` 只 prepare；生产路径禁止 `apply_plan=True` | 待做 |
+| P2 | 无蓝本链：`skip_blueprint` 不再调 `_collect_freeform_meta`；定名走 `set_session_meta`；目录 / 要点 / 开写各一跳 | 待做 |
+| P3 | 蓝本 / 向导：子代理去掉 `is_create_blueprint_intent` 自动 begin；`resolve_wizard_action` 只补本 Tool 槽 | 待做 |
+| P4 | 写作中：`add_elements` / associate / retry 可填本 Tool 槽，不得在本函数改调另一个总控 Tool | 待做 |
+| P5 | 黄金路径从 `handle_chat` 断言 Tool 名与阶段；离线脚本只跟 `suggested_next_tools`；JSON 计划夹具不动 | 待做 |
+| P6 | `wants_*` 仅测试别名；`intent_*` 文件改名放到行为稳定之后 | 待做 |
+
+P1 必须覆盖：口语「写一份…」→ 生成目录；点选自动大纲 / 用模版 / 创建蓝本；「再写一份」隔离后由 Agent hop；shortcut 在零 ToolMessage 时仍保 UX。
+
+说「继续」时从 **P0+P1** 开始改代码。
+
 ### Phase C
 
 | 项 | 做什么 | 状态 |
