@@ -680,6 +680,11 @@ def generate_prompts(body: GenerateRobotPromptsRequest, *, invoke) -> GenerateRo
         result.chat_prompt = raw[:4000]
     elif kind != "all" and not getattr(result, f"{kind}_prompt"):
         setattr(result, f"{kind}_prompt", raw[:4000])
+    if result.chat_prompt:
+        from report_writing.chat.chat_prompt_lint import sanitize_chat_prompt
+
+        cleaned, _removed = sanitize_chat_prompt(result.chat_prompt)
+        result.chat_prompt = cleaned
     return result
 
 

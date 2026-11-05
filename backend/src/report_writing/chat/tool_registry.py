@@ -15,7 +15,7 @@ def intent_catalog_lines(catalog: dict[str, str]) -> str:
 
 def apply_chat_control_tool_descriptions(tools: list[Any]) -> list[Any]:
     """用 registry 中的长描述覆盖 LangChain Tool.description（单源）。"""
-    merged = {**CHAT_CONTROL_TOOL_DOCS, **EXPORT_RESOURCE_TOOL_DOCS}
+    merged = merged_bound_tool_docs()
     for item in tools:
         name = str(getattr(item, "name", "") or "").strip()
         doc = merged.get(name)
@@ -203,3 +203,33 @@ WIZARD_COMMAND_HINTS: dict[str, str] = {
     "abandon_wizard": "不要当前这份蓝本、退出向导、换别的蓝本或改用不绑蓝本写（不是跳过某一步）",
     "none": "与当前向导无关、闲聊，或信息不足需要追问",
 }
+
+# 无 build_chat_tools 绑定，仅 dispatch / UI / 计划分类器词表
+DISPATCH_ONLY_TOOL_DOCS: dict[str, str] = {
+    "ask_intent": "挂澄清卡：指代/多文档/写还是学未定；不替 Agent 静默选 Tool。",
+}
+
+
+def merged_bound_tool_docs() -> dict[str, str]:
+    """绑定到总控 ReAct 的 Tool description 单源。"""
+    return {**CHAT_CONTROL_TOOL_DOCS, **EXPORT_RESOURCE_TOOL_DOCS}
+
+
+def all_registered_tool_ids() -> frozenset[str]:
+    """Lint / catalog 用的全部 tool id。"""
+    return frozenset(
+        {**CHAT_CONTROL_TOOL_DOCS, **EXPORT_RESOURCE_TOOL_DOCS, **DISPATCH_ONLY_TOOL_DOCS}
+    )
+
+
+def list_bound_chat_tool_names(state: Any) -> list[str]:
+    from report_writing.agents.chat_control import build_chat_tools
+
+    names = {str(getattr(t, "name", "") or "").strip() for t in build_chat_tools(state)}
+    return sorted(n for n in names if n)
+
+
+def audit_bound_tool_documentation(state: Any) -> list[str]:
+    """返回缺少 registry 描述的绑定 Tool 名（应为空）。"""
+    docs = merged_bound_tool_docs()
+    return [name for name in list_bound_chat_tool_names(state) if name not in docs]

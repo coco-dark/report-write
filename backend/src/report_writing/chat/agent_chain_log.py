@@ -146,6 +146,23 @@ def log_llm_call(
     )
 
 
+def log_oral_route(
+    session: ChatSession,
+    emit: EmitFn | None,
+    *,
+    route: str,
+    detail: dict[str, Any] | None = None,
+) -> None:
+    """口语轮走路径：langchain_agent / intent_plan / clarify / ui / deterministic 等。"""
+    log_chain(
+        session,
+        emit,
+        step="oral_route",
+        summary=f"口语路径·{route}",
+        detail={"route": route, **(detail or {})},
+    )
+
+
 def log_react_round(
     session: ChatSession,
     emit: EmitFn | None,

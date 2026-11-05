@@ -3056,6 +3056,14 @@ def _parse_user_message_from_agent_text(user_text: str) -> tuple[str, str, str]:
 
 
 
+def _record_oral_route(state: ChatControlState, route: str, **extra: Any) -> None:
+    from report_writing.chat.agent_chain_log import log_oral_route
+
+    payload = {"route": route, **{k: v for k, v in extra.items() if v is not None and v != ""}}
+    log_oral_route(state.session, state.emit, route=route, detail=payload)
+    state.events.append({"type": "oral_route", **payload})
+
+
 def run_langchain_chat_control(
     *,
     model: BaseChatModel,
@@ -3066,6 +3074,7 @@ def run_langchain_chat_control(
     action: str,
 ) -> str:
     """LangChain create_agent 口语主路径（见 chat/AGENT_ARCHITECTURE.md）。"""
+    _record_oral_route(state, "langchain_agent", message=message[:120] if message else "")
     if not (action or state.user_action) and message:
         from report_writing.chat.session_gaps import refresh_session_gaps
 
@@ -3126,6 +3135,7 @@ def run_chat_control(
 
     shortcut = _try_ui_action_shortcut(state, user_text)
     if shortcut is not None:
+        _record_oral_route(state, "ui_action", action=state.user_action or action or "")
         return shortcut
 
     # 全局意图澄清：有 pending 时优先消歧，再走各路由
@@ -3157,6 +3167,7 @@ def run_chat_control(
                         },
                     )
                 )
+            _record_oral_route(state, "clarify_pending")
             return clarify_hit
         if isinstance(clarify_hit, dict):
             from report_writing.chat.helpers import _emit_process
@@ -3172,6 +3183,7 @@ def run_chat_control(
             )
             state.cards.extend(cards)
             state.events.extend(events)
+            _record_oral_route(state, "clarify_execute")
             return (reply or "").strip() or "好的。"
 
     if not (state.user_action or action) and message:
@@ -3224,6 +3236,7 @@ def run_chat_control(
             reply, cards, events = dispatch_hit
             state.cards.extend(cards or [])
             state.events.extend(events)
+            _record_oral_route(state, "onboarding_dispatch")
             return (reply or "").strip() or "好的。"
 
     # 整段会话：可选 JSON 计划短路；未命中再 ReAct（LangChain create_agent 工具循环）。
@@ -3248,6 +3261,7 @@ def run_chat_control(
             reply, cards, events = multi_hit
             state.cards.extend(cards)
             state.events.extend(events)
+            _record_oral_route(state, "intent_plan")
             return (reply or "").strip() or "好的。"
 
     return run_langchain_chat_control(
