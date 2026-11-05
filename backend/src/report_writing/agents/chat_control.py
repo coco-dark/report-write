@@ -824,11 +824,18 @@ def build_chat_tools(state: ChatControlState) -> list:
         )
 
     @tool
-    def skip_blueprint(path_setup_only: bool = False) -> str:
-        """跳过蓝本，走无蓝本大纲路径。auto_outline 下一跳是 submit_outline 时 path_setup_only=true。"""
+    def skip_blueprint(
+        path_setup_only: bool = False,
+        message: str = "",
+        title_hint: str = "",
+    ) -> str:
+        """跳过蓝本，只锁无蓝本路径。定名走 set_session_meta；生成目录走 submit_outline。"""
         from report_writing.chat_orchestrator import _action_skip_blueprint
 
-        from report_writing.chat.session_documents import is_writing_document_named
+        from report_writing.chat.session_documents import (
+            focus_has_display_title,
+            is_writing_document_named,
+        )
 
         from report_writing.chat.write_path_after_match import skip_blueprint_should_reask_path
 
@@ -856,40 +863,54 @@ def build_chat_tools(state: ChatControlState) -> list:
                 }
             )
 
-        named = is_writing_document_named(state.session)
+        extra = (message or state.last_user_message or "").strip()
+        tip = (title_hint or "").strip()
         _tool_begin(state, "skip_blueprint")
         reply, cards = _action_skip_blueprint(
             state.session,
             home=state.home,
             invoke=state.invoke,
             emit=state.emit,
+            extra_message=extra,
+            title_hint=tip,
             path_setup_only=bool(path_setup_only),
         )
         _set_cards(state, cards)
+        from report_writing.chat.freeform_intent import utterance_mentions_generate_outline
         from report_writing.chat.session_documents import focus_onboarding
 
+        named = is_writing_document_named(state.session) or focus_has_display_title(
+            state.session
+        )
         ob = focus_onboarding(state.session)
-        want_outline = str(ob.get("freeform_mode") or "").strip() == "auto_outline"
-        nxt = "submit_outline" if want_outline else ""
-        nxt_args = (
-            {"regenerate": True, "message": (state.last_user_message or "")[:500]}
-            if nxt
-            else {}
+        want_outline = (
+            str(ob.get("freeform_mode") or "").strip() == "auto_outline"
+            or utterance_mentions_generate_outline(extra)
         )
-        obs = (
-            "已跳过蓝本。下一步：题目未清则 set_session_meta；"
-            "有目录意图再 submit_outline；可写则 start_writing。"
-        )
+        nxt = ""
+        nxt_args: dict = {}
+        missing: list[str] = []
+        if named and want_outline:
+            nxt = "submit_outline"
+            nxt_args = {"regenerate": True, "message": extra[:500]}
+        elif not named:
+            nxt = "set_session_meta"
+            nxt_args = {"message": extra[:500], "title": tip}
+            missing = ["title"]
+        obs = "已跳过蓝本（未定名、未生成目录）。"
         if nxt:
-            obs += f" suggested_next_tool={nxt}(regenerate=true)，同轮接着调用。"
+            obs += f" suggested_next_tool={nxt}，同轮接着调用。"
         if not named:
-            obs += " 文档尚未定名，开写前须 set_session_meta(title=…)。"
+            obs += " 缺标题：set_session_meta(title=短文档名, message=原话)。"
+        elif want_outline:
+            obs += " 已有标题且要自动大纲：submit_outline(regenerate=true)。"
         return _dump(
             {
                 "ok": True,
                 "reply_hint": reply,
                 "observation": obs,
                 "needs_doc_name": not named,
+                "missing_slots": missing or None,
                 "suggested_next_tool": nxt or None,
                 "suggested_args": nxt_args or None,
             }
@@ -1848,6 +1869,35 @@ def build_chat_tools(state: ChatControlState) -> list:
             next_hop = "若用户还有开写/目录等诉求，继续调下一 Tool；纯改名可收尾。"
             gaps = dict((state.session.freeform or {}).get("onboarding_gaps_snapshot") or {})
             suggested = list((state.session.freeform or {}).get("suggested_next_tools") or [])
+        from report_writing.chat.freeform_intent import utterance_mentions_generate_outline
+        from report_writing.chat.intent_router import user_chose_skip_blueprint
+        from report_writing.chat.session_documents import focus_onboarding as _focus_ob
+
+        ob_meta = _focus_ob(state.session)
+        auto_outline = (
+            str(ob_meta.get("freeform_mode") or "").strip() == "auto_outline"
+            or utterance_mentions_generate_outline(user_msg)
+        )
+        if (
+            tip
+            and user_chose_skip_blueprint(state.session)
+            and auto_outline
+            and not awaiting_path
+        ):
+            if not any(
+                isinstance(t, dict) and str(t.get("tool") or "") == "submit_outline"
+                for t in suggested
+            ):
+                suggested = list(suggested) + [
+                    {
+                        "tool": "submit_outline",
+                        "args": {"regenerate": True, "message": user_msg[:500]},
+                    }
+                ]
+            next_hop = (
+                f"{next_hop} suggested_next_tools={suggested}，"
+                "无蓝本自动大纲：同轮 submit_outline(regenerate=true)。"
+            )
         return _dump(
             {
                 "ok": True,
@@ -1861,6 +1911,14 @@ def build_chat_tools(state: ChatControlState) -> list:
                 "brief": brief[:80],
                 "onboarding": gaps,
                 "suggested_next_tools": suggested,
+                "suggested_next_tool": (
+                    "submit_outline"
+                    if tip
+                    and user_chose_skip_blueprint(state.session)
+                    and auto_outline
+                    and not awaiting_path
+                    else None
+                ),
                 "needs_entry_path": bool(needs_entry or write_like and awaiting_path),
                 "awaiting_path_choice": awaiting_path,
             }

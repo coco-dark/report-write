@@ -402,7 +402,6 @@ def _action_skip_blueprint(
     path_setup_only: bool = False,
 ) -> tuple[str, list[ChatCard]]:
     from report_writing.chat.intent_router import (
-        infer_freeform_meta_from_messages,
         lock_writing_path,
         touch_session_plan,
         WRITING_PATH_FREEFORM,
@@ -424,7 +423,6 @@ def _action_skip_blueprint(
         mark_focus_entry_path,
         message_looks_like_new_write_topic,
         peek_pending_entry,
-        pop_pending_entry,
         quick_title_from_write_message,
         sanitize_candidate_document_title,
         session_documents_map,
@@ -481,16 +479,12 @@ def _action_skip_blueprint(
     lock_writing_path(session, WRITING_PATH_FREEFORM)
     mark_focus_entry_path(session, "freeform")
 
-    from report_writing.chat.helpers import is_vague_freeform_meta
-
     pending = peek_pending_entry(session)
-    if pending or title_hint or extra_message:
-        pending = pop_pending_entry(session) or pending
+    extra = (extra_message or pending.get("message") or "").strip()
     tip = sanitize_candidate_document_title(
         (title_hint or "").strip() or pending.get("title") or "",
-        message=extra_message or pending.get("message") or "",
-    ) or quick_title_from_write_message(extra_message or pending.get("message") or "")
-    extra = (extra_message or pending.get("message") or "").strip()
+        message=extra,
+    ) or quick_title_from_write_message(extra)
     if extra:
         try:
             from report_writing.chat.freeform_outline import (
@@ -500,92 +494,50 @@ def _action_skip_blueprint(
             remember_outline_constraints_from_message(session, extra)
         except Exception:
             pass
+    if extra or tip:
+        from report_writing.chat.session_documents import stash_pending_entry
 
-    inferred = infer_freeform_meta_from_messages(session, extra, invoke=invoke)
-    if inferred:
-        category, title = inferred
-        # 跳过蓝本时若推断出的仍是路径旁白，当成未定题目，交后续多轮问清
-        if is_vague_freeform_meta(title, field=True) or is_vague_freeform_meta(
-            category, field=True
-        ):
-            inferred = None
-    if not inferred and tip:
-        # 口语题名交给后续多轮/大脑补全；有分隔符则拆类型与标题，否则整段当标题
-        if "｜" in tip or "|" in tip:
-            parts = re.split(r"[｜|]", tip, maxsplit=1)
-            inferred = (
-                parts[0].strip() or tip,
-                (parts[1].strip() if len(parts) > 1 else tip) or tip,
-            )
-        else:
-            inferred = ("文档", tip)
-    if inferred:
-        category, title = inferred
-        merge_goal = {
-            "doc_category": category,
-            "doc_title": title,
-            "summary": f"{category}｜{title}",
-        }
-        from report_writing.chat.session_goal import merge_session_goal, sync_goal_into_freeform
+        stash_pending_entry(session, message=extra, title=tip)
 
-        merge_session_goal(session, merge_goal)
-        sync_goal_into_freeform(session)
-        if path_setup_only:
-            from report_writing.chat.session_documents import focus_needs_doc_name
-
-            # 只锁无蓝本路径，禁止用题材把新文档静默定名（否则会跳过起名卡）
-            if not focus_needs_doc_name(session):
-                session.freeform = {
-                    **(session.freeform or {}),
-                    "category": category,
-                    "title": title,
-                }
-            return ("", [])
-        if home is not None:
-            return _collect_freeform_meta(
-                session,
-                f"{category}｜{title}",
-                home=home,
-                invoke=invoke,
-                emit=emit,
-            )
-        session.phase = ChatPhase.FREEFORM_OUTLINE.value
-        session.freeform = {
-            **(session.freeform or {}),
-            "category": category,
-            "title": title,
-            "meta_confirmed": True,
-        }
-        return (
-            f"行，不用蓝本。我按你前面说的来写：【{category}】{title}。"
-            "接下来我会在卡片里起草章节目录，你改满意再确认。",
-            [],
-        )
-
+    del invoke  # 定名 / 生成目录不在本 Tool 内推断或执行
     if path_setup_only:
         return ("", [])
 
-    session.phase = ChatPhase.FREEFORM_ASK.value
-    # 新开无蓝本文档：清掉旧题目，避免会话目标把上一份文档名又填回来
-    ff_ask = dict(session.freeform or {})
-    ff_ask.update(
-        {
-            "meta_confirmed": False,
-            "category": "",
-            "title": "",
-            "outline_text": "",
-            "outline_confirmed": False,
-            "outline_pending_edit": False,
-        }
+    named_now = bool(
+        is_writing_document_named(session) or focus_has_display_title(session)
     )
-    goal = dict(ff_ask.get("session_goal") or {})
-    for k in ("doc_title", "doc_category", "summary"):
-        goal.pop(k, None)
-    if goal:
-        ff_ask["session_goal"] = goal
-    else:
-        ff_ask.pop("session_goal", None)
-    session.freeform = ff_ask
+    show = clean_document_display_title(
+        str((session.freeform or {}).get("title") or tip or "")
+    )
+    if named_now and show:
+        return (f"好，按无蓝本来写「{show}」。", [])
+
+    if not keep_current_shell:
+        ff_ask = dict(session.freeform or {})
+        ff_ask.update(
+            {
+                "meta_confirmed": False,
+                "category": "",
+                "title": "",
+                "outline_text": "",
+                "outline_confirmed": False,
+                "outline_pending_edit": False,
+            }
+        )
+        goal = dict(ff_ask.get("session_goal") or {})
+        for k in ("doc_title", "doc_category", "summary"):
+            goal.pop(k, None)
+        if goal:
+            ff_ask["session_goal"] = goal
+        else:
+            ff_ask.pop("session_goal", None)
+        session.freeform = ff_ask
+        if extra or tip:
+            from report_writing.chat.session_documents import stash_pending_entry
+
+            stash_pending_entry(session, message=extra, title=tip)
+
+    session.phase = ChatPhase.FREEFORM_ASK.value
     return (
         "行，咱就不绑蓝本了。你想写什么、文档打算叫什么，跟我说就行——"
         "题目定清了，我再帮你在文档窗口搭目录。",

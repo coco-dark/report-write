@@ -96,7 +96,7 @@ handle_chat → run_chat_control
 |------|--------|------|
 | P0 | 契约：控制 Tool 只改本 Tool 的 session；缺槽 `missing_slots`；下一跳只写 observation。禁止 Tool 内 `execute_dispatch_tool` 另一个总控 Tool | 已做（入职澄清 / 新建文档） |
 | P1 | 入职链：`execute_clarify_spec` 去掉 skip+outline 实跑；`continue_after_new_document` 只 prepare；生产路径禁止 `apply_plan=True` | 已做 |
-| P2 | 无蓝本链：`skip_blueprint` 不再调 `_collect_freeform_meta`；定名走 `set_session_meta`；目录 / 要点 / 开写各一跳 | 待做 |
+| P2 | 无蓝本链：`skip_blueprint` 不再调 `_collect_freeform_meta`；定名走 `set_session_meta`；目录 / 要点 / 开写各一跳 | 已做 |
 | P3 | 蓝本 / 向导：子代理去掉 `is_create_blueprint_intent` 自动 begin；`resolve_wizard_action` 只补本 Tool 槽 | 待做 |
 | P4 | 写作中：`add_elements` / associate / retry 可填本 Tool 槽，不得在本函数改调另一个总控 Tool | 待做 |
 | P5 | 黄金路径从 `handle_chat` 断言 Tool 名与阶段；离线脚本只跟 `suggested_next_tools`；JSON 计划夹具不动 | 待做 |
@@ -104,7 +104,7 @@ handle_chat → run_chat_control
 
 P1 必须覆盖：口语「写一份…」→ 生成目录；点选自动大纲 / 用模版 / 创建蓝本；「再写一份」隔离后由 Agent hop；shortcut 在零 ToolMessage 时仍保 UX。
 
-P0+P1 已落地：入口澄清只落槽并写 `suggested_next_tools`；`build_entry_path_clarify` / `build_entry_freeform_mode_clarify` 默认 `apply_plan=False`。下一步 **P2**。
+P0–P2 已落地。下一步 **P3**（向导不代选 begin）。
 
 ### Phase C
 

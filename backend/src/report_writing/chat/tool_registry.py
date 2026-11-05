@@ -38,8 +38,9 @@ CHAT_CONTROL_TOOL_DOCS: dict[str, str] = {
         "须用户点选或口语明确点名；禁止低置信代选。"
     ),
     "skip_blueprint": (
-        "放弃/不绑蓝本，走无蓝本（自动大纲或模版向导）。"
-        "用户说不要这份蓝本、换无蓝本方式时调用。"
+        "放弃/不绑蓝本，只锁无蓝本写作路径。不抽类型标题、不生成目录。"
+        "下一跳：缺标题则 set_session_meta；已有标题且要自动大纲则 submit_outline。"
+        "可传 message / title_hint / path_setup_only（后接 submit_outline 时 true）。"
     ),
     "begin_blueprint_wizard": (
         "当前文档 w* 上开启「依据模版编写」向导（上传/目录/学习）；收录前不入蓝本库。"
