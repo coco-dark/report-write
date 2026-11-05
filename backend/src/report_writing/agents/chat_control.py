@@ -3615,9 +3615,26 @@ def _script_user_message(text: str) -> str:
 
 
 class ChatControlScriptModel(ScriptedChatModel):
-    """离线/单测：按 UI action 或 session phase 调用总控 Tool（不解析口语）。"""
+    """离线/单测：按 UI action、suggested_next_tools 与 Tool observation hop。不读 leftover JSON plan。"""
 
     role: str = "chat_control_script"
+
+    def _hop_suggested_next_tools(
+        self, messages: list[BaseMessage], phase: str
+    ) -> AIMessage | None:
+        """新一轮无点选时只跟 suggested_next_tools，不读 leftover JSON plan。"""
+        if str(phase or "").strip() not in _SCRIPT_FOLLOW_SUGGESTED_PHASES:
+            return None
+        rows = _suggested_next_tools_from_human(messages)
+        if not rows:
+            return None
+        nxt = str(rows[0].get("tool") or "").strip()
+        if not nxt:
+            return None
+        args = rows[0].get("args")
+        if not isinstance(args, dict):
+            args = {}
+        return self.call(nxt, dict(args))
 
     def decide(self, messages: list[BaseMessage]) -> AIMessage:
         action, payload, text, phase, sess_snap = _parse_human(messages)
@@ -3742,6 +3759,12 @@ class ChatControlScriptModel(ScriptedChatModel):
             tip = tip.strip("「」《》\"'“”")[:160]
             if tip:
                 return self.call("set_session_meta", {"title": tip, "message": msg})
+
+        hop = self._hop_suggested_next_tools(
+            messages, phase or str(sess_snap.get("phase") or "")
+        )
+        if hop is not None:
+            return hop
 
         if phase == ChatPhase.CREATE_HANDOFF.value and msg:
             # 向导口语 → blueprint_wizard / begin（等同 ReAct 选 Tool，不经认领即 return 路由）
@@ -3883,6 +3906,40 @@ class ChatControlScriptModel(ScriptedChatModel):
             if not msg
             else f"收到：{msg[:80]}。（离线脚本模式请用按钮或明确 phase）"
         )
+
+
+_SCRIPT_FOLLOW_SUGGESTED_PHASES = frozenset(
+    {
+        "",
+        ChatPhase.INTENT.value,
+        ChatPhase.BLUEPRINT_SELECT.value,
+        ChatPhase.FREEFORM_ASK.value,
+        ChatPhase.FREEFORM_OUTLINE.value,
+        ChatPhase.FREEFORM_POINTS.value,
+    }
+)
+
+
+def _suggested_next_tools_from_human(messages: list[BaseMessage]) -> list[dict[str, Any]]:
+    for message in reversed(messages):
+        if not isinstance(message, HumanMessage):
+            continue
+        raw = (
+            message.content
+            if isinstance(message.content, str)
+            else json.dumps(message.content, ensure_ascii=False)
+        )
+        try:
+            data = json.loads(raw) if str(raw or "").lstrip().startswith("{") else {}
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(data, dict):
+            return []
+        rows = data.get("suggested_next_tools")
+        if not isinstance(rows, list):
+            return []
+        return [row for row in rows if isinstance(row, dict) and str(row.get("tool") or "").strip()]
+    return []
 
 
 def _parse_human(messages: list[BaseMessage]) -> tuple[str, dict[str, Any], str, str, dict[str, Any]]:

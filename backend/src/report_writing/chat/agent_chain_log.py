@@ -61,6 +61,21 @@ def _emit(emit: EmitFn | None, row: dict[str, Any]) -> None:
     emit(payload)
 
 
+def session_invoked_tools(session: ChatSession) -> list[str]:
+    """本会话 agent_chain_log 里已调用的控制 Tool 名（按时间序）。"""
+    names: list[str] = []
+    for row in list((getattr(session, "freeform", None) or {}).get("agent_chain_log") or []):
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("step") or "") != "tool":
+            continue
+        detail = row.get("detail") if isinstance(row.get("detail"), dict) else {}
+        name = str(detail.get("tool") or "").strip()
+        if name:
+            names.append(name)
+    return names
+
+
 def log_chain(
     session: ChatSession,
     emit: EmitFn | None,

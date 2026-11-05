@@ -99,12 +99,12 @@ handle_chat → run_chat_control
 | P2 | 无蓝本链：`skip_blueprint` 不再调 `_collect_freeform_meta`；定名走 `set_session_meta`；目录 / 要点 / 开写各一跳 | 已做 |
 | P3 | 蓝本 / 向导：子代理去掉 `is_create_blueprint_intent` 自动 begin；`resolve_wizard_action` 只补本 Tool 槽 | 已做 |
 | P4 | 写作中：`add_elements` / associate / retry 可填本 Tool 槽，不得在本函数改调另一个总控 Tool | 已做 |
-| P5 | 黄金路径从 `handle_chat` 断言 Tool 名与阶段；离线脚本只跟 `suggested_next_tools`；JSON 计划夹具不动 | 待做 |
+| P5 | 黄金路径从 `handle_chat` 断言 Tool 名与阶段；离线脚本只跟 `suggested_next_tools`；JSON 计划夹具不动 | 已做 |
 | P6 | `wants_*` 仅测试别名；`intent_*` 文件改名放到行为稳定之后 | 待做 |
 
 P1 必须覆盖：口语「写一份…」→ 生成目录；点选自动大纲 / 用模版 / 创建蓝本；「再写一份」隔离后由 Agent hop；shortcut 在零 ToolMessage 时仍保 UX。
 
-P0–P4 已落地。下一步 **P5**（`handle_chat` 黄金路径）。
+P0–P5 已落地。下一步 **P6**（`wants_*` / `intent_*` 改名，行为稳定之后）。
 
 ### Phase C
 
