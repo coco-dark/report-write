@@ -82,6 +82,7 @@ handle_chat → run_chat_control
 | B8 | 无大纲时 `submit_points` 不再 skip_blueprint / 代生成目录；回流 `submit_outline` | 已做 |
 | B9 | 要点收集器不再用 `wants_skip/generate_points` 改道；跳过/生成走对应 Tool | 已做 |
 | B10 | 目录收集器只认显式 `confirm` / `regenerate`；口语补槽在 `submit_outline` | 已做 |
+| B11 | 定名收集器 / 入职观察不再用 `wants_generate_outline` 分类改道；只认生成目录短语 | 已做 |
 
 ### Phase C
 

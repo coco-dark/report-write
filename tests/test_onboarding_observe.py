@@ -142,3 +142,13 @@ def test_unnamed_blueprint_library_intent_suggests_match():
     assert gaps.get("missing_name") is True
     suggested = suggest_next_tools_from_gaps(gaps, message=msg)
     assert [t.get("tool") for t in suggested] == ["match_blueprints"]
+
+
+def test_observe_generate_outline_phrase_is_residual_not_llm():
+    from report_writing.chat.session_documents import observe_new_document_gaps
+
+    session = ChatSession(id="obs_gen", phase=ChatPhase.INTENT.value)
+    gaps = observe_new_document_gaps(session, "帮我生成目录", invoke=None)
+    assert "generate_outline" in (gaps.get("residual_intents") or [])
+    gaps_write = observe_new_document_gaps(session, "帮我写一份安全报告", invoke=None)
+    assert "generate_outline" not in (gaps_write.get("residual_intents") or [])

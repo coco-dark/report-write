@@ -2005,19 +2005,6 @@ def _action_submit_points(
     )
 
 
-def _recent_wants_generate_outline(session: ChatSession, *, invoke=None) -> bool:
-    from report_writing.chat.freeform_outline import wants_generate_outline
-
-    phase = str(session.phase or "")
-    for msg in reversed(list(session.messages or [])[-8:]):
-        if str(getattr(msg, "role", "") or "") != "user":
-            continue
-        t = str(getattr(msg, "text", "") or "").strip()
-        if t and wants_generate_outline(t, invoke=invoke, phase=phase, session=session):
-            return True
-    return False
-
-
 def _collect_freeform_meta(
     session: ChatSession,
     message: str,
@@ -2026,8 +2013,7 @@ def _collect_freeform_meta(
     invoke=None,
     emit=None,
 ) -> tuple[str, list[ChatCard]]:
-    from report_writing.chat.freeform_help import wants_freeform_help_draft
-    from report_writing.chat.freeform_outline import wants_generate_outline
+    from report_writing.chat.freeform_intent import utterance_mentions_generate_outline
     from report_writing.chat.helpers import is_vague_freeform_meta
     from report_writing.chat.intent_router import infer_freeform_meta_from_messages
     from report_writing.chat.session_documents import (
@@ -2035,8 +2021,21 @@ def _collect_freeform_meta(
         quick_title_from_write_message,
         sanitize_candidate_document_title,
         title_contains_action_clause,
+        title_rejects_as_document_name,
     )
     from report_writing.chat.session_goal import get_session_goal
+
+    _ACTION_TITLE_LEFTOVER = {
+        "帮我",
+        "给我",
+        "请",
+        "请帮我",
+        "请给我",
+        "帮我写",
+        "给我写",
+        "写一份",
+        "写个",
+    }
 
     text = (message or "").strip()
     extracted_title = (
@@ -2052,27 +2051,18 @@ def _collect_freeform_meta(
         remember_outline_constraints_from_message(session, text)
     except Exception:
         pass
-    help_draft = wants_freeform_help_draft(text, invoke=invoke, phase=str(session.phase or ""))
-    wants_gen = (
-        wants_generate_outline(text, invoke=invoke, phase=str(session.phase or ""), session=session)
-        or _recent_wants_generate_outline(session, invoke=invoke)
-        or help_draft
+    action_not_title = utterance_mentions_generate_outline(text) or title_contains_action_clause(
+        text
     )
-    if help_draft and "｜" not in text and "|" not in text:
+    if action_not_title and "｜" not in text and "|" not in text:
         ff = dict(session.freeform or {})
         goal = get_session_goal(session)
         cat = str(goal.get("doc_category") or ff.get("category") or "").strip()
         tit = str(goal.get("doc_title") or ff.get("title") or "").strip()
-        if cat and tit:
+        if cat and tit and not title_contains_action_clause(tit):
             text = f"{cat}｜{tit}"
-        elif not wants_gen:
-            session.phase = ChatPhase.FREEFORM_ASK.value
-            return (
-                "可以，我先帮你起草目录大纲，你改完确认后再开写。"
-                "先跟我说清楚写什么、文档打算叫什么就行。",
-                [],
-            )
-    if is_vague_freeform_meta(text) or wants_generate_outline(text, invoke=invoke, phase=str(session.phase or ""), session=session):
+            action_not_title = False
+    if is_vague_freeform_meta(text) or action_not_title:
         inferred = infer_freeform_meta_from_messages(session, text, invoke=invoke)
         if inferred and title_contains_action_clause(str(inferred[1] or "")):
             inferred = None
@@ -2080,14 +2070,22 @@ def _collect_freeform_meta(
             goal = get_session_goal(session)
             cat = str(goal.get("doc_category") or "").strip()
             tit = str(goal.get("doc_title") or extracted_title or "").strip()
-            if extracted_title:
-                inferred = (cat or "文档", extracted_title)
+            usable_title = extracted_title
+            if usable_title and (
+                usable_title in _ACTION_TITLE_LEFTOVER
+                or utterance_mentions_generate_outline(usable_title)
+                or title_contains_action_clause(usable_title)
+                or title_rejects_as_document_name(usable_title, message=message or "")
+            ):
+                usable_title = ""
+            if usable_title:
+                inferred = (cat or "文档", usable_title)
             elif cat and tit and not title_contains_action_clause(tit):
                 inferred = (cat, tit)
         if inferred:
             category, title = inferred
             text = f"{category}｜{title}"
-        elif wants_gen:
+        elif action_not_title:
             session.phase = ChatPhase.FREEFORM_ASK.value
             return (
                 "可以帮你生成目录。还不太清楚文档叫什么、写哪一类——"

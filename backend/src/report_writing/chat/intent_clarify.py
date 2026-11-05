@@ -2954,45 +2954,6 @@ def _dispatch_observed_entry_path(
     return str(reply or ""), list(cards or [])
 
 
-def _try_submit_outline_if_asked(
-    home: Path,
-    session: ChatSession,
-    message: str,
-    *,
-    title: str,
-    invoke=None,
-    emit=None,
-) -> tuple[str, list[Any]] | None:
-    from report_writing.chat.freeform_outline import wants_generate_outline
-
-    msg = (message or "").strip()
-    if not msg or not wants_generate_outline(
-        msg, invoke=invoke, phase=str(session.phase or ""), session=session
-    ):
-        return None
-    from report_writing.chat.intent_dispatch import execute_dispatch_tool
-
-    hit = execute_dispatch_tool(
-        home,
-        session,
-        {
-            "tool": "submit_outline",
-            "args": {
-                "message": msg[:500],
-                "regenerate": True,
-                **({"title_hint": title, "title": title} if title else {}),
-            },
-        },
-        msg,
-        emit=emit,
-        invoke=invoke,
-    )
-    if hit is None:
-        return None
-    reply, cards, _ = hit
-    return str(reply or ""), list(cards or [])
-
-
 def try_apply_observed_onboarding(
     session: ChatSession,
     home: Path | None,
@@ -3029,14 +2990,9 @@ def _clear_entry_tool_from_message(
         return ""
     # 「生成目录 / 起草大纲」不是创建蓝本；交给入口三选或 submit_outline
     try:
-        from report_writing.chat.freeform_outline import wants_generate_outline
+        from report_writing.chat.freeform_intent import utterance_mentions_generate_outline
 
-        if wants_generate_outline(
-            text,
-            invoke=invoke,
-            phase=str((session.phase if session else "") or ""),
-            session=session,
-        ):
+        if utterance_mentions_generate_outline(text):
             return ""
     except Exception:
         pass

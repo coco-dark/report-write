@@ -39,6 +39,11 @@ _POINTS_GEN_HINTS = (
 )
 
 
+def utterance_mentions_generate_outline(message: str) -> bool:
+    """本句带生成目录短语（结构校验，不调分类模型）。"""
+    return lexical_freeform_intent(message) == "generate_outline"
+
+
 def lexical_freeform_intent(message: str) -> str:
     """离线短语参考；空串表示无把握。有模型时不要用本函数做主判决。"""
     t = (message or "").strip()

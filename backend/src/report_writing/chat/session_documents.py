@@ -1914,17 +1914,13 @@ def preferred_entry_path_resolved(session: ChatSession, message: str = "", *, in
     if not msg:
         return ""
     try:
-        from report_writing.chat.freeform_outline import wants_generate_outline
+        from report_writing.chat.freeform_intent import utterance_mentions_generate_outline
 
         pending = peek_pending_entry(session)
         original = str(pending.get("message") or "").strip() or msg
         branch = str(ob.get("entry_branch") or "").strip()
-        gen_msg = wants_generate_outline(
-            msg, invoke=invoke, phase=str(session.phase or ""), session=session
-        )
-        gen_orig = wants_generate_outline(
-            original, invoke=invoke, phase=str(session.phase or ""), session=session
-        )
+        gen_msg = utterance_mentions_generate_outline(msg)
+        gen_orig = utterance_mentions_generate_outline(original)
         if gen_msg or gen_orig:
             # 已选无蓝本 → 生成目录即 freeform（可跳过模版/自动二选一）
             if branch == "without_blueprint":
@@ -1996,11 +1992,9 @@ def observe_new_document_gaps(
 
     residual_intents: list[str] = []
     try:
-        from report_writing.chat.freeform_outline import wants_generate_outline
+        from report_writing.chat.freeform_intent import utterance_mentions_generate_outline
 
-        if msg and wants_generate_outline(
-            msg, invoke=invoke, phase=str(session.phase or ""), session=session
-        ):
+        if msg and utterance_mentions_generate_outline(msg):
             residual_intents.append("generate_outline")
     except Exception:
         pass
@@ -3900,11 +3894,9 @@ def message_confirms_write_document_intent(
     if message_declares_document_title(msg, ""):
         return True
     try:
-        from report_writing.chat.freeform_outline import wants_generate_outline
+        from report_writing.chat.freeform_intent import utterance_mentions_generate_outline
 
-        if wants_generate_outline(
-            msg, invoke=invoke, phase=str(getattr(session, "phase", "") or ""), session=session
-        ):
+        if utterance_mentions_generate_outline(msg):
             return True
     except Exception:
         pass
