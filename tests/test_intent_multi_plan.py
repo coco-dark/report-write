@@ -1,4 +1,4 @@
-"""会话全程多意图：JSON 计划排序、关键续步、高/低置信门闩。"""
+"""遗留 JSON 计划（口语主路径已不走）。"""
 
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ from report_writing.chat.intent_multi_plan import (
     try_run_oral_multi_intent,
 )
 from report_writing.domain.models import ChatSession
+
+pytestmark = pytest.mark.legacy_plan
 
 
 @pytest.fixture(autouse=True)

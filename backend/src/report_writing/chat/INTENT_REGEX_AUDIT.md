@@ -48,26 +48,23 @@
 
 ## 口语主路径（LangChain Agent 闭环）
 
-详见 `chat/AGENT_ARCHITECTURE.md`。
+详见 `chat/AGENT_ARCHITECTURE.md`（**没有意图层**）。
 
-- `run_chat_control`：pending clarify / UI 之后 →（可选，`features.intent_plan`）`try_run_oral_multi_intent` / `apply_turn_plan` → 未命中再 `run_react`（`create_agent` + Tool description）
-- 开场与写作中途同一契约；禁止再用标题/原话截取工具名当执行清单
-- 单测 / Tool 执行层：`execute_intent_plan` / `execute_dispatch_tool` / `apply_*` / clarify 构建器
+- `run_chat_control`：pending 选择卡 / UI 之后 → `run_react`（`create_agent` + Tool description）
+- JSON 计划（`try_run_oral_multi_intent` / `apply_turn_plan`）**不在**口语主路径
+- 单测 / 卡片执行层：`execute_dispatch_tool` / `execute_intent_plan` / `apply_*` / clarify 构建器
 - Chat Tool 统一 `ok` / `reply_hint` / `observation` / `missing_slots`
 - 开写硬门闩：`start_writing` / `select_write_chapters` / `write_analyzed_only` 要求 `writing_doc_named`
 
-## Session Intent Loop（Phase 0 — 只观察，不改执行）
+## Session gaps（只观察，不改执行）
 
 | 环节 | 模块 | 说明 |
 |------|------|------|
-| Observe | `session_gaps.observe_session_gaps` | missing **镜像** `focus_needs_*`，不 union 进 `plan.missing` |
-| Snapshot | `session_gaps.refresh_session_gaps` | 写入 `freeform.session_gaps_snapshot` |
-| Predict | `classify_turn_plan_llm` | user 块可选一行「规则观察」只读上下文 |
-| Act | 不变 | 仍 `remaining_missing` + `hang_missing_slots` / `execute_intent_plan` |
-| ReAct | 不变 | 仅 `apply_turn_plan` 返回 `None` 时进入 |
-| 默认 onboarding | match_first | 产品策略；观察层 `suggest_next_tools` 仍服务 onboarding 快照 |
+| Observe | `session_gaps.observe_session_gaps` | missing **镜像** `focus_needs_*` |
+| Snapshot | `session_gaps.refresh_session_gaps` | 写入 `freeform.session_gaps_snapshot`，给 Agent 读 |
+| 默认 onboarding | match_first | `suggest_next_tools` 队列由确定性 dispatch 续跑 |
 
-**禁止 Phase 0**：用 gaps 强制挂卡、与 TurnPlan 同轮并行 ReAct、或 gaps.missing 覆盖 LLM missing。
+**禁止**：用 gaps 强制挂卡、或用 gaps.missing 覆盖 Agent 选 Tool。
 
 **选蓝本同轮（match_first）**：已出 `blueprint_list` / 选用澄清时，勿再叠 `doc_name` / `entry_branch` 卡。**选用成功后**若同屏已有 `doc_window_hint` / `materials_pack_gate` / 向导卡，定名只保留文案提示，定名卡留到下一轮或用户直接说「名字叫…」。见 `turn_should_defer_doc_name_card`。
 
@@ -85,6 +82,5 @@
 
 ## 配置
 
-意图分类使用 `live_intent_model()` / `config/bailian.local.yml` 的 `intent-model-name`。
-`features.intent_plan`（env `REPORT_WRITING_INTENT_PLAN`）控制口语 JSON 计划短路；**默认 false**（ReAct 为主）。
-`features.intent_tool_catalog_in_prompt`（env `REPORT_WRITING_INTENT_TOOL_CATALOG`）控制分类器 system 是否附带工具含义表；默认 false，语义以 `@tool` docstring 为准。
+窄 JSON（澄清/槽位）可用 `live_intent_model()` / `intent-model-name`（配置名历史遗留）。
+口语主路径 **忽略** `features.intent_plan`。`intent_tool_catalog_in_prompt` 已废弃（恒 false）。

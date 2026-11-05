@@ -283,3 +283,54 @@ def test_oral_entry_skips_domain_claim_modules():
     assert not hasattr(writing_control_route, "try_writing_control_route")
     assert hasattr(intent_dispatch, "execute_intent_plan")
     assert hasattr(writing_control_route, "apply_writing_control_classification")
+
+
+class _FinishOnlyModel(ScriptedChatModel):
+    role: str = "finish_only"
+
+    def decide(self, messages: list[BaseMessage]) -> AIMessage:
+        del messages
+        return self.finish("好的，我继续。")
+
+
+def test_run_chat_control_ignores_intent_plan_flag(tmp_path: Path, monkeypatch):
+    """即使打开遗留开关，口语也不走 JSON 计划。"""
+    monkeypatch.setenv("REPORT_WRITING_INTENT_PLAN", "1")
+    from report_writing.infra import config_settings
+
+    config_settings._application.cache_clear()
+    assert config_settings.intent_plan_enabled() is True
+
+    def _boom(*_a, **_k):
+        raise AssertionError("run_chat_control must not call try_run_oral_multi_intent")
+
+    monkeypatch.setattr(
+        "report_writing.chat.intent_multi_plan.try_run_oral_multi_intent",
+        _boom,
+    )
+
+    session = _session_named(tmp_path)
+    state = ChatControlState(home=tmp_path, session=session)
+    user_text = json.dumps(
+        {
+            "action": "",
+            "message": "把第二章写一下",
+            "session": {"phase": session.phase, "task_id": session.task_id},
+        },
+        ensure_ascii=False,
+    )
+    reply = run_chat_control(
+        model=_FinishOnlyModel(),
+        state=state,
+        user_text=user_text,
+        system_prompt="",
+    )
+    assert "好的" in (reply or "")
+    config_settings._application.cache_clear()
+
+
+def test_clarify_llm_reexports_narrow_classifiers():
+    from report_writing.chat import clarify_llm, intent_llm
+
+    assert clarify_llm.classify_clarify_reply_llm is intent_llm.classify_clarify_reply_llm
+    assert not hasattr(clarify_llm, "classify_turn_plan_llm")

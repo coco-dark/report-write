@@ -19,7 +19,7 @@ class ChatControlState:
     session: ChatSession
     robot: Any = None
     invoke: InvokeFn | None = None
-    intent_invoke: InvokeFn | None = None
+    intent_invoke: InvokeFn | None = None  # 窄 JSON（澄清/槽位）；不是口语路由
     emit: EmitFn | None = None
     cards: list[ChatCard] = field(default_factory=list)
     events: list[dict[str, Any]] = field(default_factory=list)

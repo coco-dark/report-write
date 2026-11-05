@@ -33,6 +33,12 @@ def test_intent_plan_default_disabled():
     assert intent_plan_enabled() is False
 
 
+def test_intent_tool_catalog_flag_always_false():
+    from report_writing.infra.config_settings import intent_tool_catalog_in_prompt
+
+    assert intent_tool_catalog_in_prompt() is False
+
+
 def test_oral_multi_intent_skipped_when_plan_disabled(tmp_path: Path):
     from report_writing.chat.intent_multi_plan import try_run_oral_multi_intent
     from report_writing.domain.models import ChatSession

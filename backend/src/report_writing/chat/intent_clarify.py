@@ -1,4 +1,7 @@
-"""对话全局意图澄清：低置信 / 槽位歧义时追问，消歧后再执行。"""
+"""选择卡状态机：槽位不清时挂选项，用户点选后再执行。
+
+不是口语「意图分类」。点选结果走 `execute_dispatch_tool`；未挂卡的口语交给 Agent。
+"""
 
 from __future__ import annotations
 
@@ -133,7 +136,7 @@ def message_skips_clarify(
     if invoke is not None:
         try:
             from report_writing.chat.intent_context import pack_classifier_context
-            from report_writing.chat.intent_llm import classify_doc_meta_line_llm
+            from report_writing.chat.clarify_llm import classify_doc_meta_line_llm
 
             ctx = pack_classifier_context(session) if session is not None else {}
             hit = classify_doc_meta_line_llm(
@@ -945,7 +948,7 @@ def try_handle_pending_message(
     if invoke is not None and text:
         try:
             from report_writing.chat.intent_context import pack_classifier_context
-            from report_writing.chat.intent_llm import classify_doc_meta_line_llm
+            from report_writing.chat.clarify_llm import classify_doc_meta_line_llm
 
             ctx = pack_classifier_context(session)
             judged_meta = classify_doc_meta_line_llm(
@@ -1020,7 +1023,7 @@ def try_handle_pending_message(
     judged: dict[str, Any] = {}
     if invoke is not None:
         from report_writing.chat.intent_context import pack_classifier_context
-        from report_writing.chat.intent_llm import classify_clarify_reply_llm
+        from report_writing.chat.clarify_llm import classify_clarify_reply_llm
 
         ctx = pack_classifier_context(session)
         judged = classify_clarify_reply_llm(
@@ -1476,7 +1479,7 @@ def build_ask_intent_clarify(
     judged: dict[str, Any] = {}
     if invoke is not None and not (question and options):
         from report_writing.chat.dialogue import format_full_dialogue
-        from report_writing.chat.intent_llm import classify_unclear_intent_llm
+        from report_writing.chat.clarify_llm import classify_unclear_intent_llm
         from report_writing.chat.intent_router import active_blueprint_wizard
         from report_writing.chat.react_speed import control_dialogue_max_turns
 
@@ -1694,7 +1697,7 @@ def build_document_name_clarify(
             )
     if not tip and msg and invoke is not None:
         try:
-            from report_writing.chat.intent_llm import extract_write_subject_title_llm
+            from report_writing.chat.clarify_llm import extract_write_subject_title_llm
 
             tip = extract_write_subject_title_llm(msg, invoke=invoke) or tip
         except Exception:
@@ -2584,7 +2587,7 @@ def build_entry_path_clarify(
         residual_from_name = ""
         if invoke is not None and msg:
             from report_writing.chat.intent_context import pack_classifier_context
-            from report_writing.chat.intent_llm import (
+            from report_writing.chat.clarify_llm import (
                 classify_explicit_doc_name_given_llm,
                 extract_write_subject_title_llm,
             )
@@ -3039,7 +3042,7 @@ def _clear_entry_tool_from_message(
         pass
     try:
         from report_writing.chat.intent_context import pack_classifier_context
-        from report_writing.chat.intent_llm import classify_entry_routing_llm
+        from report_writing.chat.clarify_llm import classify_entry_routing_llm
 
         ctx = pack_classifier_context(session) if session is not None else {}
         hit = classify_entry_routing_llm(
@@ -3072,7 +3075,7 @@ def _consume_clarify_residual(
     home=None,
     emit=None,
 ) -> tuple[str, list[ChatCard]]:
-    """若 freeform 中有残余路径意图，在已挂 entry 澄清后继续消歧 / 多意图编排。"""
+    """若 freeform 中有残余路径，在已挂 entry 澄清后继续消歧（不跑 JSON 计划）。"""
     ff = dict(session.freeform or {})
     residual = str(ff.pop("clarify_residual_message", "") or "").strip()
     if not residual:
@@ -3094,17 +3097,6 @@ def _consume_clarify_residual(
         return reply, cards
     if isinstance(follow, str) and follow.strip():
         return f"{reply}\n{follow}".strip(), cards
-    if home is not None and invoke is not None:
-        from report_writing.chat.intent_multi_plan import try_run_oral_multi_intent
-
-        multi = try_run_oral_multi_intent(
-            home, session, residual, invoke=invoke, emit=emit
-        )
-        if multi is not None:
-            reply2, cards2, _ = multi
-            if reply2:
-                reply = f"{reply}\n{reply2}".strip()
-            return reply, list(cards or []) + list(cards2 or [])
     return reply, cards
 
 

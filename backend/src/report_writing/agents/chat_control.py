@@ -3109,7 +3109,10 @@ def run_chat_control(
     user_text: str,
     system_prompt: str,
 ) -> str:
-    """运行一轮对话总控：确定性前置（UI/澄清）→ 可选遗留 intent_plan → LangChain Agent 闭环。"""
+    """运行一轮对话总控：确定性前置（UI/澄清卡/入职续跑）→ LangChain Agent 闭环。
+
+    没有「意图分类」层：不根据整句口语预先列出 tool JSON。
+    """
     action, message, _phase = _parse_user_message_from_agent_text(user_text)
     state.last_user_message = message
     state.user_action = state.user_action or (action or "")
@@ -3237,31 +3240,6 @@ def run_chat_control(
             state.cards.extend(cards or [])
             state.events.extend(events)
             _record_oral_route(state, "onboarding_dispatch")
-            return (reply or "").strip() or "好的。"
-
-    # 整段会话：可选 JSON 计划短路；未命中再 ReAct（LangChain create_agent 工具循环）。
-    from report_writing.infra.config_settings import intent_plan_enabled
-
-    if (
-        intent_plan_enabled()
-        and not (state.user_action or action)
-        and message
-        and intent_llm is not None
-    ):
-        from report_writing.chat.intent_multi_plan import try_run_oral_multi_intent
-
-        multi_hit = try_run_oral_multi_intent(
-            state.home,
-            state.session,
-            message,
-            invoke=intent_llm,
-            emit=state.emit,
-        )
-        if multi_hit is not None:
-            reply, cards, events = multi_hit
-            state.cards.extend(cards)
-            state.events.extend(events)
-            _record_oral_route(state, "intent_plan")
             return (reply or "").strip() or "好的。"
 
     return run_langchain_chat_control(

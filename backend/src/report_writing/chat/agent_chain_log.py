@@ -153,7 +153,7 @@ def log_oral_route(
     route: str,
     detail: dict[str, Any] | None = None,
 ) -> None:
-    """口语轮走路径：langchain_agent / intent_plan / clarify / ui / deterministic 等。"""
+    """口语轮走路径：langchain_agent / clarify / ui / onboarding_dispatch 等。"""
     log_chain(
         session,
         emit,

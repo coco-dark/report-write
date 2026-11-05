@@ -1,7 +1,9 @@
-"""澄清/调度/可选遗留计划用的 LLM 分类器（非 LangChain 口语主路由）。
+"""窄 JSON + 遗留 turn-plan 分类器（文件名 `intent_*` 是历史遗留）。
 
-- 默认配置下口语不经过本模块的 turn_plan；总控见 agents/react.run_react。
-- 仍用于：澄清回复、wizard command、writing_control 窄分类、intent_plan=true 时的 JSON 计划。
+口语「用户要做什么」只走 LangChain `create_agent`，不要从本模块再发明第二套路由。
+
+- 澄清卡 / 槽位 / 向导：请 import `chat.clarify_llm`。
+- `classify_turn_plan_llm` / `classify_chat_control_plan_llm*`：仅遗留测试路径。
 详见 chat/AGENT_ARCHITECTURE.md。
 """
 
@@ -362,7 +364,6 @@ def classify_writing_control_llm(
 
     allowed = [k for k in WRITING_CONTROL_TOOLS if k != "none"]
     from report_writing.chat.intent_action_chain import MULTI_ACTION_JSON_HINT
-    from report_writing.infra.config_settings import intent_tool_catalog_in_prompt
 
     dialogue_lines = []
     for item in (dialogue_tail or [])[-8:]:
@@ -387,11 +388,9 @@ def classify_writing_control_llm(
         "多工具时后端按 remember_writing_goal → add_chapter_element → submit_points 校正；"
         "open_* 可与其它工具并列。\n"
         "\n"
+        "各 tool 的调用语义以 LangChain 总控 Tool 的 description 为准；此处只列 id。\n"
+        "\n"
     )
-    if intent_tool_catalog_in_prompt():
-        system += "## 工具含义\n" + _intent_lines(WRITING_CONTROL_TOOLS) + "\n\n"
-    else:
-        system += "各 tool 的调用语义以 LangChain 总控 Tool 的 description 为准；此处只列 id。\n\n"
     system += (
         "## payload 规则\n"
         "- add_chapter_element：从原话提取 kind/name/category/tags/purpose/kv_pairs/query/value/prompt/"
@@ -529,157 +528,13 @@ def _invoke_control_plan_json(
         if line:
             dialogue_lines.append(f"{role}: {line}")
 
-    from report_writing.infra.config_settings import intent_tool_catalog_in_prompt
     from report_writing.chat.plan_classifier_prompt import turn_plan_system_prompt
 
-    if not intent_tool_catalog_in_prompt():
-        system = turn_plan_system_prompt(
-            allowed,
-            freeform_path=freeform_path,
-            include_tool_catalog=False,
-            multi_action_hint=MULTI_ACTION_JSON_HINT,
-        )
-    if intent_tool_catalog_in_prompt():
-        system = (
-        "你是对话写文档的统一意图调度器（唯一大脑）。根据本轮、近期对话与会话快照选出 1～4 个 Tool；"
-        "说法不固定，按意思判断，不要靠固定句式。"
-        "一句可含多个意图（定名+匹配+资料包+开写等），须全部列入 tools，不要只返回第一个。\n"
-        "会话中途同样适用：改名并开写、新建资料包再继续写，都要输出完整链。\n"
-        "\n"
-        "## 输出\n"
-        "只返回 JSON，不要 Markdown：\n"
-        '{"confidence":0.0,"uncertain":false,'
-        '"slots":{"doc_name":null,"writing_path":null},"tools":[{"tool":"<id>","args":{}}],'
-        '"missing":[]}\n'
-        f"tool ∈ {{{', '.join(allowed)}}}\n"
-        "slots：本轮已确定的要素，没有就 null。"
-        "writing_path ∈ {match, template, freeform, null}。"
-        "missing：本轮目标还缺的槽，∈ {doc_name, writing_path, freeform_mode, chapter_key, blueprint_id}。\n"
-        "若 user 块含「规则观察」行，仅为后端只读快照（与 focus_needs_* 对齐），勿机械覆盖你的 missing/tools。\n"
-        f"{MULTI_ACTION_JSON_HINT}\n"
-        "tools 是唯一执行清单；后端按 JSON 的 tools 执行，不靠从标题/原话截取工具名。\n"
-        "后端可能按依赖重排，并可能在定名后补 ask_entry_path。不自动注入 confirm_outline。不要填子 Agent 名。\n"
-        "args 从原话提取：title / doc_name、blueprint_id、chapter_keys、chapter_key_hint、kind、query、"
-        "chapter_sequences、document_title / blueprint_title 等。\n"
-        "确定的槽位 → 列入 tools 并执行；缺的 → missing 并引导；说不清 → uncertain=true，降低 confidence，不要猜开写/选蓝本。\n"
-        "\n"
-        "## 同会话多文档\n"
-        "默认操作当前焦点文档；未点名其它文档时勿切换。\n"
-        "仅切换到会话里已有文档（「切到职业病那份」「看安全预评价」）→ focus_document，"
-        "args 可带 document_title；文档窗口会跟随。\n"
-        "「写/分析/配置 XX 文档的某章」→ document_title=XX + chapter_key_hint/sequences；"
-        "除非明确另写一份，勿当成全新创建。\n"
-        "「重写帮我写一份×× / 重新写一份×× / 另写一份××」= 新开文档，→ ask_entry_path，"
-        "args 带 title=××；不要当成退回重写本章，也不要继续改当前焦点文档。\n"
-        "正在写 A 时「另外写一份 B」且路径未清 → ask_entry_path（有蓝本 / 无蓝本·模版或自动大纲），"
-        "args 带 title=B；勿直接 begin_blueprint_wizard，勿继续改 A。"
-        "仅明确依据模版编写/上传样板时才 begin_blueprint_wizard。\n"
-        "焦点已定名文档 A，用户又说「帮我写一份关于×× / 写一份××」且题材与 A 不同、"
-        "又未说「另写/再写一份」也未说「改名叫/名字叫」→ uncertain=true 或 document_scope ask，"
-        "tools=[]；禁止 set_session_meta(title=题材) 把 A 改名。\n"
-        "焦点已在写（已选蓝本/有 w* 副本/导出阶段）即使用户尚未点选「定名」，"
-        "「写一份 B」且 B 与当前展示名不同 → 同样先澄清或 uncertain，禁止静默改当前文档标题。\n"
-        "只有用户明确「改名叫/名字改一下叫做」才 set_session_meta；"
-        "只有明确「另写/再写一份」才按新开文档走。\n"
-        "槽位不够准就不要猜硬动作：多文档歧义、写还是学未定、指代不明 → "
-        "uncertain / missing / ask_intent，多轮问清再执行。\n"
-        "\n"
-        "## 向导与写作可并行\n"
-        "向导只管创建步骤（名称/上传/提取/确认目录/分析要点）。"
-        "向导未结束仍可调度写作、选章、加要素、再分析。\n"
-        "\n"
-        "## 写 vs 学\n"
-        "已绑蓝本、写某章正文 → select_write_chapters 或 write_analyzed_only（不是 re_study）。\n"
-        "write_scope：只要本章 → self；含下属/整章 → whole；只点章节号未说范围 → 勿填。\n"
-        "分析/再分析/学习某章 → re_study_chapters；chapter_sequences 填顶层序号。\n"
-        "study_scope：全部/整章 → whole；只要本章/不要子章 → self；只要下属 → children；"
-        "否定子章节=self；未说勿填。\n"
-        "\n"
-        "## 要素 ≠ 蓝本\n"
-        "要素=写作物料；蓝本=报告模板。查看/打开要素 → open_element_library；"
-        "查看/浏览蓝本库 → open_blueprint_library；选型写作 → match_blueprints / list_blueprints。"
-        "关联已有 → associate_elements；新建 → add_chapter_element；"
-        "取消关联 → dissociate_chapter_element；删文档要素 → remove_document_element（不删库）；"
-        "收入要素库 → collect_to_element_library。"
-        "绝不要把「要素」当成蓝本去 match/list。\n"
-        "新建文件要素+检索词 → add_chapter_element；「关联知识库」勿虚构旧目录绑定。\n"
-        "\n"
-        "## 资料库与资料包\n"
-        "打开资料库页面 → open_knowledge；管当前文档绑定的资料包 → materials_pack_*"
-        "（list/view/use/create/unbind/add_slot/remove_slot/update_slot/rename）。\n"
-        "\n"
-        "## 未绑蓝本时的入口（灵活收集，非固定流水线）\n"
-        "必要槽：doc_name + writing_path（有蓝本 match / 无蓝本模版 template / 自动大纲 freeform）。\n"
-        "一句全齐 → slots 填齐 + tools 列出全部（如 set_session_meta + match_blueprints）。\n"
-        "只给了名字 → slots.doc_name + tools=[set_session_meta]，missing=[writing_path]。\n"
-        "只给了写作方式 → tools 走 match/skip/wizard，missing=[doc_name]（「写一份××」题材不算已定名）。\n"
-        "「用已有蓝本写××」且未 explicit 定名 → 仅 match_blueprints，missing=[doc_name]；同轮禁止 set_session_meta 静默定名。\n"
-        "blueprint_id 已非空（已选用蓝本）且用户仅「名字叫…/改名叫…」→ tools=[set_session_meta]，missing=[]；禁止 match_blueprints。\n"
-        "两槽都没有 → tools=[]，missing=[doc_name, writing_path]，uncertain 仅在真说不清时为 true。\n"
-        "「帮我生成一份述职报告 名字叫lzb述职报告」→ "
-        'slots.doc_name=lzb述职报告，tools=[set_session_meta]，missing=[writing_path]。\n'
-        "「作lzb述职报告 自动生成章节目录 三个大章节就可以」→ "
-        "slots.doc_name 不要填整句；工作名=lzb述职报告，writing_path=freeform，"
-        "tools=[skip_blueprint, submit_outline]，missing=[]。\n"
-        "「再给我写一份述职报告 三个章节 名字叫做lzb述职报告」→ "
-        "slots.doc_name=lzb述职报告，writing_path=freeform，"
-        "tools=[set_session_meta, skip_blueprint, submit_outline]；禁止 begin_blueprint_wizard。\n"
-        "「名字叫lzb述职报告，用现有蓝本」→ set_session_meta + match_blueprints，missing=[]。\n"
-        "「名字叫做lzb的述职报告 你帮我生成大纲」→ "
-        "slots.doc_name=lzb的述职报告，writing_path=freeform，"
-        "tools=[set_session_meta, skip_blueprint, submit_outline]，missing=[]；"
-        "不要再要 freeform_mode，不要只挂模版/自动大纲点选卡。\n"
-        "焦点已是「述职报告」定名后「帮我写一份关于ai应用对于市场的影响」→ "
-        "uncertain=true 或 ask_intent（新开/改名/继续），tools=[]，"
-        "禁止 slots.doc_name=ai题材，禁止 set_session_meta 改当前名。\n"
-        "「帮我写一份报告」→ missing=[doc_name, writing_path]，不要猜 skip_blueprint。\n"
-        "「你好」「谢谢」「在吗」等纯寒暄 → tools=[]，missing=[]，slots 全 null；"
-        "禁止 set_session_meta、ask_entry_path、begin_blueprint_wizard；勿把寒暄词当 doc_name。\n"
-        "「我有模版写一份安全报告 / 根据我的模版写安全报告」→ "
-        "writing_path=template，tools=[begin_blueprint_wizard]，missing=[doc_name]；"
-        "禁止 slots.doc_name=安全报告，禁止 set_session_meta(title=安全报告)。\n"
-        "明确找库内蓝本 → match_blueprints / list_blueprints。\n"
-        "点名某份蓝本 → match_blueprints 或 select_blueprint。\n"
-        "明确创建/上传样板 → begin_blueprint_wizard + explicit_create=true。\n"
-        "不要这份蓝本/换方式 → skip_blueprint。\n"
-        "\n"
-        "## 意图不清（开场与中途同一原则）\n"
-        "指代不明、写还是学未定、多文档歧义 → uncertain=true 或 ask_intent（question + 2～3 options）。\n"
-        "「写这一章」没说哪一章 → missing=[chapter_key]，不要猜第一章。\n"
-        "范围未说清 → missing=[write_scope] 或 study_scope；要素/资料包未点名 → missing=[element_id]/[pack_id]。\n"
-        "禁止低置信静默 start_writing / 选蓝本 / 删要素 / 收录入库。\n"
-        "写作中途同样适用：改名、开写、确认章、加要素、资料包，都按 slots/tools/missing 输出，勿只服务开场。\n"
-        )
-        if freeform_path:
-            system += (
-                "\n"
-                "## 当前已走无蓝本\n"
-                "禁止 match/list/select/begin 蓝本与 re_study_chapters；"
-                "学习/分析本章/生成写作信息 → generate_freeform_points；"
-                "定题目/改名 → set_session_meta（必须 args.title=新名，可选 message=原话）；"
-                "目录 → submit_outline。\n"
-            )
-        system += (
-            "\n"
-            "## 示例\n"
-            "帮我写2.3章节 → select_write_chapters，chapter_sequences=[\"2.3\"]。\n"
-            "为2.2添加文件要素 检索词为… → add_chapter_element，kind=file。\n"
-            "查看资料库 → open_knowledge；列出资料包 → materials_pack_list；"
-            "新建资料包叫变电站资料包 → materials_pack_create。\n"
-            "改个名字 2026个人述职报告 / 改名为年度总结 → set_session_meta(title=新名)，"
-            "args 带 message=原话、title=新名；不要 focus_document。\n"
-            "改名叫年度总结然后开始写 → set_session_meta + select_write_chapters/start_writing（已绑蓝本时）。\n"
-            "开写前查待补要素 → check_writing_supplements；用户说先写再说/不补了 → skip_writing_supplement_check。\n"
-            "新建资料包叫XX再继续写 → materials_pack_create + 后续写作 Tool。\n"
-            "已绑蓝本「把刚才那章写了」→ select_write_chapters；"
-            "未绑「帮我出个安全预评价」→ missing 含 writing_path 或 ask_intent；"
-            "「这一章」没说写还是学 → uncertain=true 或 ask_intent；"
-            "看看有哪些要素 → open_element_library；"
-            "收入要素库 → collect_to_element_library；"
-            "看看有哪些蓝本 → list_blueprints；"
-            "切到职业病那份 / 打开安全预评价文档 → focus_document；"
-            "用这份蓝本，选前两章开始写 → select_blueprint + select_write_chapters + start_writing。"
-        )
+    system = turn_plan_system_prompt(
+        allowed,
+        freeform_path=freeform_path,
+        multi_action_hint=MULTI_ACTION_JSON_HINT,
+    )
     docs_block = (session_documents_brief or "").strip() or "（尚无其它文档登记）"
     focus_line = (focus_document_brief or "").strip() or "（尚无焦点文档）"
     observe_line = (gaps_context_line or "").strip()
@@ -745,7 +600,7 @@ def classify_chat_control_plan_llm_scored(
     return plan.tools, plan.confidence
 
 
-def classify_turn_plan_llm(
+def classify_turn_plan_llm(  # 遗留：口语主路径不调用
     message: str,
     *,
     session: Any = None,

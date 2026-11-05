@@ -1,4 +1,7 @@
-"""兼容 re-export：会话状态见 session_state；入口/向导口语意图见 entry_intent / intent_llm。"""
+"""兼容 re-export：会话标志（写作路径、向导）+ 入口辅助函数。
+
+不是口语主路由。选 Tool 走 LangChain Agent；入口窄分类见 `entry_intent` / `clarify_llm`。
+"""
 
 from __future__ import annotations
 

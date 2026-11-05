@@ -1,16 +1,11 @@
-"""总控 Tool 语义单源（供 @tool docstring 与可选意图分类器 catalog 复用）。
+"""总控 Tool 语义单源：LangChain `create_agent` 只看 Tool.description。
 
-LangChain `create_agent` 以 Tool description 为模型可见的工具说明；
-意图分类器仅在 `intent_tool_catalog_in_prompt=true` 时在 system 中附带本 catalog。
+不要把本表再贴进 system prompt 或「意图分类器」。
 """
 
 from __future__ import annotations
 
 from typing import Any
-
-
-def intent_catalog_lines(catalog: dict[str, str]) -> str:
-    return "\n".join(f"- {k}: {v}" for k, v in catalog.items())
 
 
 def apply_chat_control_tool_descriptions(tools: list[Any]) -> list[Any]:

@@ -1,7 +1,7 @@
-"""意图计划执行层（口语主路径为 ReAct 观察闭环）。
+"""按 tool 名执行（按钮、澄清卡已选、单测）。不是「理解用户意图」。
 
-`execute_dispatch_tool` / `execute_intent_plan` / `classify_intent_plan` 供 UI·clarify·单测复用；
-勿再以认领路由挂回 `run_chat_control`。口语缺参与失败以 Tool `observation` / `missing_slots` 回流。
+`execute_dispatch_tool` / `execute_intent_plan` 在 tool+args **已经确定** 之后调用。
+口语主路径由 Agent 选 Tool；缺参走 observation / missing_slots。
 """
 
 from __future__ import annotations

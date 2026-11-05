@@ -52,6 +52,7 @@ def test_apply_add_element_route(tmp_path: Path):
         "payload": {
             "kind": "kv",
             "name": "个人信息",
+            "chapter_key": "c1",
             "kv_pairs": [{"key": "姓名", "value": "nico"}],
         },
     }

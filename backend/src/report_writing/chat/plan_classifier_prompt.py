@@ -1,4 +1,4 @@
-"""Turn-plan 意图分类器 system prompt（策略与 JSON schema；工具语义默认不在此重复）。"""
+"""遗留 turn-plan JSON 的 system prompt（口语主路径不使用）。"""
 
 from __future__ import annotations
 
@@ -7,13 +7,12 @@ def turn_plan_system_prompt(
     allowed: list[str],
     *,
     freeform_path: bool,
-    include_tool_catalog: bool,
     multi_action_hint: str,
 ) -> str:
-    """构建 classify_turn_plan / control plan JSON 的 system 段。"""
+    """构建 classify_turn_plan / control plan JSON 的 system 段（仅遗留测试路径）。"""
     allowed_csv = ", ".join(allowed)
     system = (
-        "你是对话写文档的意图调度器（输出 JSON 计划，供后端串行或转交 ReAct 总控）。"
+        "你输出对话写文档的 JSON 计划（遗留路径；口语主路径由 LangChain Agent 选 Tool）。"
         "根据本轮、近期对话与会话快照选出 0～4 个 tool id；说法不固定，按意思判断。\n"
         "一句可含多个步骤（定名+匹配+资料包+开写等），须全部列入 tools，不要只返回第一个。\n"
         "\n"
@@ -41,16 +40,6 @@ def turn_plan_system_prompt(
         "寒暄（你好/谢谢）→ tools=[]，勿 set_session_meta / ask_entry_path。\n"
         "禁止低置信静默 start_writing、选蓝本、破坏性删除或收录入库。\n"
     )
-    if include_tool_catalog:
-        from report_writing.chat.tool_registry import CHAT_CONTROL_TOOL_DOCS
-
-        lines = [
-            f"- {tid}: {CHAT_CONTROL_TOOL_DOCS[tid]}"
-            for tid in allowed
-            if tid in CHAT_CONTROL_TOOL_DOCS
-        ]
-        if lines:
-            system += "\n## Tool 含义（摘要）\n" + "\n".join(lines[:40]) + "\n"
     if freeform_path:
         system += (
             "\n## 当前已走无蓝本\n"

@@ -1,7 +1,7 @@
-"""可选遗留：整轮 JSON 计划（slots/tools/missing）。
+"""遗留：整轮 JSON 计划（slots/tools/missing）。
 
-默认 `features.intent_plan=false` 时不参与口语路径；理解+调 Tool 由 create_agent 完成。
-仍供 UI·clarify·单测与 `REPORT_WRITING_INTENT_PLAN=1` 时使用。
+口语主路径 `run_chat_control` 不再调用。仅 `try_run_oral_multi_intent`（单测打开
+`REPORT_WRITING_INTENT_PLAN=1`）与 `execute_intent_plan` 测试助手使用。
 """
 
 from __future__ import annotations
