@@ -114,8 +114,12 @@ def _seed_meta_patch_from_payload(
     # 只发干净题目、无「类型｜标题」——整句当标题（含改名指令词的句子不当标题）
     if not patch.get("doc_title"):
         text = (message or "").strip()
+        from report_writing.chat.session_documents import message_requires_structured_rename_title
+
         if text and "｜" not in text and "|" not in text:
-            if not is_vague_freeform_meta(text, field=True):
+            if message_requires_structured_rename_title(text) and not title:
+                pass
+            elif not is_vague_freeform_meta(text, field=True):
                 patch["doc_title"] = text[:160]
     if patch.get("doc_category") or patch.get("doc_title"):
         cat = patch.get("doc_category") or ""
@@ -175,6 +179,16 @@ def _set_session_meta(
 
     raw_message = str(payload.get("message") or "").strip()
     gate_msg = raw_message or message
+    from report_writing.chat.session_documents import message_requires_structured_rename_title
+
+    if message_requires_structured_rename_title(gate_msg) and not str(
+        payload.get("title") or ""
+    ).strip():
+        return (
+            "改名的话跟我说新名字就行，例如：改名叫 2026个人述职报告。",
+            [],
+        )
+
     topic_hint = (title or "").strip() or quick_title_from_write_message(gate_msg)
 
     from report_writing.chat.session_documents import (
@@ -245,14 +259,21 @@ def _set_session_meta(
                 session, title, home=home, message=raw_message or title
             )
             declared = title
-        # 改名句未带结构化 title：确定性抽出新名后直接定名，勿挂「起个名字」
+        # 改名句：无结构化 title 时不从话里剥标题；显式 title 或非改名句仍可走 explicit 提取
         if not declared:
-            extracted = explicit_doc_title_from_message(raw_message or message)
-            if extracted:
-                confirm_writing_document_name(
-                    session, extracted, home=home, message=(raw_message or message) or extracted
-                )
-                declared = extracted
+            needs_title_arg = message_requires_structured_rename_title(
+                raw_message or message
+            ) and not str(payload.get("title") or "").strip()
+            if not needs_title_arg:
+                extracted = explicit_doc_title_from_message(raw_message or message)
+                if extracted:
+                    confirm_writing_document_name(
+                        session,
+                        extracted,
+                        home=home,
+                        message=(raw_message or message) or extracted,
+                    )
+                    declared = extracted
         if not declared:
             from report_writing.chat.session_snapshot import looks_like_freeform_meta_line
 
@@ -354,8 +375,12 @@ def _set_session_meta(
                 message=message,
             )
         goal = get_session_goal(session)
-        doc_title = str(goal.get("doc_title") or title or "").strip()
-        doc_cat = str(goal.get("doc_category") or category or "").strip()
+        doc_title = str(
+            goal.get("doc_title") or title or patch.get("doc_title") or ""
+        ).strip()
+        doc_cat = str(
+            goal.get("doc_category") or category or patch.get("doc_category") or ""
+        ).strip()
         from report_writing.chat.session_documents import (
             explicit_doc_title_from_message,
             title_is_write_subject_not_doc_name,
@@ -377,6 +402,15 @@ def _set_session_meta(
             )
         if doc_title:
             apply_focused_document_title(session, doc_title, home=home, category=doc_cat)
+            merge_session_goal(
+                session,
+                {
+                    **({"doc_category": doc_cat} if doc_cat else {}),
+                    **({"doc_title": doc_title}),
+                    "summary": f"{doc_cat}｜{doc_title}".strip("｜"),
+                },
+            )
+            sync_goal_into_freeform(session)
         # 必须叠在改名之后的 freeform 上。ff 是改名前的快照，整份写回会把
         # 登记表标题冲回旧名，文档窗下拉就一直显示改名前的名字。
         ff_now = dict(session.freeform or {})

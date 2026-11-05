@@ -181,7 +181,7 @@ def intent_plan_enabled() -> bool:
         return False
     if env in {"1", "true", "on", "yes"}:
         return True
-    return setting("features", "intent_plan", default=True, coerce=bool)
+    return setting("features", "intent_plan", default=False, coerce=bool)
 
 
 def intent_tool_catalog_in_prompt() -> bool:

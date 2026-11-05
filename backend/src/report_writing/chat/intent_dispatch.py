@@ -893,6 +893,14 @@ def execute_dispatch_tool(
                 body["message"] = text
             msg_for_gate = str(body.get("message") or text or "").strip()
             tip = str(body.get("title") or "").strip()
+            from report_writing.chat.session_documents import message_requires_structured_rename_title
+
+            if message_requires_structured_rename_title(msg_for_gate) and not tip:
+                return (
+                    "改名须带上新名字（例如：改名叫 2026个人述职报告）。",
+                    [],
+                    [],
+                )
             # 「安全报告 用我的模版」：题材 title 禁止带入定名
             if tip and title_is_write_subject_not_doc_name(msg_for_gate, tip):
                 body.pop("title", None)

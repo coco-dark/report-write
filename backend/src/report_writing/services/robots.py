@@ -655,7 +655,8 @@ def generate_prompts(body: GenerateRobotPromptsRequest, *, invoke) -> GenerateRo
         "要求：具体可执行；面向报告书写场景；不要输出 Markdown 代码块或解释。\n"
         "只返回 JSON 对象，字段仅包含需要的键：chat_prompt / study_prompt / write_prompt。\n"
         "字段含义：\n"
-        "- chat_prompt：对话人格与边界；须写明「像真人同事、口语化、先接住再指路」，以及如何引用蓝本/知识库、禁止编造项目事实\n"
+        "- chat_prompt：对话人格与边界；须写明「像真人同事、口语化、先接住再指路」，以及如何引用蓝本/知识库、禁止编造项目事实；"
+        "禁止在 chat_prompt 中枚举 Tool/API 名称或工具对照表（平台已绑定 LangChain Tool description）\n"
         "- study_prompt：分析样板要点时的系统指令（如何精确归纳写法要点、表格列/固定项与可变项、检索词；禁止固化项目专名事实）\n"
         "- write_prompt：写章节时的系统指令（如何组织 HTML 正文、表格版式）；须写明正文禁止（来源：…）/资料缺口/【待补】，证据用 evidence_ids，缺口只进 uncovered_points\n"
     )

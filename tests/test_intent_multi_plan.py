@@ -5,11 +5,23 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from report_writing.chat.intent_multi_plan import (
     expand_plan_auto_continue,
     try_run_oral_multi_intent,
 )
 from report_writing.domain.models import ChatSession
+
+
+@pytest.fixture(autouse=True)
+def _enable_intent_plan_for_multi_tests(monkeypatch):
+    monkeypatch.setenv("REPORT_WRITING_INTENT_PLAN", "1")
+    from report_writing.infra import config_settings
+
+    config_settings._application.cache_clear()
+    yield
+    config_settings._application.cache_clear()
 
 
 def test_expand_plan_auto_continue_naming_then_entry():

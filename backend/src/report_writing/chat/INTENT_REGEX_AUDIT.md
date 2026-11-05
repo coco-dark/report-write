@@ -84,5 +84,5 @@
 ## 配置
 
 意图分类使用 `live_intent_model()` / `config/bailian.local.yml` 的 `intent-model-name`。
-`features.intent_plan`（env `REPORT_WRITING_INTENT_PLAN`）控制口语 JSON 计划短路；默认 true。
+`features.intent_plan`（env `REPORT_WRITING_INTENT_PLAN`）控制口语 JSON 计划短路；**默认 false**（ReAct 为主）。
 `features.intent_tool_catalog_in_prompt`（env `REPORT_WRITING_INTENT_TOOL_CATALOG`）控制分类器 system 是否附带工具含义表；默认 false，语义以 `@tool` docstring 为准。

@@ -60,7 +60,7 @@ FastAPI（report_writing.api）
 |----|------|------|
 | 前端 | `frontend/` | 对话页、文档窗、蓝本 / 要素 / 资料库、机器人与排版 |
 | HTTP API | `backend/src/report_writing/api/` | FastAPI 路由；静态资源来自 `npm run build` |
-| 对话编排 | `backend/src/report_writing/chat/` | 意图识别、澄清、工具调用、SSE 进度、开写前要点检查 |
+| 对话编排 | `backend/src/report_writing/chat/` | 澄清状态机、ReAct 总控（`create_agent`）、SSE；可选 `features.intent_plan` JSON 短路 |
 | 总控与专员 | `backend/src/report_writing/agents/` | LangChain `create_agent` 工具循环；无密钥时可用脚本模型离线走通 |
 | 领域模型 | `backend/src/report_writing/domain/` | `WritingTask`、大纲、`point_items`、要素节点 |
 | 存储 | `services/store.py` + `data/` | 任务 JSON 为写作真源；MySQL 存目录级对象 |

@@ -1540,12 +1540,9 @@ def build_chat_tools(state: ChatControlState) -> list:
         cat = (category or "").strip()
         tip = (title or "").strip()
         has_pipe = bool(msg) and ("｜" in msg or "|" in msg)
-        import re
+        from report_writing.chat.session_documents import message_requires_structured_rename_title
 
-        if not (title or "").strip() and msg and re.search(
-            r"(改个名字|改名叫|改名为|重命名|标题改|名字改|文档名改)",
-            msg.replace(" ", ""),
-        ):
+        if not (title or "").strip() and msg and message_requires_structured_rename_title(msg):
             return _dump(
                 {
                     "ok": False,

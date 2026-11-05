@@ -4326,6 +4326,17 @@ def message_explicitly_creates_blueprint(
         return is_create_blueprint_intent(t, invoke=invoke, session=session)
     return any(h in t for h in _EXPLICIT_CREATE_BLUEPRINT_HINTS)
 
+
+_RENAME_NEEDS_TITLE_RE = re.compile(
+    r"(改个名字|改名叫|改名为|重命名|标题改|名字改|文档名改|改一下名)"
+)
+
+
+def message_requires_structured_rename_title(text: str) -> bool:
+    """口语含改名指令但未通过 Tool/args 传 title 时，须追问或要求结构化 title。"""
+    return bool(_RENAME_NEEDS_TITLE_RE.search((text or "").replace(" ", "")))
+
+
 def explicit_doc_title_from_message(text: str) -> str:
     """无模型时的窄兜底：定名「名字叫… / 就叫…」与改名「名字改一下叫做 / 改名叫…」。
 
