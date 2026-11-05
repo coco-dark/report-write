@@ -1011,19 +1011,14 @@ def _action_blueprint_wizard(
                     )
                 ],
             )
-        # 主动回退到确认目录：若已确认则解开，便于再核对（不重提目录）
+        # 目录已确认：勿解开再拽回确认步，交给分析
         if task and bool(getattr(task, "outline_confirmed", False)):
-            try:
-                from report_writing.services.store import TaskStore
-
-                store = TaskStore(home / "tasks" / blueprint_id)
-                if store.path.is_dir():
-                    t2 = store.load()
-                    t2.outline_confirmed = False
-                    store.save(t2)
-                    task = t2
-            except Exception:
-                pass
+            return execute_wizard_command(
+                home,
+                session,
+                "go_study",
+                invoke=payload.get("_intent_invoke"),
+            )
         wizard["step"] = "outline_confirm"
         wizard["outline_confirmed"] = False
         wizard["chapters"] = chapters

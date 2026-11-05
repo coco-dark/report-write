@@ -415,12 +415,14 @@ def _action_skip_blueprint(
     session.blueprint_id = ""
     # 对齐 force_new：丢掉旧写作焦点，避免后续 outline regenerate 覆盖其它文档任务
     from report_writing.chat.session_documents import (
+        begin_document_onboarding,
         clean_document_display_title,
         focus_document_key,
         focus_document_meta,
         focus_has_display_title,
         is_writing_document_named,
         mark_focus_entry_path,
+        message_looks_like_new_write_topic,
         peek_pending_entry,
         pop_pending_entry,
         quick_title_from_write_message,
@@ -447,10 +449,15 @@ def _action_skip_blueprint(
             ff_snap["session_documents"] = docs
             session.freeform = ff_snap
     # 继续当前已定名无蓝本壳：保留 focus/task，避免文档窗 snap 到第一项并另起 w*
+    extra_probe = (
+        extra_message or str(peek_pending_entry(session).get("message") or "")
+    ).strip()
+    new_doc = message_looks_like_new_write_topic(extra_probe)
     cur_meta = focus_document_meta(session)
     cur_tid = str(session.task_id or cur_meta.get("task_id") or "").strip()
     keep_current_shell = bool(
-        old_focus.startswith("task:")
+        not new_doc
+        and old_focus.startswith("task:")
         and cur_tid
         and is_writing_task_id(cur_tid)
         and (
@@ -458,7 +465,16 @@ def _action_skip_blueprint(
             or focus_has_display_title(session)
         )
     )
-    if not keep_current_shell:
+    if new_doc and home is not None:
+        begin_document_onboarding(
+            session,
+            home,
+            message=extra_probe,
+            title_hint=title_hint,
+            force_new=True,
+            emit=emit,
+        )
+    elif not keep_current_shell:
         session.task_id = ""
         set_focus_document_key(session, "")
     touch_session_plan(session, goal="skip_blueprint")
@@ -653,6 +669,8 @@ def _freeform_start_writing_gate(
 
     miss = missing_for_tool(session, "start_writing", home=home)
     if miss:
+        if "outline" in miss:
+            session.phase = ChatPhase.FREEFORM_OUTLINE.value
         return capability_reply_hint(miss), []
     ff = dict(session.freeform or {})
     phase = str(session.phase or "")
@@ -2158,17 +2176,24 @@ def _collect_freeform_meta(
             emit=emit,
             follow_entry=False,
         )
-    subject_only = bool(raw_in) and not explicit_title and (
-        title_is_write_subject_not_doc_name(raw_in, title)
-        or (
-            message_looks_like_new_write_topic(raw_in)
-            and not is_writing_document_named(session)
+    filled_structured = looks_like_freeform_meta_line(text) and text != raw_in
+    subject_only = (
+        bool(raw_in)
+        and not explicit_title
+        and not filled_structured
+        and (
+            title_is_write_subject_not_doc_name(raw_in, title)
+            or (
+                message_looks_like_new_write_topic(raw_in)
+                and not is_writing_document_named(session)
+            )
         )
     )
     if (
         is_writing_document_named(session)
         and message_looks_like_new_write_topic(raw_in)
         and not explicit_title
+        and not filled_structured
     ):
         from report_writing.chat.intent_clarify import build_document_scope_clarify
 

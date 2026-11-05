@@ -79,7 +79,7 @@ def capability_reply_hint(missing: list[str]) -> str:
     if "doc_name" in missing:
         return "收录或导出前，先确认这份文档的正式名称（直接说题目即可）。"
     if "outline" in missing:
-        return "这份文档还没有目录。可以说「生成目录」、粘贴目录，或先选一份蓝本。"
+        return "这份文档还没有大纲。可以说「生成目录」、粘贴目录后确认，或先选一份蓝本。"
     if "writing_path" in missing:
         return "可以匹配蓝本、用自己的模版，或让我按题目生成目录。"
     return "还缺一点信息，我先问你。"
