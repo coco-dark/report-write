@@ -1917,7 +1917,21 @@ def _action_submit_outline(
 ) -> tuple[str, list[ChatCard]]:
     if payload.get("reopen_edit"):
         return _action_reopen_outline_edit(home, session)
+    from report_writing.chat.freeform_intent import resolve_outline_mode_flags
+    from report_writing.chat.freeform_outline import looks_like_outline_directory
+
+    oral = (message or str(payload.get("outline_text") or "")).strip()
+    confirm = bool(payload.get("confirm"))
     regen = bool(payload.get("regenerate"))
+    if not looks_like_outline_directory(oral):
+        confirm, regen = resolve_outline_mode_flags(
+            oral,
+            confirm=confirm,
+            regenerate=regen,
+            session=session,
+            invoke=invoke,
+        )
+    payload = {**payload, "confirm": confirm, "regenerate": regen}
     if regen:
         from report_writing.chat.session_documents import (
             focus_needs_doc_name,
@@ -1941,9 +1955,8 @@ def _action_submit_outline(
                 apply_working_title(session, working, home=home, message=message)
     meta = dict(session.freeform or {})
     text = str(payload.get("outline_text") or message or "").strip()
-    if bool(payload.get("confirm")) and not text:
+    if confirm and not text:
         text = str(meta.get("outline_text") or "").strip()
-    from report_writing.chat.freeform_outline import looks_like_outline_directory
     from report_writing.chat.session_documents import resolve_task_id
 
     # 文档窗 regenerate 会带 task_id：对齐焦点，避免另开一份同名文档
@@ -1957,7 +1970,6 @@ def _action_submit_outline(
         or ""
     ).strip()
     # regenerate 且 outline_text 为空：用户原话/修订要求在 message 或 revision 字段
-    regen = bool(payload.get("regenerate"))
     collect_msg = text
     if regen and not looks_like_outline_directory(text):
         collect_msg = revision or message or text
@@ -1969,7 +1981,7 @@ def _action_submit_outline(
         session,
         collect_msg,
         invoke=invoke,
-        confirm=bool(payload.get("confirm")),
+        confirm=confirm,
         regenerate=regen,
         revision_instructions=revision or (message if regen else ""),
         emit=emit,
@@ -2465,8 +2477,6 @@ def _collect_freeform_outline(
         remember_outline_constraints_from_message,
         starter_outline_for_category,
         trim_outline_directory_text,
-        wants_generate_outline,
-        wants_outline_confirm,
     )
     from report_writing.chat.helpers import _load_task, is_vague_freeform_meta
 
@@ -2494,12 +2504,6 @@ def _collect_freeform_outline(
         session.freeform = meta
     remember_outline_constraints_from_message(session, text)
     meta = dict(session.freeform or {})
-    # 话术确认优先于调用方漏传 confirm / 误传 regenerate
-    if (not regenerate) and wants_outline_confirm(
-        text, invoke=None, phase=str(session.phase or "")
-    ):
-        confirm = True
-        regenerate = False
     if looks_like_outline_directory(text):
         cat, tit, body = normalize_pasted_outline(text)
         if cat:
@@ -2511,9 +2515,7 @@ def _collect_freeform_outline(
         if body:
             text = body
         session.freeform = meta
-    if wants_outline_confirm(text, invoke=invoke, phase=str(session.phase or "")) and not looks_like_outline_directory(
-        text
-    ):
+    if confirm and not looks_like_outline_directory(text):
         stored = str(meta.get("outline_text") or "").strip()
         if stored:
             text = stored
@@ -2535,16 +2537,8 @@ def _collect_freeform_outline(
         session.phase = ChatPhase.FREEFORM_ASK.value
         return ("文档标题还不清楚，再说一下叫什么名字吧。", [])
 
-    from report_writing.chat.freeform_help import wants_freeform_help_draft
-
     task_id = (session.task_id or "").strip()
-    phase = str(session.phase or "")
-    should_generate = (
-        regenerate
-        or wants_generate_outline(text, invoke=invoke, phase=phase, session=session)
-        or wants_freeform_help_draft(text, invoke=invoke, phase=phase)
-        or (not text and wants_generate_outline(str(meta.get("last_outline_request") or ""), invoke=invoke, phase=phase, session=session))
-    )
+    should_generate = bool(regenerate)
 
     if should_generate and not confirm:
         if invoke is None:
@@ -2623,23 +2617,8 @@ def _collect_freeform_outline(
                 [],
             )
 
-    if not confirm and not pending and wants_generate_outline(text, invoke=invoke, phase=phase, session=session) and invoke:
-        should_generate = True
-
     if not should_generate and not confirm:
-        if is_vague_freeform_meta(text) and not wants_generate_outline(text, invoke=invoke, phase=phase, session=session):
-            # 「继续」等含糊话：已有目录 → 确认大纲，勿回「帮我生成目录」
-            peek_tid = (session.task_id or "").strip()
-            peek = _load_task(home, peek_tid) if peek_tid else None
-            if peek and peek.outline and peek.outline.chapters:
-                return _collect_freeform_outline(
-                    home,
-                    session,
-                    "",
-                    invoke=invoke,
-                    confirm=True,
-                    emit=emit,
-                )
+        if is_vague_freeform_meta(text):
             session.phase = ChatPhase.FREEFORM_OUTLINE.value
             return (
                 "可以说「帮我生成目录」，或粘贴章节目录，例如：\n1 总则\n1.1 编制依据",
@@ -2682,11 +2661,8 @@ def _collect_freeform_outline(
             text = chapters_to_outline_text(
                 [{"sequence": n.sequence, "title": n.title} for n in existing.outline.chapters]
             )
-    explicit_confirm = confirm or (
-        pending and wants_outline_confirm(message or text, invoke=invoke, phase=phase)
-    )
-    # 调用方显式 confirm=True 时优先确认，不被「目录正文像生成意图」的 should_generate 挡住
-    do_confirm = bool(confirm) or (explicit_confirm and not should_generate)
+    # 确认只认显式 confirm；口语补槽在 _action_submit_outline / resolve_outline_mode_flags
+    do_confirm = bool(confirm)
     if task is None:
         task = _apply_outline_to_task(
             home, task_path, text, confirmed=bool(do_confirm)

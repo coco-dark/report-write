@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from report_writing.chat.actions import _collect_freeform_outline
+from report_writing.chat.actions import _action_submit_outline, _collect_freeform_outline
 from report_writing.chat.intent_clarify import (
     build_freeform_next_clarify,
     execute_clarify_spec,
@@ -74,8 +74,8 @@ def test_rename_with_existing_outline_does_not_ask_generate(tmp_path: Path):
 
 def test_continue_with_existing_outline_confirms(tmp_path: Path):
     session = _session_with_outline(tmp_path)
-    reply, _cards = _collect_freeform_outline(
-        tmp_path, session, "继续", confirm=False, invoke=None
+    reply, _cards = _action_submit_outline(
+        tmp_path, session, {}, "继续", invoke=None
     )
     assert "帮我生成目录" not in reply
     # 确认后应进入要点或可写阶段

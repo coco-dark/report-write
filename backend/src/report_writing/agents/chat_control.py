@@ -1907,8 +1907,21 @@ def build_chat_tools(state: ChatControlState) -> list:
 
         regenerate 时务必把用户修改要求写入 revision_instructions（如「每章下三个小节」）。
         确认时若传 chapter_keys_json，仅给勾选章自动生成要点。
+        口语确认/生成请传 confirm / regenerate，不要把话术当 outline_text 猜意图。
         """
         from report_writing.chat.actions import _action_submit_outline
+        from report_writing.chat.freeform_intent import resolve_outline_mode_flags
+        from report_writing.chat.freeform_outline import looks_like_outline_directory
+
+        oral_probe = (revision_instructions or state.last_user_message or outline_text or "").strip()
+        if not looks_like_outline_directory(oral_probe):
+            confirm, regenerate = resolve_outline_mode_flags(
+                oral_probe,
+                confirm=confirm,
+                regenerate=regenerate,
+                session=state.session,
+                invoke=state.intent_invoke or state.invoke,
+            )
 
         if regenerate:
             from report_writing.chat.session_documents import (

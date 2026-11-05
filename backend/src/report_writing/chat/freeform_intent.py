@@ -78,6 +78,47 @@ def _classify_hit(
     )
 
 
+def resolve_outline_mode_flags(
+    message: str,
+    *,
+    confirm: bool = False,
+    regenerate: bool = False,
+    session: ChatSession | None = None,
+    invoke: InvokeFn | None = None,
+) -> tuple[bool, bool]:
+    """补齐 submit_outline 的 confirm / regenerate。显式标志优先；收集器不再猜口语。"""
+    if confirm:
+        return True, False
+    if regenerate:
+        return False, True
+    text = (message or "").strip()
+    if not text:
+        return False, False
+    actions = classify_freeform_actions(
+        text,
+        invoke=invoke,
+        phase=str(getattr(session, "phase", "") or ""),
+        session=session,
+    )
+    if "confirm_outline" in actions:
+        return True, False
+    if "generate_outline" in actions or "help_draft" in actions:
+        return False, True
+    lexical = lexical_freeform_intent(text)
+    if lexical == "confirm_outline":
+        return True, False
+    if lexical == "generate_outline":
+        return False, True
+    ff = dict(getattr(session, "freeform", None) or {}) if session is not None else {}
+    pending = bool(ff.get("outline_pending_edit") or ff.get("outline_text"))
+    if pending:
+        from report_writing.chat.helpers import is_vague_freeform_meta
+
+        if is_vague_freeform_meta(text):
+            return True, False
+    return False, False
+
+
 def classify_freeform_actions(
     message: str,
     *,
