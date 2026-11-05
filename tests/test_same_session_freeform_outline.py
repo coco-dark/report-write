@@ -141,21 +141,34 @@ def test_auto_freeform_outline_no_match_bleed(tmp_path: Path):
     combined = (reply or "").lower()
     assert "库里暂时没" not in (reply or "")
     assert "match_blueprints" not in combined
+    suggested = list((session.freeform or {}).get("suggested_next_tools") or [])
+    tools = [str(s.get("tool") or "") for s in suggested]
+    assert "match_blueprints" not in tools
+    assert "skip_blueprint" in tools
+    from report_writing.chat.intent_dispatch import execute_dispatch_tool
+
+    for step in suggested:
+        hit = execute_dispatch_tool(
+            tmp_path, session, step, "自动生成大纲", invoke=invoke
+        )
+        if hit is not None:
+            r, step_cards, _ = hit
+            if r:
+                reply = f"{reply}\n{r}".strip()
+            cards = list(cards or []) + list(step_cards or [])
     assert session.task_id != old_tid
 
     old = TaskStore(tmp_path / "tasks" / old_tid).load()
     assert old.title == "2026安全报告"
     assert [n.title for n in old.outline.chapters] == ["概述"]
 
-    suggested = list((session.freeform or {}).get("suggested_next_tools") or [])
-    assert all(str(s.get("tool") or "") != "match_blueprints" for s in suggested)
-
 
 def test_auto_freeform_chain_single_outline_message(tmp_path: Path):
-    """skip_blueprint + submit_outline 链式只应出现一次「目录我先帮你搭」。"""
+    """点选自动大纲只落槽；Agent 再 hop skip + submit_outline 时目录文案只出现一次。"""
     from unittest.mock import MagicMock
 
     from report_writing.chat.intent_clarify import execute_clarify_spec
+    from report_writing.chat.intent_dispatch import execute_dispatch_tool
     from report_writing.chat.session_documents import confirm_writing_document_name
 
     (tmp_path / "tasks").mkdir(parents=True)
@@ -177,6 +190,22 @@ def test_auto_freeform_chain_single_outline_message(tmp_path: Path):
         message="自动生成大纲",
         invoke=invoke,
     )
+    assert "目录我先帮你搭" not in (reply or "")
+    suggested = list((session.freeform or {}).get("suggested_next_tools") or [])
+    assert [str(s.get("tool") or "") for s in suggested][:2] == [
+        "skip_blueprint",
+        "submit_outline",
+    ]
+    for step in suggested:
+        hop = execute_dispatch_tool(
+            tmp_path, session, step, "自动生成大纲", invoke=invoke
+        )
+        if hop is None:
+            continue
+        r, step_cards, _ = hop
+        if r:
+            reply = f"{reply}\n{r}".strip()
+        cards = list(cards or []) + list(step_cards or [])
     assert (reply or "").count("目录我先帮你搭") <= 1
     assert (reply or "").count("觉得 OK 就点") <= 1
     assert cards
@@ -268,6 +297,27 @@ def test_entry_freeform_template_returns_wizard_meta_card(tmp_path: Path):
     reply, cards, _ = execute_clarify_spec(
         tmp_path, session, hit, message="依据模版编写", invoke=None
     )
+    suggested = [str(s.get("tool") or "") for s in (session.freeform or {}).get("suggested_next_tools") or []]
+    assert "begin_blueprint_wizard" in suggested
+    assert not [
+        c
+        for c in (cards or [])
+        if str(getattr(c, "type", "") or "") == "blueprint_wizard"
+    ]
+    from report_writing.chat.intent_dispatch import execute_dispatch_tool
+
+    hop = execute_dispatch_tool(
+        tmp_path,
+        session,
+        {
+            "tool": "begin_blueprint_wizard",
+            "args": {"confirmed_create": True, "from_entry_path": True},
+        },
+        "依据模版编写",
+        invoke=None,
+    )
+    assert hop is not None
+    reply, cards, _ = hop
     wiz = [
         c
         for c in (cards or [])

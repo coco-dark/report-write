@@ -273,10 +273,14 @@ def test_write_with_own_template_asks_name_without_topic_suggestion(tmp_path: Pa
     )
     assert not is_writing_document_named(session)
     wiz = [c for c in (cards or []) if getattr(c, "type", "") == "blueprint_wizard"]
-    assert wiz, reply
-    assert str(wiz[0].payload.get("step") or "") == "meta"
+    suggested = [
+        str(t.get("tool") or "")
+        for t in (session.freeform or {}).get("suggested_next_tools") or []
+    ]
+    assert not wiz
+    assert "begin_blueprint_wizard" in suggested
     assert "就叫「安全报告」" not in reply
-    assert "模版" in reply or "样板" in reply or "名称" in reply
+    assert "模版" in reply or "样板" in reply or "自动生成大纲" in reply or "对齐" in reply
     ob = focus_onboarding(session)
     assert str(ob.get("preferred_entry_path") or "") == "template" or str(
         ob.get("entry_path") or ""

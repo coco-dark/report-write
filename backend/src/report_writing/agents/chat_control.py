@@ -824,8 +824,8 @@ def build_chat_tools(state: ChatControlState) -> list:
         )
 
     @tool
-    def skip_blueprint() -> str:
-        """跳过蓝本，走无蓝本大纲路径。"""
+    def skip_blueprint(path_setup_only: bool = False) -> str:
+        """跳过蓝本，走无蓝本大纲路径。auto_outline 下一跳是 submit_outline 时 path_setup_only=true。"""
         from report_writing.chat_orchestrator import _action_skip_blueprint
 
         from report_writing.chat.session_documents import is_writing_document_named
@@ -863,12 +863,25 @@ def build_chat_tools(state: ChatControlState) -> list:
             home=state.home,
             invoke=state.invoke,
             emit=state.emit,
+            path_setup_only=bool(path_setup_only),
         )
         _set_cards(state, cards)
+        from report_writing.chat.session_documents import focus_onboarding
+
+        ob = focus_onboarding(state.session)
+        want_outline = str(ob.get("freeform_mode") or "").strip() == "auto_outline"
+        nxt = "submit_outline" if want_outline else ""
+        nxt_args = (
+            {"regenerate": True, "message": (state.last_user_message or "")[:500]}
+            if nxt
+            else {}
+        )
         obs = (
             "已跳过蓝本。下一步：题目未清则 set_session_meta；"
             "有目录意图再 submit_outline；可写则 start_writing。"
         )
+        if nxt:
+            obs += f" suggested_next_tool={nxt}(regenerate=true)，同轮接着调用。"
         if not named:
             obs += " 文档尚未定名，开写前须 set_session_meta(title=…)。"
         return _dump(
@@ -877,6 +890,8 @@ def build_chat_tools(state: ChatControlState) -> list:
                 "reply_hint": reply,
                 "observation": obs,
                 "needs_doc_name": not named,
+                "suggested_next_tool": nxt or None,
+                "suggested_args": nxt_args or None,
             }
         )
 
@@ -2495,11 +2510,34 @@ def build_chat_tools(state: ChatControlState) -> list:
         )
         state.cards.extend(cards or [])
         state.events.extend(events or [])
+        pending_src = str(
+            ((state.session.freeform or {}).get("intent_clarify") or {}).get("source") or ""
+        )
+        suggested = list((state.session.freeform or {}).get("suggested_next_tools") or [])
+        obs_parts = [
+            "已按澄清点选落槽（未在 clarify 内链式 skip/大纲/match/wizard）。",
+            f"pending_clarify={pending_src or 'none'}",
+        ]
+        if suggested:
+            obs_parts.append(
+                f"suggested_next_tools={suggested}；同轮按序调用这些 Tool 并读 observation。"
+            )
+        else:
+            obs_parts.append("读 cards / reply_hint；有下一张澄清卡则等用户点选。")
         return _dump(
             {
                 "ok": True,
                 "reply_hint": reply,
-                "observation": "已按澄清点选执行。读 cards / reply_hint，不要再猜意图。",
+                "observation": " ".join(obs_parts),
+                "pending_clarify": pending_src or None,
+                "suggested_next_tools": suggested,
+                "awaiting_path_choice": pending_src
+                in {
+                    "doc_name",
+                    "entry",
+                    "entry_branch",
+                    "entry_freeform_mode",
+                },
             }
         )
 

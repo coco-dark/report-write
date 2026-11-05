@@ -74,7 +74,9 @@ CHAT_CONTROL_TOOL_DOCS: dict[str, str] = {
     ),
     "resolve_intent_clarify": (
         "用户点选澄清卡片或用原话回答 pending 选项。"
-        "传入 option_id（及可选 option_label / message）；按已选槽位执行，不要重新分类意图。"
+        "传入 option_id（及可选 option_label / message）；只落槽 / 改 session 标志，不要重新分类意图。"
+        "入口卡（有蓝本/无蓝本/模版/自动大纲）落槽后读 suggested_next_tools，同轮再调 skip_blueprint / "
+        "submit_outline / match_blueprints / begin_blueprint_wizard，禁止假定本 Tool 已代跑那些步骤。"
     ),
     "usage_guide": "用户要使用说明或问怎么用本产品。",
     "confirm_chapter": (

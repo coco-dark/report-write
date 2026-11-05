@@ -2039,6 +2039,8 @@ def suggest_next_tools_from_gaps(
         base_args["title_hint"] = tip
         base_args["title"] = tip
     ep = str(gaps.get("declared_entry_path") or "").strip()
+    if not ep and session is not None:
+        ep = str(focus_onboarding(session).get("entry_path") or "").strip()
     bp_bound = session is not None and session_blueprint_already_selected(session)
 
     if message_wants_own_template(msg):
@@ -2089,12 +2091,19 @@ def suggest_next_tools_from_gaps(
                 return tools
             if str(ob.get("entry_path") or "").strip() != "freeform":
                 return tools
-        tools.append({"tool": "skip_blueprint", "args": dict(base_args)})
-        # auto_outline 槽位本身即「自动生成大纲」意图，勿等标题句再命中 generate_outline
+        skip_args = dict(base_args)
         want_gen = (
             str(gaps.get("declared_freeform_mode") or "").strip() == "auto_outline"
             or "generate_outline" in list(gaps.get("residual_intents") or [])
+            or (
+                session is not None
+                and str(focus_onboarding(session).get("freeform_mode") or "").strip()
+                == "auto_outline"
+            )
         )
+        if want_gen:
+            skip_args["path_setup_only"] = True
+        tools.append({"tool": "skip_blueprint", "args": skip_args})
         if want_gen:
             tools.append(
                 {

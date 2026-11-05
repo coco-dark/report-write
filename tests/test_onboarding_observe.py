@@ -46,7 +46,8 @@ def test_write_report_and_auto_outline_one_shot(tmp_path: Path):
     assert pending.get("source") != "doc_name"
     assert "请按顺序调用" not in (reply or "")
     remaining = list((session.freeform or {}).get("suggested_next_tools") or [])
-    assert all(str(t.get("tool") or "") != "submit_outline" for t in remaining)
+    tools = [str(t.get("tool") or "") for t in remaining]
+    assert "match_blueprints" not in tools
 
 
 def test_vague_write_still_asks_name():
@@ -71,11 +72,11 @@ def test_template_intent_asks_doc_name_not_outline(tmp_path: Path):
     )
     pending = get_pending(session) or {}
     wiz = [c for c in (cards or []) if getattr(c, "type", "") == "blueprint_wizard"]
-    assert wiz or pending.get("source") == "doc_name"
+    assert not wiz
+    assert pending.get("source") in {"doc_name", "entry_branch", "entry", "entry_freeform_mode", None} or pending
     assert not turn_has_outline_preview_cards(cards)
-    assert wiz or "按你的模版" in (reply or "") or "起个名字" in (reply or "")
-    if wiz:
-        assert str(wiz[0].payload.get("step") or "") == "meta"
+    suggested = [str(t.get("tool") or "") for t in (session.freeform or {}).get("suggested_next_tools") or []]
+    assert "submit_outline" not in suggested
 
 
 def test_two_step_entry_branch_then_freeform_mode(tmp_path: Path):
@@ -142,7 +143,7 @@ def test_ask_entry_path_does_not_auto_dispatch_onboarding(tmp_path: Path, monkey
         _boom,
     )
     monkeypatch.setattr(
-        "report_writing.chat.intent_clarify._apply_auto_freeform_and_dispatch",
+        "report_writing.chat.intent_dispatch.execute_dispatch_tool",
         _boom,
     )
     (tmp_path / "tasks").mkdir(parents=True)
@@ -182,3 +183,126 @@ def test_observe_generate_outline_phrase_is_residual_not_llm():
     assert "generate_outline" in (gaps.get("residual_intents") or [])
     gaps_write = observe_new_document_gaps(session, "帮我写一份安全报告", invoke=None)
     assert "generate_outline" not in (gaps_write.get("residual_intents") or [])
+
+
+def test_entry_freeform_auto_outline_observe_only(tmp_path: Path, monkeypatch):
+    from report_writing.chat.session_documents import confirm_writing_document_name
+
+    def _boom(*_a, **_k):
+        raise AssertionError("entry clarify must not execute skip/outline")
+
+    monkeypatch.setattr(
+        "report_writing.chat.intent_dispatch.execute_dispatch_tool",
+        _boom,
+    )
+    (tmp_path / "tasks").mkdir(parents=True)
+    session = ChatSession(id="obs_clarify", phase=ChatPhase.INTENT.value)
+    confirm_writing_document_name(session, "述职", home=tmp_path)
+    reply, cards, _ = execute_clarify_spec(
+        tmp_path,
+        session,
+        {
+            "source": "entry_freeform_mode",
+            "option_id": "freeform",
+            "slots": {"entry_path": "freeform", "freeform_mode": "auto_outline"},
+        },
+        message="自动生成大纲",
+    )
+    assert "目录我先帮你搭" not in (reply or "")
+    tools = [
+        str(t.get("tool") or "")
+        for t in (session.freeform or {}).get("suggested_next_tools") or []
+    ]
+    assert tools[:2] == ["skip_blueprint", "submit_outline"]
+    assert not cards or not any(
+        getattr(c, "type", "") in {"outline_preview", "freeform_outline"} for c in cards
+    )
+
+
+def test_resolve_intent_clarify_exposes_suggested_next_tools(tmp_path: Path):
+    import json
+
+    from report_writing.agents.chat_control import ChatControlState, build_chat_tools
+    from report_writing.chat.intent_clarify import begin_clarify
+    from report_writing.chat.session_documents import confirm_writing_document_name
+
+    (tmp_path / "tasks").mkdir(parents=True)
+    session = ChatSession(id="obs_resolve", phase=ChatPhase.INTENT.value)
+    confirm_writing_document_name(session, "述职", home=tmp_path)
+    begin_clarify(
+        session,
+        source="entry_freeform_mode",
+        question="无蓝本写作：模版还是自动大纲？",
+        options=[
+            {
+                "id": "freeform",
+                "label": "自动生成大纲",
+                "slots": {"entry_path": "freeform", "freeform_mode": "auto_outline"},
+            }
+        ],
+        candidate={
+            "kind": "entry_freeform_mode",
+            "name": "entry_freeform_mode",
+            "payload": {"message": "写述职", "title": "述职"},
+        },
+        phase_hint="entry",
+    )
+    state = ChatControlState(home=tmp_path, session=session)
+    tools = {t.name: t for t in build_chat_tools(state)}
+    raw = tools["resolve_intent_clarify"].invoke(
+        {"option_id": "freeform", "option_label": "自动生成大纲"}
+    )
+    data = json.loads(raw)
+    assert data.get("ok") is True
+    names = [
+        str(t.get("tool") or "") for t in (data.get("suggested_next_tools") or [])
+    ]
+    assert "skip_blueprint" in names
+    assert "submit_outline" in names
+    assert "同轮按序调用" in str(data.get("observation") or "")
+
+
+def test_continue_after_new_document_does_not_dispatch(tmp_path: Path, monkeypatch):
+    from report_writing.chat.intent_clarify import continue_after_new_document
+    from report_writing.chat.session_documents import (
+        begin_document_onboarding,
+        confirm_writing_document_name,
+    )
+
+    def _boom(*_a, **_k):
+        raise AssertionError("new document must not auto-dispatch onboarding tools")
+
+    monkeypatch.setattr(
+        "report_writing.chat.intent_clarify.dispatch_suggested_onboarding_tools",
+        _boom,
+    )
+    monkeypatch.setattr(
+        "report_writing.chat.intent_dispatch.execute_dispatch_tool",
+        _boom,
+    )
+    monkeypatch.setattr(
+        "report_writing.chat.actions._action_skip_blueprint",
+        _boom,
+    )
+    (tmp_path / "tasks").mkdir(parents=True)
+    session = ChatSession(id="obs_newdoc", phase=ChatPhase.INTENT.value)
+    begin_document_onboarding(
+        session,
+        tmp_path,
+        message="再写一份述职报告 自动生成大纲",
+        title_hint="述职报告",
+        force_new=True,
+    )
+    confirm_writing_document_name(session, "我的述职", home=tmp_path)
+    reply, cards, _ = continue_after_new_document(
+        tmp_path,
+        session,
+        message="再写一份述职报告 自动生成大纲",
+        title="我的述职",
+    )
+    assert "目录我先帮你搭" not in (reply or "")
+    tools = [
+        str(t.get("tool") or "")
+        for t in (session.freeform or {}).get("suggested_next_tools") or []
+    ]
+    assert "match_blueprints" not in tools

@@ -39,7 +39,7 @@ def test_name_plus_generate_outline_skips_freeform_mode_card(tmp_path: Path):
         invoke=None,
         home=tmp_path,
         after_doc_name_confirm=True,
-        apply_plan=True,
+        apply_plan=False,
     )
     pending = get_pending(session) or {}
     assert pending.get("source") != "entry_freeform_mode"

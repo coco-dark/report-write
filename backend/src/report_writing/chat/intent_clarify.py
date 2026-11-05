@@ -2069,6 +2069,73 @@ def _auto_freeform_outline_ready(
     return False
 
 
+def _observe_after_entry_marks(
+    session: ChatSession,
+    *,
+    message: str = "",
+    title_hint: str = "",
+    invoke=None,
+) -> tuple[str, list[ChatCard]]:
+    """入口槽已落：只刷新 gaps / suggested_next_tools，不执行 skip / outline / match / wizard。"""
+    from report_writing.chat.session_documents import (
+        observe_new_document_gaps,
+        peek_pending_entry,
+        stash_onboarding_observation,
+        suggest_next_tools_from_gaps,
+    )
+
+    msg = (message or "").strip()
+    pending = peek_pending_entry(session)
+    tip = (
+        (title_hint or "").strip()
+        or str(pending.get("title") or "").strip()
+        or str((session.freeform or {}).get("title") or "").strip()
+    )
+    gaps = observe_new_document_gaps(session, msg, title_hint=tip, invoke=invoke)
+    suggested = suggest_next_tools_from_gaps(
+        gaps, message=msg, title=tip, session=session
+    )
+    stash_onboarding_observation(session, gaps, suggested)
+    title_now = tip or "这份文档"
+    tools = [str(t.get("tool") or "").strip() for t in suggested]
+    if "submit_outline" in tools or "skip_blueprint" in tools:
+        reply = f"好，按自动生成大纲来写「{title_now}」。"
+    elif "begin_blueprint_wizard" in tools:
+        reply = f"好，按你的模版来写「{title_now}」。"
+    elif "match_blueprints" in tools:
+        reply = f"好，按有蓝本来匹配「{title_now}」。"
+    else:
+        reply = f"好，文档「{title_now}」和写作方式都对齐了，我继续帮你往下准备。"
+    return reply, []
+
+
+def _maybe_dispatch_suggested_onboarding(
+    home: Path | None,
+    session: ChatSession,
+    *,
+    apply_plan: bool,
+    message: str = "",
+    title: str = "",
+    invoke=None,
+    emit=None,
+) -> tuple[str, list[ChatCard]] | None:
+    """仅遗留 apply_plan=True 路径链式执行 suggested；生产路径禁止。"""
+    if not apply_plan or home is None:
+        return None
+    hit = dispatch_suggested_onboarding_tools(
+        home,
+        session,
+        message=message,
+        title=title,
+        invoke=invoke,
+        emit=emit,
+    )
+    if hit is None:
+        return None
+    reply, cards, _events = hit
+    return reply, list(cards or [])
+
+
 def _apply_auto_freeform_and_dispatch(
     home: Path | None,
     session: ChatSession,
@@ -2078,9 +2145,7 @@ def _apply_auto_freeform_and_dispatch(
     invoke=None,
     emit=None,
 ) -> tuple[str, list[ChatCard]] | None:
-    """落 freeform path 并链式 skip_blueprint + submit_outline（不依赖观察式 match 序列）。"""
-    from report_writing.chat.helpers import _emit_process
-    from report_writing.chat.intent_dispatch import execute_dispatch_tool
+    """落 freeform + auto_outline 槽位并观察下一跳；不链式执行 skip / submit_outline。"""
     from report_writing.chat.session_documents import (
         _focus_display_title,
         _titles_conflict,
@@ -2136,14 +2201,6 @@ def _apply_auto_freeform_and_dispatch(
             emit=emit,
             apply_plan=False,
         )
-    if home is None:
-        pending = peek_pending_entry(session)
-        title_now = tip or str(pending.get("title") or "").strip()
-        return (
-            f"好，按自动生成大纲来写「{title_now or '这份文档'}」。",
-            [],
-        )
-
     pending = peek_pending_entry(session)
     probe = msg or str(pending.get("message") or "").strip()
     title_for_tools = tip or str(pending.get("title") or "").strip()
@@ -2190,49 +2247,10 @@ def _apply_auto_freeform_and_dispatch(
             confirm_name=False,
         )
 
-    base_args: dict[str, Any] = {"message": probe[:500] if probe else ""}
-    if title_for_tools:
-        base_args["title_hint"] = title_for_tools
-        base_args["title"] = title_for_tools
-
-    steps = [
-        {
-            "tool": "skip_blueprint",
-            "args": {**base_args, "path_setup_only": True},
-        },
-        {"tool": "submit_outline", "args": {**base_args, "regenerate": True}},
-    ]
-    replies: list[str] = []
-    cards: list[ChatCard] = []
-    _emit_process(emit, "好，我按无蓝本自动生成大纲继续…")
-    for step in steps:
-        tool = str(step.get("tool") or "").strip()
-        if not tool:
-            continue
-        hit = execute_dispatch_tool(
-            home,
-            session,
-            {"tool": tool, "args": dict(step.get("args") or {})},
-            probe or title_for_tools,
-            emit=emit,
-            invoke=invoke,
-        )
-        if hit is None:
-            break
-        reply, step_cards, _ = hit
-        if reply and str(reply).strip():
-            r = str(reply).strip()
-            if not replies or replies[-1] != r:
-                replies.append(r)
-        cards.extend(list(step_cards or []))
-
-    ff = dict(session.freeform or {})
-    ff.pop("suggested_next_tools", None)
-    session.freeform = ff
-    if replies:
-        return "\n".join(replies).strip(), cards
-    title_now = title_for_tools or "这份文档"
-    return (f"好，按自动生成大纲来写「{title_now}」。", cards)
+    del emit  # 观察路径不再链式 emit skip/outline
+    return _observe_after_entry_marks(
+        session, message=probe, title_hint=title_for_tools, invoke=invoke
+    )
 
 
 def build_entry_freeform_mode_clarify(
@@ -2243,13 +2261,13 @@ def build_entry_freeform_mode_clarify(
     home: Path | None = None,
     invoke=None,
     emit=None,
-    apply_plan: bool = True,
+    apply_plan: bool = False,
 ) -> tuple[str, list[ChatCard]]:
     from report_writing.chat.session_documents import peek_pending_entry, stash_pending_entry
 
     msg = (message or "").strip()
     tip = (title_hint or "").strip()
-    if apply_plan and _auto_freeform_outline_ready(session, msg, invoke=invoke):
+    if _auto_freeform_outline_ready(session, msg, invoke=invoke):
         auto = _apply_auto_freeform_and_dispatch(
             home,
             session,
@@ -2259,6 +2277,17 @@ def build_entry_freeform_mode_clarify(
             emit=emit,
         )
         if auto is not None:
+            dispatched = _maybe_dispatch_suggested_onboarding(
+                home,
+                session,
+                apply_plan=apply_plan,
+                message=msg,
+                title=tip,
+                invoke=invoke,
+                emit=emit,
+            )
+            if dispatched is not None:
+                return dispatched
             return auto
     if msg or tip:
         stash_pending_entry(session, message=msg, title=tip)
@@ -2388,65 +2417,15 @@ def continue_after_new_document(
     invoke=None,
     emit=None,
 ) -> tuple[str, list[ChatCard], list[dict[str, Any]]]:
-    """force_new 后同一回合按本句声明推进，禁止只回「好，新开一份」空卡。"""
-    from report_writing.chat.freeform_outline import (
-        outline_top_chapter_count,
-        remember_outline_constraints_from_message,
-    )
-    from report_writing.chat.session_documents import (
-        message_wants_own_template,
-        message_wants_skip_to_freeform,
-        preferred_path_from_write_message,
-        user_wants_existing_blueprint_match,
-    )
+    """force_new 后只 prepare + 挂缺槽卡 / 写 suggested_next_tools，不代跑 skip/match/wizard。"""
+    from report_writing.chat.freeform_outline import remember_outline_constraints_from_message
+    from report_writing.chat.session_documents import prepare_observed_onboarding
 
     probe = (message or "").strip()
     remember_outline_constraints_from_message(session, probe)
-    dispatched = dispatch_suggested_onboarding_tools(
-        home, session, message=probe, title=title, invoke=invoke, emit=emit
+    prepare_observed_onboarding(
+        session, home, message=probe, title_hint=title, invoke=invoke
     )
-    if dispatched is not None:
-        return dispatched
-
-    path = preferred_path_from_write_message(probe)
-    if path == "template" or message_wants_own_template(probe):
-        reply, cards = _start_template_wizard_now(
-            session, home=home, message=probe, title_hint=title, invoke=invoke
-        )
-        return reply, list(cards or []), []
-    chapter_n = outline_top_chapter_count(probe)
-    if (
-        path == "freeform"
-        or message_wants_skip_to_freeform(probe)
-        or chapter_n
-    ):
-        from report_writing.chat.actions import _action_skip_blueprint
-
-        reply, cards = _action_skip_blueprint(
-            session,
-            home=home,
-            invoke=invoke,
-            emit=emit,
-            title_hint=title,
-            extra_message=probe,
-        )
-        return reply, list(cards or []), []
-    if user_wants_existing_blueprint_match(probe, session=session, invoke=invoke):
-        from report_writing.chat.intent_dispatch import execute_dispatch_tool
-
-        hit = execute_dispatch_tool(
-            home,
-            session,
-            {
-                "tool": "match_blueprints",
-                "args": {"message": probe[:500], "title_hint": title},
-            },
-            probe or title,
-            emit=emit,
-            invoke=invoke,
-        )
-        if hit is not None:
-            return hit
     reply, cards = build_entry_path_clarify(
         session,
         message=probe,
@@ -2469,7 +2448,7 @@ def build_entry_path_clarify(
     home: Path | None = None,
     emit=None,
     after_doc_name_confirm: bool = False,
-    apply_plan: bool = True,
+    apply_plan: bool = False,
 ) -> tuple[str, list[ChatCard]]:
     from report_writing.chat.session_documents import (
         clear_writing_document_named,
@@ -2735,6 +2714,20 @@ def build_entry_path_clarify(
         if pep == "template" or message_wants_own_template(tail):
             mark_focus_entry_branch(session, "without_blueprint")
             mark_focus_entry_path(session, "template")
+            observed = _observe_after_entry_marks(
+                session, message=tail, title_hint=tip, invoke=invoke
+            )
+            dispatched = _maybe_dispatch_suggested_onboarding(
+                home,
+                session,
+                apply_plan=apply_plan,
+                message=tail,
+                title=tip,
+                invoke=invoke,
+                emit=emit,
+            )
+            if dispatched is not None:
+                return dispatched
             if apply_plan:
                 from report_writing.chat.resource_actions import _begin_blueprint_wizard
 
@@ -2746,6 +2739,7 @@ def build_entry_path_clarify(
                     user_message=tail,
                     invoke=invoke,
                 )
+            return observed
         if ep_done == "freeform" or pep == "freeform":
             from report_writing.chat.session_documents import mark_focus_freeform_mode
 
@@ -2763,17 +2757,27 @@ def build_entry_path_clarify(
                 working = tip or quick_title_from_write_message(tail or msg)
                 if working:
                     _aw(session, working, home=home, message=tail or msg)
-            if apply_plan:
-                auto = _apply_auto_freeform_and_dispatch(
+            auto = _apply_auto_freeform_and_dispatch(
+                home,
+                session,
+                message=tail,
+                title_hint=tip,
+                invoke=invoke,
+                emit=emit,
+            )
+            if auto is not None:
+                dispatched = _maybe_dispatch_suggested_onboarding(
                     home,
                     session,
+                    apply_plan=apply_plan,
                     message=tail,
-                    title_hint=tip,
+                    title=tip,
                     invoke=invoke,
                     emit=emit,
                 )
-                if auto is not None:
-                    return auto
+                if dispatched is not None:
+                    return dispatched
+                return auto
     suggested = list((session.freeform or {}).get("suggested_next_tools") or [])
     # 无工作名、也未正式定名时才问起名；有工作名则直接问写作方式
     from report_writing.chat.session_documents import (
@@ -2794,8 +2798,7 @@ def build_entry_path_clarify(
     wiz_step_now = str(wiz_now.get("step") or "").strip()
     wizard_in_progress = bool(wiz_step_now)
     if (
-        apply_plan
-        and (not wizard_in_progress)
+        (not wizard_in_progress)
         and _template_path_declared(session, msg or probe_msg)
         and (
             not is_writing_document_named(session)
@@ -2803,13 +2806,42 @@ def build_entry_path_clarify(
             or focus_needs_entry_path(session)
         )
     ):
-        return _start_template_wizard_now(
+        from report_writing.chat.session_documents import (
+            mark_focus_entry_branch,
+            mark_focus_entry_path,
+            stash_focus_preferred_entry_path,
+        )
+
+        tail_tpl = msg or probe_msg
+        stash_focus_preferred_entry_path(session, "template", residual=tail_tpl)
+        mark_focus_entry_branch(session, "without_blueprint")
+        mark_focus_entry_path(session, "template")
+        observed = _observe_after_entry_marks(
             session,
-            home=home,
-            message=msg or probe_msg,
-            title_hint=tip or quick_title_from_write_message(msg or probe_msg),
+            message=tail_tpl,
+            title_hint=tip or quick_title_from_write_message(tail_tpl),
             invoke=invoke,
         )
+        dispatched = _maybe_dispatch_suggested_onboarding(
+            home,
+            session,
+            apply_plan=apply_plan,
+            message=tail_tpl,
+            title=tip,
+            invoke=invoke,
+            emit=emit,
+        )
+        if dispatched is not None:
+            return dispatched
+        if apply_plan:
+            return _start_template_wizard_now(
+                session,
+                home=home,
+                message=tail_tpl,
+                title_hint=tip or quick_title_from_write_message(tail_tpl),
+                invoke=invoke,
+            )
+        return observed
     if (
         not after_doc_name_confirm
         and not is_writing_document_named(session)
@@ -2833,7 +2865,7 @@ def build_entry_path_clarify(
             session, message=probe_msg, title_hint=tip
         )
     if focus_needs_freeform_mode(session):
-        if apply_plan and _auto_freeform_outline_ready(session, probe_msg, invoke=invoke):
+        if _auto_freeform_outline_ready(session, probe_msg, invoke=invoke):
             auto = _apply_auto_freeform_and_dispatch(
                 home,
                 session,
@@ -2843,6 +2875,17 @@ def build_entry_path_clarify(
                 emit=emit,
             )
             if auto is not None:
+                dispatched = _maybe_dispatch_suggested_onboarding(
+                    home,
+                    session,
+                    apply_plan=apply_plan,
+                    message=probe_msg,
+                    title=tip,
+                    invoke=invoke,
+                    emit=emit,
+                )
+                if dispatched is not None:
+                    return dispatched
                 return auto
         return build_entry_freeform_mode_clarify(
             session,
@@ -3895,14 +3938,10 @@ def execute_clarify_spec(
         if branch == "with_blueprint":
             mark_focus_entry_branch(session, "with_blueprint")
             mark_focus_entry_path(session, "match")
-            from report_writing.chat.blueprint_actions import run_blueprint_action
-
-            reply, cards = run_blueprint_action(
-                home,
+            reply, cards = _observe_after_entry_marks(
                 session,
-                "match_blueprints",
-                {"message": pending_msg, "title_hint": pending_title},
-                emit=emit,
+                message=pending_msg,
+                title_hint=pending_title,
                 invoke=invoke,
             )
         elif branch == "without_blueprint":
@@ -3930,14 +3969,10 @@ def execute_clarify_spec(
                 reply, cards = ("好，按自动大纲来写。", [])
             elif pep == "template":
                 mark_focus_entry_path(session, "template")
-                from report_writing.chat.resource_actions import _begin_blueprint_wizard
-
-                reply, cards = _begin_blueprint_wizard(
+                reply, cards = _observe_after_entry_marks(
                     session,
+                    message=pending_msg,
                     title_hint=pending_title,
-                    home=home,
-                    force_new=False,
-                    user_message=pending_msg,
                     invoke=invoke,
                 )
             else:
@@ -3968,20 +4003,18 @@ def execute_clarify_spec(
         pending_title = pending.get("title") or str(payload.get("title") or "").strip()
         _emit_process(emit, "好，按你选的无蓝本方式…")
         if path in {"create_or_freeform", "create_blueprint", "template"}:
-            mark_focus_entry_path(session, "template")
-            from report_writing.chat.resource_actions import _begin_blueprint_wizard
+            from report_writing.chat.session_documents import mark_focus_entry_branch
 
-            reply, cards = _begin_blueprint_wizard(
+            mark_focus_entry_branch(session, "without_blueprint")
+            mark_focus_entry_path(session, "template")
+            reply, cards = _observe_after_entry_marks(
                 session,
+                message=pending_msg,
                 title_hint=pending_title,
-                home=home,
-                force_new=False,
-                user_message=pending_msg,
                 invoke=invoke,
             )
         elif path in {"freeform", "skip_blueprint"}:
             freeform_mode = str(enriched.get("freeform_mode") or slots.get("freeform_mode") or "").strip()
-            # 「自动生成大纲」卡：链式 skip + submit_outline(regenerate)，勿停在「请说帮我生成目录」
             if freeform_mode == "auto_outline" or str(spec.get("option_id") or "") == "freeform":
                 from report_writing.chat.session_documents import (
                     focus_needs_doc_name,
@@ -4014,27 +4047,19 @@ def execute_clarify_spec(
                 if auto is not None:
                     reply, cards = auto
                 else:
-                    from report_writing.chat.blueprint_actions import run_blueprint_action
-
-                    reply, cards = run_blueprint_action(
-                        home,
+                    reply, cards = _observe_after_entry_marks(
                         session,
-                        "skip_blueprint",
-                        {"message": pending_msg, "title_hint": pending_title},
+                        message=pending_msg,
+                        title_hint=pending_title,
                         invoke=invoke,
-                        emit=emit,
                     )
             else:
                 mark_focus_entry_path(session, "freeform")
-                from report_writing.chat.blueprint_actions import run_blueprint_action
-
-                reply, cards = run_blueprint_action(
-                    home,
+                reply, cards = _observe_after_entry_marks(
                     session,
-                    "skip_blueprint",
-                    {"message": pending_msg, "title_hint": pending_title},
+                    message=pending_msg,
+                    title_hint=pending_title,
                     invoke=invoke,
-                    emit=emit,
                 )
         else:
             reply = "好的，你再说一下用模版还是自动大纲。"
@@ -4057,40 +4082,37 @@ def execute_clarify_spec(
         from report_writing.chat.session_documents import mark_focus_entry_path
 
         if path in {"match_blueprint", "match_blueprints"}:
-            mark_focus_entry_path(session, "match")
-            from report_writing.chat.blueprint_actions import run_blueprint_action
+            from report_writing.chat.session_documents import mark_focus_entry_branch
 
-            reply, cards = run_blueprint_action(
-                home,
+            mark_focus_entry_branch(session, "with_blueprint")
+            mark_focus_entry_path(session, "match")
+            reply, cards = _observe_after_entry_marks(
                 session,
-                "match_blueprints",
-                {"message": pending_msg},
-                emit=emit,
+                message=pending_msg,
+                title_hint=pending_title,
                 invoke=invoke,
             )
         elif path in {"create_or_freeform", "create_blueprint", "template"}:
-            mark_focus_entry_path(session, "template")
-            from report_writing.chat.resource_actions import _begin_blueprint_wizard
+            from report_writing.chat.session_documents import mark_focus_entry_branch
 
-            reply, cards = _begin_blueprint_wizard(
+            mark_focus_entry_branch(session, "without_blueprint")
+            mark_focus_entry_path(session, "template")
+            reply, cards = _observe_after_entry_marks(
                 session,
+                message=pending_msg,
                 title_hint=pending_title,
-                home=home,
-                force_new=False,
-                user_message=pending_msg,
                 invoke=invoke,
             )
         elif path in {"freeform", "skip_blueprint"}:
-            mark_focus_entry_path(session, "freeform")
-            from report_writing.chat.blueprint_actions import run_blueprint_action
+            from report_writing.chat.session_documents import mark_focus_entry_branch
 
-            reply, cards = run_blueprint_action(
-                home,
+            mark_focus_entry_branch(session, "without_blueprint")
+            mark_focus_entry_path(session, "freeform")
+            reply, cards = _observe_after_entry_marks(
                 session,
-                "skip_blueprint",
-                {"message": pending_msg, "title_hint": pending_title},
+                message=pending_msg,
+                title_hint=pending_title,
                 invoke=invoke,
-                emit=emit,
             )
         else:
             reply = "好的，你再说一下想怎么走就行。"
