@@ -2032,6 +2032,21 @@ def build_chat_tools(state: ChatControlState) -> list:
                 suggested_next_tool=nxt,
                 suggested_args=_suggested_args_for_tool(nxt, payload, msg),
             )
+        if not str(state.session.task_id or "").strip():
+            return _obs_fail(
+                missing_slots=["outline"],
+                reply_hint="还没有目录，先生成或确认大纲再补要点。",
+                observation=(
+                    "submit_points 需要已有大纲任务。"
+                    "下一步 submit_outline(regenerate=true)，或 skip_blueprint 后再生成目录。"
+                ),
+                suggested_next_tool="submit_outline",
+                suggested_args={
+                    "regenerate": True,
+                    "outline_text": msg,
+                    "revision_instructions": msg,
+                },
+            )
         reply, cards = _collect_freeform_points(
             state.home,
             state.session,

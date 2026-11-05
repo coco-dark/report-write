@@ -2832,12 +2832,9 @@ def _collect_freeform_points(
     text = (message or "").strip()
     task_id = (session.task_id or "").strip()
     if not task_id:
-        from report_writing.chat.freeform_intent import wants_generate_outline
-
-        # 「生成目录」：直接起草，勿再绕 skip_blueprint / 抛「任务大纲不存在」
-        if generate or wants_generate_outline(
-            text, invoke=invoke, phase=str(session.phase or ""), session=session
-        ):
+        # 仅当调用方显式 generate=True（generate_freeform_points）时起草目录；
+        # 不再在本函数里用 wants_generate_outline / skip_blueprint 另选总控 Tool。
+        if generate:
             return _collect_freeform_outline(
                 home,
                 session,
@@ -2846,11 +2843,9 @@ def _collect_freeform_points(
                 regenerate=True,
                 emit=emit,
             )
-        # 澄清误点「生成要点」且尚未建大纲任务时，改走无蓝本问元信息，勿抛错
-        from report_writing.chat.blueprint_actions import run_blueprint_action
-
-        return run_blueprint_action(
-            home, session, "skip_blueprint", {}, invoke=invoke, emit=emit
+        return (
+            "还没有目录任务。请先生成或确认大纲，再配要点。",
+            [],
         )
     task = _load_task(home, task_id)
     meta = dict(session.freeform or {})

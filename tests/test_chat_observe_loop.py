@@ -496,3 +496,14 @@ def test_submit_points_suggests_other_tool_without_silent_reroute(tmp_path: Path
         reroute_submit_points_if_needed(tmp_path, session, "给这章加个气候要素", invoke=invoke)
         is None
     )
+
+
+def test_submit_points_without_outline_suggests_submit_outline(tmp_path: Path):
+    session = ChatSession(id="s-pts", phase=ChatPhase.FREEFORM_POINTS.value, freeform={})
+    state = ChatControlState(home=tmp_path, session=session, invoke=lambda _s, _u: "{}")
+    tools = {t.name: t for t in build_chat_tools(state)}
+    raw = tools["submit_points"].invoke({"message": "第一章写背景"})
+    data = json.loads(raw)
+    assert data.get("ok") is False
+    assert "outline" in (data.get("missing_slots") or [])
+    assert data.get("suggested_next_tool") == "submit_outline"
