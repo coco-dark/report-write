@@ -123,7 +123,10 @@ CHAT_CONTROL_TOOL_DOCS: dict[str, str] = {
         "与 begin_blueprint_wizard 配合；仅 w* 副本，不入库。"
     ),
     "template_wizard": "模版向导别名；同 blueprint_wizard。",
-    "blueprint_wizard_subagent": "委派蓝本向导子助手（多步上传/目录/学习）。",
+    "blueprint_wizard_subagent": (
+        "委派蓝本向导子助手（多步上传/目录/学习）。"
+        "向导未开始时不要委派来「代 begin」；应直接 begin_blueprint_wizard。"
+    ),
     "resource_choice": "用户对导出前资源（渲染模版/Word 样式）二选一卡片的选择结果。",
     "resource_check": "检查导出前资源是否就绪（渲染模版/样式）。",
     "handoff_blueprint_page": "跳转蓝本页做深度配置（尽量少用，优先对话 Tool）。",

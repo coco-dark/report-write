@@ -267,6 +267,12 @@ def resolve_wizard_action(
     if not text:
         return None
 
+    wizard = dict(wizard or {})
+    if not str(wizard.get("step") or "").strip() and not str(
+        wizard.get("blueprint_id") or ""
+    ).strip():
+        return None
+
     if invoke is None:
         return None
 
