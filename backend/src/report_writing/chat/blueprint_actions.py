@@ -76,36 +76,6 @@ def finish_blueprint_match(
             hint = hint.strip()
         return hint, cards
 
-    from report_writing.chat.entry_intent import extract_wizard_title_hint, is_create_blueprint_intent
-    from report_writing.chat.entry_sample import guess_report_title_from_message, user_brings_own_sample_document
-    from report_writing.chat.helpers import _emit_process
-    from report_writing.chat.resource_actions import _action_blueprint_wizard, _begin_blueprint_wizard
-
-    if user_brings_own_sample_document(
-        message, invoke=invoke, session=session
-    ) or is_create_blueprint_intent(message, invoke=invoke, session=session):
-        title = extract_wizard_title_hint(
-            message, invoke=invoke, session=session
-        ) or guess_report_title_from_message(message, invoke=invoke)
-        _emit_process(emit, "你这边有样板，咱们走上传样本建蓝本…")
-        if title:
-            reply, cards = _action_blueprint_wizard(
-                home,
-                session,
-                {"step": "meta", "title": title, "blueprint_id": ""},
-            )
-            hint = (
-                f"库里没有完全对口的蓝本，我按你说的「{title}」开了蓝本向导。"
-                "请在卡片里上传 Word/PDF 样板，再提取目录、分析要点。"
-            )
-            return f"{hint}\n{reply}".strip(), cards
-        reply, cards = _begin_blueprint_wizard(session, title_hint="", home=home)
-        return (
-            "没找到库里的对口蓝本。你既然有样板，请在向导里上传样本，我会按样板提取目录再写。"
-            f"\n{reply}".strip(),
-            cards,
-        )
-
     from report_writing.chat.user_process import emit_user_process
     from report_writing.chat.write_path_after_match import reply_ask_write_path
 

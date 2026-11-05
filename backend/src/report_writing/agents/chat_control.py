@@ -606,7 +606,11 @@ def build_chat_tools(state: ChatControlState) -> list:
             (
                 "禁止代选。用户明确点名或「就用这份」且仅一份时，下一步 select_blueprint(blueprint_id)；否则等点选用。"
                 if matched_n
-                else "无对口蓝本：可 ask_entry_path / begin_blueprint_wizard(explicit_create=true) / skip_blueprint。"
+                else (
+                    "无对口蓝本：禁止在本 Tool 内代开向导或 skip。"
+                    "下一步由总控选：用户有样板/要建蓝本 → begin_blueprint_wizard(explicit_create=true)；"
+                    "无蓝本 → skip_blueprint / submit_outline；否则 ask_entry_path 等点选。"
+                )
             ),
         ]
         needs_name = not is_writing_document_named(state.session)
@@ -3397,6 +3401,18 @@ class ChatControlScriptModel(ScriptedChatModel):
                         k in msg for k in ("就用", "选用这份", "用这份", "用这个蓝本")
                     ):
                         return self.call("select_blueprint", {"blueprint_id": ids[0]})
+                    if not ids and any(
+                        k in msg
+                        for k in ("模版", "模板", "样板", "上传样板", "创建蓝本", "依据模版")
+                    ):
+                        return self.call(
+                            "begin_blueprint_wizard",
+                            {
+                                "force_new": True,
+                                "explicit_create": True,
+                                "title_hint": "",
+                            },
+                        )
                 nxt = str(data.get("suggested_next_tool") or "").strip()
                 if nxt and nxt != tool_name:
                     args = data.get("suggested_args")
