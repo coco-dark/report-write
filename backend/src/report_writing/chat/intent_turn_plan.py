@@ -1,4 +1,8 @@
-"""整轮意图 JSON：slots + tools + missing + confidence → 确定执行 / 缺项引导 / 不确定追问。"""
+"""可选遗留：整轮 JSON 计划（slots/tools/missing）。
+
+默认 `features.intent_plan=false` 时不参与口语路径；理解+调 Tool 由 create_agent 完成。
+仍供 UI·clarify·单测与 `REPORT_WRITING_INTENT_PLAN=1` 时使用。
+"""
 
 from __future__ import annotations
 

@@ -79,7 +79,7 @@ FastAPI（report_writing.api）
 ## 设计思路
 
 **1. 总控调度专员，而不是一条死流水线。**  
-总控只决定何时 `call_study` / `call_search` / `call_write` / `call_check`。检索、写正文、核对引用分别由专员完成，避免单次超长提示词，也方便按章重试。
+总控通过 LangChain `create_agent` 工具循环决定何时调用各 Tool；章级 `call_study` / `call_search` / `call_write` / `call_check` 由 supervisor 专员执行。架构说明见 `backend/src/report_writing/chat/AGENT_ARCHITECTURE.md`。
 
 **2. 蓝本是写法真源，任务是一次写作副本。**  
 样板学习结果（语气、排版、章节要点）确认后进蓝本库。开写时克隆为写作任务（`w*`），改要点、关联要素、出草稿都落在任务上，不直接改库里的蓝本。

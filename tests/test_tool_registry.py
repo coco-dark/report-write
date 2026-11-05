@@ -26,3 +26,18 @@ def test_intent_plan_default_disabled():
     from report_writing.infra.config_settings import intent_plan_enabled
 
     assert intent_plan_enabled() is False
+
+
+def test_oral_multi_intent_skipped_when_plan_disabled(tmp_path: Path):
+    from report_writing.chat.intent_multi_plan import try_run_oral_multi_intent
+    from report_writing.domain.models import ChatSession
+
+    session = ChatSession(id="s-plan-off")
+    hit = try_run_oral_multi_intent(
+        tmp_path,
+        session,
+        "帮我写一份报告",
+        invoke=lambda _s, _u: "{}",
+        emit=None,
+    )
+    assert hit is None

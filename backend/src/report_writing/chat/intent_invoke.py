@@ -1,4 +1,9 @@
-"""意图相关 LLM 调用入口（与对话 invoke、总控 ReAct 分离）。"""
+"""澄清/窄任务 LLM 入口（非口语主路由）。
+
+口语「理解 + 调 Tool」默认只走总控 `create_agent`（见 chat/AGENT_ARCHITECTURE.md）。
+本模块供：澄清卡选项解析、向导 command 分类、Tool 内补槽等固定 JSON 任务；
+可选用独立 intent 模型（更小 max_tokens），与总控 ReAct 模型分离以省成本。
+"""
 
 from __future__ import annotations
 

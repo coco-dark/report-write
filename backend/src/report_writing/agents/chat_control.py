@@ -25,7 +25,7 @@ CONTROL_INSTRUCTIONS = """你是「智能文档协作」对话写文档总控（
 职责：根据 writing_brief、dialogue_full、session_goal、用户原话与界面 action，选择并调用 Tool 推进写作。禁止靠关键词表猜意图；禁止编造蓝本名称或工具未返回的事实。
 
 ## 0. 整段会话自主决策（开场 / 向导 / 写作中途同一套）
-每轮根据 Tool 返回的 observation / missing_slots（及后端注入的 session 快照）决策：**确定就执行、缺项就引导、不确定就多轮确认**。
+你是 LangChain 绑定的总控 Agent：根据 user 消息里的 writing_brief、dialogue_full、session_gaps 等上下文，**自行选择 Tool** 并读每次 Tool 返回的 observation / missing_slots 闭环。
 - **确定**：本句或上下文已给出的槽位 → 立刻调对应 Tool；一句可多 Tool（改名+开写、匹配+选章、加要素+确认等）。
 - **缺项**：只补还缺的（如缺章节号、缺文档名、缺写作方式、缺蓝本 id）；不要机械重走整条流水线。
 - **不确定**：指代不明、写还是学未定、多文档歧义（已定名后又说「写一份关于××」是新开还是改名）、破坏性动作把握不足 → ask_intent / 澄清卡；禁止猜第一章、代选蓝本、静默开写/删除/收录/用题材改名。
@@ -3056,6 +3056,43 @@ def _parse_user_message_from_agent_text(user_text: str) -> tuple[str, str, str]:
 
 
 
+def run_langchain_chat_control(
+    *,
+    model: BaseChatModel,
+    state: ChatControlState,
+    user_text: str,
+    system_prompt: str,
+    message: str,
+    action: str,
+) -> str:
+    """LangChain create_agent 口语主路径（见 chat/AGENT_ARCHITECTURE.md）。"""
+    if not (action or state.user_action) and message:
+        from report_writing.chat.session_gaps import refresh_session_gaps
+
+        intent_llm = state.intent_invoke or state.invoke
+        refresh_session_gaps(
+            state.session,
+            message=message,
+            home=state.home,
+            invoke=intent_llm,
+        )
+
+    tools = build_chat_tools(state)
+    from report_writing.chat.react_speed import control_react_rounds
+
+    result = run_react(
+        model,
+        tools,
+        build_system_prompt(system_prompt, session=state.session, home=state.home),
+        user_text,
+        "chat_control",
+        rounds=control_react_rounds(),
+        session=state.session,
+        emit=state.emit,
+    )
+    return _final_text(result.get("messages") or [], state)
+
+
 def run_chat_control(
     *,
     model: BaseChatModel,
@@ -3063,7 +3100,7 @@ def run_chat_control(
     user_text: str,
     system_prompt: str,
 ) -> str:
-    """运行一轮对话总控，副作用写入 state.session / cards / events。"""
+    """运行一轮对话总控：确定性前置（UI/澄清）→ 可选遗留 intent_plan → LangChain Agent 闭环。"""
     action, message, _phase = _parse_user_message_from_agent_text(user_text)
     state.last_user_message = message
     state.user_action = state.user_action or (action or "")
@@ -3213,32 +3250,14 @@ def run_chat_control(
             state.events.extend(events)
             return (reply or "").strip() or "好的。"
 
-    # 口语主路径：ReAct 观察闭环；刷新只读 gaps 供 user 上下文。
-    if not (state.user_action or action) and message:
-        from report_writing.chat.session_gaps import refresh_session_gaps
-
-        refresh_session_gaps(
-            state.session,
-            message=message,
-            home=state.home,
-            invoke=intent_llm if intent_llm is not None else state.invoke,
-        )
-
-    tools = build_chat_tools(state)
-
-    from report_writing.chat.react_speed import control_react_rounds
-
-    result = run_react(
-        model,
-        tools,
-        build_system_prompt(system_prompt, session=state.session, home=state.home),
-        user_text,
-        "chat_control",
-        rounds=control_react_rounds(),
-        session=state.session,
-        emit=state.emit,
+    return run_langchain_chat_control(
+        model=model,
+        state=state,
+        user_text=user_text,
+        system_prompt=system_prompt,
+        message=message,
+        action=action or state.user_action or "",
     )
-    return _final_text(result.get("messages") or [], state)
 
 
 def _script_user_message(text: str) -> str:

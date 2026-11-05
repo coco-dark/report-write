@@ -46,7 +46,9 @@
 - 弱 `message_wants_new_document` 抢 force_new（仅保留 strong / 标题冲突）
 - 口语认领壳：`try_*_route` / `try_progress_continue_clarify` / `try_chat_control_plan_route` / `session_goal_route` / `blueprint_session_route`（已删除）
 
-## 口语主路径（整段会话统一大脑）
+## 口语主路径（LangChain Agent 闭环）
+
+详见 `chat/AGENT_ARCHITECTURE.md`。
 
 - `run_chat_control`：pending clarify / UI 之后 →（可选，`features.intent_plan`）`try_run_oral_multi_intent` / `apply_turn_plan` → 未命中再 `run_react`（`create_agent` + Tool description）
 - 开场与写作中途同一契约；禁止再用标题/原话截取工具名当执行清单

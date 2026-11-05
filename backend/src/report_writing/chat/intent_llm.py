@@ -1,8 +1,8 @@
-"""用模型做意图分类，减少堆正则；走 intent_invoke / live_intent_model，与对话、总控 ReAct 分离。
+"""澄清/调度/可选遗留计划用的 LLM 分类器（非 LangChain 口语主路由）。
 
-分类器 system 话术统一结构（与 CONTROL_INSTRUCTIONS 风格对齐）：
-  角色 / ## 输出 / ## 意图|命令|取值含义 / ## 规则 / ## 示例 / ## 不确定
-JSON only；说法按意思判断，不靠固定句式；不确定时填 none/unclear 且 confidence 低于阈值。
+- 默认配置下口语不经过本模块的 turn_plan；总控见 agents/react.run_react。
+- 仍用于：澄清回复、wizard command、writing_control 窄分类、intent_plan=true 时的 JSON 计划。
+详见 chat/AGENT_ARCHITECTURE.md。
 """
 
 from __future__ import annotations

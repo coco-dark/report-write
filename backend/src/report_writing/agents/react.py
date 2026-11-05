@@ -1,4 +1,10 @@
-"""调用 LangChain Agent，并取回结束工具返回的 JSON。"""
+"""调用 LangChain create_agent，直到模型不再发起 tool_calls。
+
+对齐官方 Agent 循环：https://docs.langchain.com/oss/python/langchain/agents
+- system_prompt：角色与策略（不含工具枚举）
+- tools：语义在 Tool.description
+- user 消息：本轮上下文 + 用户原话
+"""
 
 from __future__ import annotations
 
@@ -24,6 +30,7 @@ def run_react(
     session: Any = None,
     emit: Any = None,
 ) -> dict[str, Any]:
+    """LangChain Agent 图：model → tools → ToolMessage → … → 结束。"""
     if session is not None:
         from report_writing.chat.agent_chain_log import log_react_round, log_react_tool_calls
 
