@@ -23,10 +23,6 @@ report_writing:
     chain_debug: false
     blueprint_match_llm: false
     scripted_chat: false
-    # 遗留：口语主路径已忽略 JSON 计划。仅单测 try_run_oral_multi_intent 会读 REPORT_WRITING_INTENT_PLAN
-    intent_plan: false
-    # 已废弃：代码不再把 Tool 表贴进分类器 prompt
-    intent_tool_catalog_in_prompt: false
   outline:
     multiround: true
     toc_max_chars: 250000

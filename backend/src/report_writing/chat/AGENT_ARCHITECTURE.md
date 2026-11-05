@@ -52,7 +52,7 @@ handle_chat → run_chat_control
 
 | 键 | 默认 | 含义 |
 |----|------|------|
-| `features.intent_plan` | `false` | 遗留。口语主路径 **不读** |
+| `features.intent_plan` | 已从 yml 移除 | 仅 env `REPORT_WRITING_INTENT_PLAN` 给遗留单测 |
 | `features.intent_tool_catalog_in_prompt` | 代码恒 `false` | 已废弃 |
 
 正则 vs 口语见 `INTENT_REGEX_AUDIT.md`。
@@ -82,7 +82,7 @@ handle_chat → run_chat_control
 | 项 | 做什么 | 状态 |
 |----|--------|------|
 | C2 | `classify_turn_plan_llm` / `classify_chat_control_plan_llm` 发 DeprecationWarning | 已做 |
-| C4 | 从 yml 彻底移除 `intent_plan` 键 | 未做 |
+| C4 | 从 yml 彻底移除 `intent_plan` 键 | 已做（函数仍读 env，仅单测） |
 
 ### Phase D / E
 
@@ -91,5 +91,5 @@ middleware、目录改名（`intent_clarify` → `clarify_flow`）放到行为�
 ## 不做的事
 
 - 不删选择卡状态机（卡片 UX）。
-- 不把 UI `action` 改成 Agent 解析。
 - 不把章级 supervisor 合并进对话总控。
+- 不删 `intent_turn_plan` / `intent_multi_plan` 测试夹具，直到没有单测依赖。

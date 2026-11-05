@@ -112,7 +112,7 @@ def handle_chat(
         refresh_latest_wizard_card_in_session(home, session)
     from report_writing.chat.dialogue import drop_assistant_echo_user_messages
 
-    # 新开文档刷新后，助手原文可能已被写成用户消息。先剔掉，再交给意图判断。
+    # 新开文档刷新后，助手原文可能已被写成用户消息。先剔掉，再交给总控 Agent。
     drop_assistant_echo_user_messages(session)
     if card_key and (action or "").strip() != "blueprint_wizard":
         _mark_card_used(session, card_key)
@@ -179,86 +179,85 @@ def handle_chat(
     events: list[dict[str, Any]] = []
     reply = ""
     act = (action or "").strip()
-    if True:  # 点选与口语同一 Agent 路径（块缩进保持）
-        from report_writing.infra.config_settings import llm_mode, scripted_chat
+    from report_writing.infra.config_settings import llm_mode, scripted_chat
 
-        force_scripted = bool(
-            os.environ.get("PYTEST_CURRENT_TEST") or llm_mode() == "scripted" or scripted_chat()
+    force_scripted = bool(
+        os.environ.get("PYTEST_CURRENT_TEST") or llm_mode() == "scripted" or scripted_chat()
+    )
+    ctrl_model = model
+    if ctrl_model is None and force_scripted:
+        ctrl_model = ChatControlScriptModel()
+        _emit_process(out, "离线测试模式…")
+    elif ctrl_model is None:
+        try:
+            from report_writing.infra.llm import live_control_model
+
+            ctrl_model = live_control_model()
+        except Exception as error:
+            _log.warning("live_model unavailable: %s", error)
+            ctrl_model = None
+
+    if ctrl_model is None:
+        reply = (
+            "还没接上写作助手，暂时帮不了你。"
+            "请先配置好模型，再回来跟我聊选蓝本和开写。"
         )
-        ctrl_model = model
-        if ctrl_model is None and force_scripted:
-            ctrl_model = ChatControlScriptModel()
-            _emit_process(out, "离线测试模式…")
-        elif ctrl_model is None:
-            try:
-                from report_writing.infra.llm import live_control_model
+        cards = []
+        _emit_process(out, "还没接上写作助手")
+    else:
+        from report_writing.chat.intent_invoke import intent_invoke_fn
 
-                ctrl_model = live_control_model()
-            except Exception as error:
-                _log.warning("live_model unavailable: %s", error)
-                ctrl_model = None
+        state = ChatControlState(
+            home=home,
+            session=session,
+            robot=robot,
+            invoke=invoke,
+            intent_invoke=intent_invoke_fn(invoke),
+            emit=out,
+            user_action=action,
+        )
+        user_text = build_agent_user_text(
+            action=action,
+            payload=payload,
+            message=message,
+            session=session,
+            home=home,
+        )
+        system_prompt = resolve_prompt("chat", robot, default=DEFAULT_CHAT_PROMPT)
+        try:
+            from report_writing.chat.user_process import CONTROL_RECEIVED_HINT, CONTROL_WAIT_HINT
 
-        if ctrl_model is None:
-            reply = (
-                "还没接上写作助手，暂时帮不了你。"
-                "请先配置好模型，再回来跟我聊选蓝本和开写。"
+            if not act:
+                _emit_process(out, CONTROL_RECEIVED_HINT)
+                _emit_tokens(out, "我在看你的需求，马上安排下一步。")
+                _emit_process(out, CONTROL_WAIT_HINT)
+            elif act not in UI_SHORTCUT_ACTIONS:
+                _emit_process(out, CONTROL_RECEIVED_HINT)
+                _emit_tokens(out, "我在看你的需求，马上安排下一步。")
+                _emit_process(out, CONTROL_WAIT_HINT)
+            else:
+                from report_writing.chat.user_process import emit_action_process
+
+                emit_action_process(out, act, payload)
+            reply = run_chat_control(
+                model=ctrl_model,
+                state=state,
+                user_text=user_text,
+                system_prompt=system_prompt,
+            )
+            cards = list(state.cards)
+            if act not in UI_SHORTCUT_ACTIONS:
+                cards = _ensure_analysis_choice_cards(home, session, cards)
+            events = list(state.events)
+            # 禁止 select_blueprint + auto_start 静默开写；开写须显式 start_writing
+        except Exception as error:
+            _log.exception("chat control agent failed")
+            from report_writing.infra.llm_errors import user_message_for_llm_error
+
+            reply = user_message_for_llm_error(error) or (
+                f"这边出了点问题：{error}。你可以再说一次，或点下方按钮重试。"
             )
             cards = []
-            _emit_process(out, "还没接上写作助手")
-        else:
-            from report_writing.chat.intent_invoke import intent_invoke_fn
-
-            state = ChatControlState(
-                home=home,
-                session=session,
-                robot=robot,
-                invoke=invoke,
-                intent_invoke=intent_invoke_fn(invoke),
-                emit=out,
-                user_action=action,
-            )
-            user_text = build_agent_user_text(
-                action=action,
-                payload=payload,
-                message=message,
-                session=session,
-                home=home,
-            )
-            system_prompt = resolve_prompt("chat", robot, default=DEFAULT_CHAT_PROMPT)
-            try:
-                from report_writing.chat.user_process import CONTROL_RECEIVED_HINT, CONTROL_WAIT_HINT
-
-                if not act:
-                    _emit_process(out, CONTROL_RECEIVED_HINT)
-                    _emit_tokens(out, "我在看你的需求，马上安排下一步。")
-                    _emit_process(out, CONTROL_WAIT_HINT)
-                elif act not in UI_SHORTCUT_ACTIONS:
-                    _emit_process(out, CONTROL_RECEIVED_HINT)
-                    _emit_tokens(out, "我在看你的需求，马上安排下一步。")
-                    _emit_process(out, CONTROL_WAIT_HINT)
-                else:
-                    from report_writing.chat.user_process import emit_action_process
-
-                    emit_action_process(out, act, payload)
-                reply = run_chat_control(
-                    model=ctrl_model,
-                    state=state,
-                    user_text=user_text,
-                    system_prompt=system_prompt,
-                )
-                cards = list(state.cards)
-                if act not in UI_SHORTCUT_ACTIONS:
-                    cards = _ensure_analysis_choice_cards(home, session, cards)
-                events = list(state.events)
-                # 禁止 select_blueprint + auto_start 静默开写；开写须显式 start_writing
-            except Exception as error:
-                _log.exception("chat control agent failed")
-                from report_writing.infra.llm_errors import user_message_for_llm_error
-
-                reply = user_message_for_llm_error(error) or (
-                    f"这边出了点问题：{error}。你可以再说一次，或点下方按钮重试。"
-                )
-                cards = []
 
     if not reply:
         reply = "嗯，我在听——你接着说就行。"
