@@ -427,6 +427,13 @@ def test_clarify_llm_reexports_narrow_classifiers():
     assert not hasattr(clarify_llm, "classify_turn_plan_llm")
 
 
+def test_clarify_flow_and_tool_dispatch_reexport_legacy_modules():
+    from report_writing.chat import clarify_flow, intent_clarify, intent_dispatch, tool_dispatch
+
+    assert clarify_flow.get_pending is intent_clarify.get_pending
+    assert tool_dispatch.execute_dispatch_tool is intent_dispatch.execute_dispatch_tool
+
+
 def test_run_chat_control_does_not_auto_dispatch_onboarding(tmp_path: Path, monkeypatch):
     def _boom(*_a, **_k):
         raise AssertionError("oral path must not auto-dispatch suggested_next_tools")

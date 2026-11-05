@@ -35,30 +35,6 @@ _POINTS_SYSTEM = (
 )
 
 
-def wants_generate_points(
-    message: str,
-    *,
-    invoke: InvokeFn | None = None,
-    phase: str = "",
-    task_id: str = "",
-) -> bool:
-    from report_writing.chat.freeform_intent import wants_generate_points as _intent
-
-    return _intent(message, invoke=invoke, phase=phase, task_id=task_id)
-
-
-def wants_skip_points(
-    message: str,
-    *,
-    invoke: InvokeFn | None = None,
-    phase: str = "",
-    task_id: str = "",
-) -> bool:
-    from report_writing.chat.freeform_intent import wants_skip_points as _intent
-
-    return _intent(message, invoke=invoke, phase=phase, task_id=task_id)
-
-
 def count_chapters_missing_points(task: WritingTask) -> int:
     if not task.outline or not task.outline.chapters:
         return 0

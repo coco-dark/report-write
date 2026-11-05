@@ -152,18 +152,18 @@ def classify_freeform_actions(
     return [single] if single else []
 
 
-def _classify(
+def _alias_has(
     message: str,
-    *,
+    *wanted: str,
+    invoke: InvokeFn | None = None,
     phase: str = "",
     task_id: str = "",
     session: ChatSession | None = None,
-    invoke: InvokeFn | None,
-) -> str:
+) -> bool:
     actions = classify_freeform_actions(
-        message, phase=phase, task_id=task_id, session=session, invoke=invoke
+        message, invoke=invoke, phase=phase, task_id=task_id, session=session
     )
-    return actions[0] if actions else ""
+    return any(item in wanted for item in actions)
 
 
 def wants_generate_outline(
@@ -173,7 +173,8 @@ def wants_generate_outline(
     phase: str = "",
     session: ChatSession | None = None,
 ) -> bool:
-    return _classify(message, phase=phase, session=session, invoke=invoke) == "generate_outline"
+    """测试别名：`classify_freeform_actions` 是否含 generate_outline。生产路径勿用来改道。"""
+    return _alias_has(message, "generate_outline", invoke=invoke, phase=phase, session=session)
 
 
 def wants_outline_confirm(
@@ -183,7 +184,8 @@ def wants_outline_confirm(
     phase: str = "",
     session: ChatSession | None = None,
 ) -> bool:
-    return _classify(message, phase=phase, session=session, invoke=invoke) == "confirm_outline"
+    """测试别名：是否含 confirm_outline。生产路径勿用。"""
+    return _alias_has(message, "confirm_outline", invoke=invoke, phase=phase, session=session)
 
 
 def wants_generate_points(
@@ -194,10 +196,16 @@ def wants_generate_points(
     task_id: str = "",
     session: ChatSession | None = None,
 ) -> bool:
-    intent = _classify(
-        message, phase=phase, task_id=task_id, session=session, invoke=invoke
+    """测试别名：是否含 generate_points / help_draft。生产路径勿用。"""
+    return _alias_has(
+        message,
+        "generate_points",
+        "help_draft",
+        invoke=invoke,
+        phase=phase,
+        task_id=task_id,
+        session=session,
     )
-    return intent in {"generate_points", "help_draft"}
 
 
 def wants_skip_points(
@@ -208,9 +216,9 @@ def wants_skip_points(
     task_id: str = "",
     session: ChatSession | None = None,
 ) -> bool:
-    return (
-        _classify(message, phase=phase, task_id=task_id, session=session, invoke=invoke)
-        == "skip_points"
+    """测试别名：是否含 skip_points。生产路径勿用。"""
+    return _alias_has(
+        message, "skip_points", invoke=invoke, phase=phase, task_id=task_id, session=session
     )
 
 
@@ -222,9 +230,9 @@ def wants_start_writing(
     task_id: str = "",
     session: ChatSession | None = None,
 ) -> bool:
-    return (
-        _classify(message, phase=phase, task_id=task_id, session=session, invoke=invoke)
-        == "start_writing"
+    """测试别名：是否含 start_writing。生产路径勿用。"""
+    return _alias_has(
+        message, "start_writing", invoke=invoke, phase=phase, task_id=task_id, session=session
     )
 
 
@@ -235,7 +243,8 @@ def wants_freeform_help_draft(
     phase: str = "",
     session: ChatSession | None = None,
 ) -> bool:
-    return _classify(message, phase=phase, session=session, invoke=invoke) == "help_draft"
+    """测试别名：是否含 help_draft。生产路径勿用。"""
+    return _alias_has(message, "help_draft", invoke=invoke, phase=phase, session=session)
 
 
 def suggest_tool_instead_of_submit_points_freeform(

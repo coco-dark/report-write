@@ -9,7 +9,7 @@
 | 蓝本向导各步 | ReAct / subagent → `apply_wizard_action`（分类可用 `resolve_wizard_action`） |
 | 向导循环防护 | `wizard_loop_guard`（sync 不回退、一次性 trigger、过渡步幂等、少叠卡片） |
 | 蓝本能力执行 | `blueprint_actions.run_blueprint_action`（与 UI action 同名） |
-| 无蓝本：目录/要点/托管起草 | ReAct → `submit_outline` / `generate_freeform_points` / `start_writing`（分类可用 `freeform_intent`） |
+| 无蓝本：目录/要点/托管起草 | ReAct → `submit_outline` / `generate_freeform_points` / `start_writing`（`wants_*` 仅测试别名） |
 | 写作中：要素/关联/查看库/记目标 | ReAct Tool；执行复用 `apply_writing_control_classification` |
 | 统一调度（非口语主路径） | `execute_intent_plan` / `execute_dispatch_tool`（UI·clarify·单测；**禁止** `message_wants_*` 改写 plan） |
 | 澄清回复（全部 source） | `classify_clarify_reply_llm` / `classify_doc_name_reply_llm` → `intent_clarify.try_handle_pending_message` |

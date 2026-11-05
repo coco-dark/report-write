@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from report_writing.chat.intent_clarify import (
+from report_writing.chat.clarify_flow import (
     build_entry_path_clarify,
     execute_clarify_spec,
     get_pending,
@@ -223,7 +223,7 @@ def test_resolve_intent_clarify_exposes_suggested_next_tools(tmp_path: Path):
     import json
 
     from report_writing.agents.chat_control import ChatControlState, build_chat_tools
-    from report_writing.chat.intent_clarify import begin_clarify
+    from report_writing.chat.clarify_flow import begin_clarify
     from report_writing.chat.session_documents import confirm_writing_document_name
 
     (tmp_path / "tasks").mkdir(parents=True)
@@ -263,7 +263,7 @@ def test_resolve_intent_clarify_exposes_suggested_next_tools(tmp_path: Path):
 
 
 def test_continue_after_new_document_does_not_dispatch(tmp_path: Path, monkeypatch):
-    from report_writing.chat.intent_clarify import continue_after_new_document
+    from report_writing.chat.clarify_flow import continue_after_new_document
     from report_writing.chat.session_documents import (
         begin_document_onboarding,
         confirm_writing_document_name,

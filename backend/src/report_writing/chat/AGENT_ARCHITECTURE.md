@@ -16,8 +16,8 @@
 
 | 名字看起来像「意图」 | 实际职责 | 口语要不要它 |
 |----------------------|----------|----------------|
-| `intent_clarify` | **选择卡**：选项、pending、点选后续跑 | 要（UX） |
-| `intent_dispatch` | **按 tool 名执行**（卡片/按钮/单测已经决定了 tool+args） | 要（执行器） |
+| `intent_clarify` / **`clarify_flow`** | **选择卡**：选项、pending、点选后续跑 | 要（UX；新代码用 `clarify_flow`） |
+| `intent_dispatch` / **`tool_dispatch`** | **按 tool 名执行**（卡片/按钮/单测已经决定了 tool+args） | 要（执行器；新代码用 `tool_dispatch`） |
 | `intent_router` | 会话标志：写作路径、是否跳过蓝本 | 要（状态） |
 | `intent_invoke` / 配置 `intent.max_tokens` | 窄 JSON 小模型入口（解析点了哪一项、抽槽） | 要（省成本） |
 | `clarify_llm` | 固定 schema：澄清回复、scope、文档名、向导 command | 要 |
@@ -100,11 +100,11 @@ handle_chat → run_chat_control
 | P3 | 蓝本 / 向导：子代理去掉 `is_create_blueprint_intent` 自动 begin；`resolve_wizard_action` 只补本 Tool 槽 | 已做 |
 | P4 | 写作中：`add_elements` / associate / retry 可填本 Tool 槽，不得在本函数改调另一个总控 Tool | 已做 |
 | P5 | 黄金路径从 `handle_chat` 断言 Tool 名与阶段；离线脚本只跟 `suggested_next_tools`；JSON 计划夹具不动 | 已做 |
-| P6 | `wants_*` 仅测试别名；`intent_*` 文件改名放到行为稳定之后 | 待做 |
+| P6 | `wants_*` 仅测试别名；`intent_*` 文件改名放到行为稳定之后 | 已做（新入口 `clarify_flow` / `tool_dispatch`；实现文件改名见 Phase D） |
 
 P1 必须覆盖：口语「写一份…」→ 生成目录；点选自动大纲 / 用模版 / 创建蓝本；「再写一份」隔离后由 Agent hop；shortcut 在零 ToolMessage 时仍保 UX。
 
-P0–P5 已落地。下一步 **P6**（`wants_*` / `intent_*` 改名，行为稳定之后）。
+P0–P6 已落地。`wants_*` 只作测试别名；`intent_clarify` / `intent_dispatch` 实现仍在原文件，新代码走 `clarify_flow` / `tool_dispatch`。全文件改名仍属 Phase D。
 
 ### Phase C
 
@@ -115,7 +115,7 @@ P0–P5 已落地。下一步 **P6**（`wants_*` / `intent_*` 改名，行为稳
 
 ### Phase D / E
 
-middleware、目录改名（`intent_clarify` → `clarify_flow`）放到行为稳定之后。
+middleware、把实现从 `intent_clarify.py` 搬进 `clarify_flow.py`（去掉旧文件）放到行为稳定之后。新代码已从 `clarify_flow` / `tool_dispatch` import。
 
 ## 不做的事
 

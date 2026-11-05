@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from report_writing.chat.actions import _action_start_writing, _collect_freeform_meta
-from report_writing.chat.freeform_help import wants_freeform_help_draft
+from report_writing.chat.freeform_intent import wants_freeform_help_draft
 from report_writing.domain.models import ChatPhase, ChatSession
 
 
