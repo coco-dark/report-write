@@ -204,6 +204,55 @@ def test_start_writing_requires_doc_name_observation(tmp_path: Path):
     assert str(data.get("observation") or "")
 
 
+def test_add_chapter_element_hops_when_classifier_picks_collect(tmp_path: Path):
+    session = _session_named(tmp_path)
+    session.phase = ChatPhase.WRITING.value
+
+    def invoke(_system: str, _user: str) -> str:
+        return json.dumps(
+            {
+                "tool": "collect_to_element_library",
+                "confidence": 0.95,
+                "payload": {"element_name": "知识库要素"},
+            }
+        )
+
+    state = ChatControlState(
+        home=tmp_path,
+        session=session,
+        intent_invoke=invoke,
+        last_user_message="将知识库要素添加到要素库",
+    )
+    tools = {t.name: t for t in build_chat_tools(state)}
+    raw = tools["add_chapter_element"].invoke(
+        {"payload_json": json.dumps({"name": "知识库要素", "chapter_key": "c1"})}
+    )
+    data = json.loads(raw)
+    assert data.get("ok") is False
+    assert data.get("suggested_next_tool") == "collect_to_element_library"
+    assert not state.cards
+
+
+def test_retry_chapter_missing_entry_suggests_ask_entry_path(tmp_path: Path):
+    session = ChatSession(
+        id="s-retry-path",
+        phase=ChatPhase.WRITING.value,
+        task_id="w20260101140000rty",
+    )
+    state = ChatControlState(
+        home=tmp_path,
+        session=session,
+        last_user_message="重写这一章",
+    )
+    tools = {t.name: t for t in build_chat_tools(state)}
+    raw = tools["retry_chapter"].invoke({"payload_json": json.dumps({"chapter_key": "c1"})})
+    data = json.loads(raw)
+    assert data.get("ok") is False
+    assert "writing_path" in (data.get("missing_slots") or [])
+    assert data.get("suggested_next_tool") == "ask_entry_path"
+    assert not any(getattr(c, "type", None) == "intent_clarify" for c in (state.cards or []))
+
+
 def test_add_chapter_element_missing_slots(tmp_path: Path):
     session = _session_named(tmp_path)
     state = ChatControlState(home=tmp_path, session=session)

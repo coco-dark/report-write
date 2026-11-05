@@ -301,6 +301,7 @@ def execute_dispatch_tool(
             text,
             {"tool": name, "payload": args},
             emit=emit,
+            expected_tool=name,
         )
 
     if name == "configure_chapter":

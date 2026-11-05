@@ -60,7 +60,7 @@ CONTROL_INSTRUCTIONS = """你是「智能文档协作」对话写文档总控（
 - 「写这一章」没说哪一章 → 追问章节，勿猜。
 - 「确认这一章并停止」→ confirm_chapter(pause_after=true)；勿确认后又自动写下章。
 - 「只保留前两章」→ 裁目录后 submit_outline。
-- 加要素/关联/收入库：缺参就问；同名多个挂澄清点选。
+- 加要素/关联/收入库/重试：缺参就问；同名多个挂澄清点选。误调时读 suggested_next_tool 改调，禁止在本 Tool 内执行另一个总控 Tool。
 - 开写前缺要点：先问是否生成；同意后再 generate_freeform_points。
 - 多章未指定 writing_pace 时 start_writing 会先澄清「一次写完 / 写一章看一章」；开写前可 check_writing_supplements 查待补要素；用户说先写再说 → skip_writing_supplement_check；卡片上忽略某项 → dismiss_writing_supplement（仅取消该章关联）。
 
@@ -146,7 +146,94 @@ def _suggested_args_for_tool(
         return {"notes": str(body.get("notes") or message or "").strip()}
     if key.startswith("open_"):
         return {}
+    if key == "ask_entry_path":
+        return {"message": (message or "").strip()}
+    if key == "retry_chapter":
+        return {"payload_json": json.dumps(body, ensure_ascii=False)}
     return body
+
+
+def _hop_if_other_writing_control(
+    state: ChatControlState, expected_tool: str, message: str = ""
+) -> str | None:
+    """分类器点名其它写作控制 Tool 时只观察 hop，不执行。点选同名 action 不分类。"""
+    if (state.user_action or "").strip() == expected_tool:
+        return None
+    msg = (message or state.last_user_message or "").strip()
+    if not msg:
+        return None
+    from report_writing.chat.writing_control_route import suggest_other_writing_control_tool
+
+    intent_llm = state.intent_invoke
+    if intent_llm is None:
+        from report_writing.chat.intent_invoke import intent_invoke_fn
+
+        intent_llm = intent_invoke_fn(state.invoke)
+    suggestion = suggest_other_writing_control_tool(
+        state.home,
+        state.session,
+        msg,
+        expected_tool=expected_tool,
+        invoke=state.invoke,
+        intent_invoke=intent_llm,
+    )
+    if suggestion is None:
+        return None
+    nxt = str(suggestion.get("tool") or "").strip()
+    payload = dict(suggestion.get("payload") or {})
+    if not nxt:
+        return None
+    return _obs_fail(
+        reply_hint="这句更适合另一个动作，我按那个来。",
+        observation=(
+            f"{expected_tool} 不执行其他总控 Tool。下一步 {nxt}。"
+            "请改调该 Tool。"
+        ),
+        suggested_next_tool=nxt,
+        suggested_args=_suggested_args_for_tool(nxt, payload, msg),
+    )
+
+
+def _dump_writing_control_result(
+    state: ChatControlState,
+    result: tuple[str, list, list] | None,
+    *,
+    expected_tool: str,
+    ok_observation: str,
+    fail_hint: str,
+    fail_slots: list[str] | None = None,
+) -> str:
+    if not result:
+        return _obs_fail(
+            missing_slots=fail_slots,
+            reply_hint=fail_hint,
+            observation=f"{expected_tool} 失败：{fail_hint}",
+        )
+    reply, cards, events = result
+    hop = next(
+        (
+            e
+            for e in (events or [])
+            if isinstance(e, dict) and str(e.get("type") or "") == "suggested_next_tool"
+        ),
+        None,
+    )
+    if hop:
+        nxt = str(hop.get("tool") or "").strip()
+        args = hop.get("args") if isinstance(hop.get("args"), dict) else {}
+        return _obs_fail(
+            reply_hint=reply,
+            observation=(
+                f"{expected_tool} 只处理本 Tool。本句更像 {nxt}。"
+                f"请改调 {nxt}，不要在本函数执行。"
+            ),
+            suggested_next_tool=nxt,
+            suggested_args=_suggested_args_for_tool(
+                nxt, dict(args or {}), state.last_user_message or ""
+            ),
+        )
+    _set_cards(state, cards)
+    return _dump({"ok": True, "reply_hint": reply, "observation": ok_observation})
 
 
 def _gate_writing_doc_named(state: ChatControlState, tool_name: str) -> str | None:
@@ -1272,6 +1359,9 @@ def build_chat_tools(state: ChatControlState) -> list:
         if not isinstance(payload, dict):
             payload = {}
         hint = str(state.last_user_message or payload.get("hint") or payload.get("user_note") or "").strip()
+        hop = _hop_if_other_writing_control(state, "add_chapter_element", hint)
+        if hop:
+            return hop
         if hint and (
             not str(payload.get("chapter_key") or "").strip()
             or not str(payload.get("name") or "").strip()
@@ -1328,10 +1418,7 @@ def build_chat_tools(state: ChatControlState) -> list:
             {
                 "ok": True,
                 "reply_hint": reply,
-                "observation": (
-                    "已生成要素草稿卡片，等用户确认。"
-                    "若用户其实要「收入要素库」，应改调 collect_to_element_library。"
-                ),
+                "observation": "已生成要素草稿卡片，等用户确认。",
             }
         )
 
@@ -1347,6 +1434,9 @@ def build_chat_tools(state: ChatControlState) -> list:
         if not isinstance(payload, dict):
             payload = {}
         hint = str(state.last_user_message or payload.get("hint") or "").strip()
+        hop = _hop_if_other_writing_control(state, "associate_elements", hint)
+        if hop:
+            return hop
         if not str(payload.get("chapter_key") or payload.get("chapter_key_hint") or "").strip():
             # 允许分类器/动作层从 hint 解析；完全空则缺参
             if not hint and not (state.session.task_id or "").strip():
@@ -1364,24 +1454,15 @@ def build_chat_tools(state: ChatControlState) -> list:
             hint,
             {"tool": "associate_elements", "payload": payload},
             emit=state.emit,
+            expected_tool="associate_elements",
         )
-        if not result:
-            return _obs_fail(
-                missing_slots=["chapter_key"],
-                reply_hint="无法打开关联要素，请先选定章节。",
-                observation=(
-                    "associate_elements 失败：无可用章节上下文。"
-                    "请先绑定写作任务并传入 chapter_key，或改调 open_element_library。"
-                ),
-            )
-        reply, cards, _ = result
-        _set_cards(state, cards)
-        return _dump(
-            {
-                "ok": True,
-                "reply_hint": reply,
-                "observation": "已打开关联要素面板。用户勾选确认后即完成关联。",
-            }
+        return _dump_writing_control_result(
+            state,
+            result,
+            expected_tool="associate_elements",
+            ok_observation="已打开关联要素面板。用户勾选确认后即完成关联。",
+            fail_hint="无法打开关联要素，请先选定章节。",
+            fail_slots=["chapter_key"],
         )
 
     @tool
@@ -1396,26 +1477,29 @@ def build_chat_tools(state: ChatControlState) -> list:
         if not isinstance(payload, dict):
             payload = {}
         hint = str(state.last_user_message or payload.get("hint") or "").strip()
+        hop = _hop_if_other_writing_control(state, "dissociate_chapter_element", hint)
+        if hop:
+            return hop
         result = apply_writing_control_classification(
             state.home,
             state.session,
             hint,
             {"tool": "dissociate_chapter_element", "payload": payload},
             emit=state.emit,
+            expected_tool="dissociate_chapter_element",
         )
-        if not result:
-            return _obs_fail(
-                reply_hint="请说明要取消哪一章、哪个要素的关联。",
-                observation="dissociate_chapter_element 需要 task 上下文与要素名/章节。",
-            )
-        reply, cards, _ = result
-        _set_cards(state, cards)
-        obs = (
+        ok_obs = (
             "已挂起要素/章节选项，等用户点选。"
-            if cards
+            if result and result[1]
             else "已取消关联；要素仍保留在本文档。"
         )
-        return _dump({"ok": True, "reply_hint": reply, "observation": obs})
+        return _dump_writing_control_result(
+            state,
+            result,
+            expected_tool="dissociate_chapter_element",
+            ok_observation=ok_obs,
+            fail_hint="请说明要取消哪一章、哪个要素的关联。",
+        )
 
     @tool
     def remove_document_element(payload_json: str = "") -> str:
@@ -1429,26 +1513,60 @@ def build_chat_tools(state: ChatControlState) -> list:
         if not isinstance(payload, dict):
             payload = {}
         hint = str(state.last_user_message or payload.get("hint") or "").strip()
+        hop = _hop_if_other_writing_control(state, "remove_document_element", hint)
+        if hop:
+            return hop
         result = apply_writing_control_classification(
             state.home,
             state.session,
             hint,
             {"tool": "remove_document_element", "payload": payload},
             emit=state.emit,
+            expected_tool="remove_document_element",
         )
-        if not result:
-            return _obs_fail(
-                reply_hint="请说明要删哪个要素。",
-                observation="remove_document_element 需要写作任务与要素名；同名多个时会挂澄清卡。",
-            )
-        reply, cards, _ = result
-        _set_cards(state, cards)
-        obs = (
+        ok_obs = (
             "同名要素有多个，已挂选项请用户确认。"
-            if cards
+            if result and result[1]
             else "已从本文档删除要素；要素库未动。"
         )
-        return _dump({"ok": True, "reply_hint": reply, "observation": obs})
+        return _dump_writing_control_result(
+            state,
+            result,
+            expected_tool="remove_document_element",
+            ok_observation=ok_obs,
+            fail_hint="请说明要删哪个要素。",
+        )
+
+    @tool
+    def collect_to_element_library(payload_json: str = "") -> str:
+        """把本文档已有要素收入个人要素库（不是新建章节要素，也不是打开要素库浏览）。"""
+        from report_writing.chat.writing_control_route import apply_writing_control_classification
+
+        try:
+            payload = json.loads(payload_json or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        hint = str(state.last_user_message or payload.get("hint") or "").strip()
+        hop = _hop_if_other_writing_control(state, "collect_to_element_library", hint)
+        if hop:
+            return hop
+        result = apply_writing_control_classification(
+            state.home,
+            state.session,
+            hint,
+            {"tool": "collect_to_element_library", "payload": payload},
+            emit=state.emit,
+            expected_tool="collect_to_element_library",
+        )
+        return _dump_writing_control_result(
+            state,
+            result,
+            expected_tool="collect_to_element_library",
+            ok_observation="已处理收入要素库。",
+            fail_hint="无法收入要素库，请说明要收入哪个要素。",
+        )
 
     @tool
     def associate_element_knowledge(payload_json: str = "") -> str:
@@ -1471,12 +1589,15 @@ def build_chat_tools(state: ChatControlState) -> list:
             "查看要素",
             {"tool": "open_element_library", "payload": {}},
             emit=state.emit,
+            expected_tool="open_element_library",
         )
-        if not result:
-            return _dump({"ok": False, "reply_hint": "无法打开要素库。"})
-        reply, cards, _ = result
-        _set_cards(state, cards)
-        return _dump({"ok": True, "reply_hint": reply})
+        return _dump_writing_control_result(
+            state,
+            result,
+            expected_tool="open_element_library",
+            ok_observation="已打开要素库。",
+            fail_hint="无法打开要素库。",
+        )
 
     @tool
     def open_blueprint_library() -> str:
@@ -1489,12 +1610,15 @@ def build_chat_tools(state: ChatControlState) -> list:
             "查看蓝本库",
             {"tool": "open_blueprint_library", "payload": {}},
             emit=state.emit,
+            expected_tool="open_blueprint_library",
         )
-        if not result:
-            return _dump({"ok": False, "reply_hint": "无法打开蓝本库。"})
-        reply, cards, _ = result
-        _set_cards(state, cards)
-        return _dump({"ok": True, "reply_hint": reply})
+        return _dump_writing_control_result(
+            state,
+            result,
+            expected_tool="open_blueprint_library",
+            ok_observation="已打开蓝本库。",
+            fail_hint="无法打开蓝本库。",
+        )
 
     @tool
     def open_knowledge() -> str:
@@ -1507,17 +1631,15 @@ def build_chat_tools(state: ChatControlState) -> list:
             "查看资料库",
             {"tool": "open_knowledge", "payload": {}},
             emit=state.emit,
+            expected_tool="open_knowledge",
         )
-        if not result:
-            return _dump(
-                {
-                    "ok": False,
-                    "reply_hint": "资料库是放资料包的地方。请打开侧栏「资料库」管理资料包；要素「文件」可上传并手动解析。",
-                }
-            )
-        reply, cards, _ = result
-        _set_cards(state, cards)
-        return _dump({"ok": True, "reply_hint": reply})
+        return _dump_writing_control_result(
+            state,
+            result,
+            expected_tool="open_knowledge",
+            ok_observation="已打开资料库。",
+            fail_hint="资料库是放资料包的地方。请打开侧栏「资料库」管理资料包；要素「文件」可上传并手动解析。",
+        )
 
     @tool
     def retry_chapter(payload_json: str) -> str:
@@ -1535,24 +1657,16 @@ def build_chat_tools(state: ChatControlState) -> list:
         # UI 点选重试可带 user_action；口语触发时若仍缺入口则硬拦
         oral_retry = not (state.user_action or "").strip()
         if oral_retry and focus_needs_entry_path(state.session):
-            from report_writing.chat.intent_clarify import build_entry_path_clarify
-
-            reply, cards = build_entry_path_clarify(
-                state.session,
-                message=state.last_user_message or "",
-                invoke=state.invoke,
-                home=state.home,
-                emit=state.emit,
-                after_doc_name_confirm=True,
-                apply_plan=False,
-            )
-            _set_cards(state, cards)
             return _obs_fail(
                 missing_slots=["writing_path"],
-                reply_hint=reply or "请先选择写作方式（有蓝本 / 无蓝本），再重试章节。",
+                reply_hint="请先选择写作方式（有蓝本 / 无蓝本），再重试章节。",
                 observation=(
                     "retry_chapter 被拦：焦点仍缺文档入口 writing_path。"
-                    "先 ask_entry_path，再 retry_chapter。"
+                    "请先 ask_entry_path，不要在 retry_chapter 里挂入口卡或开写。"
+                ),
+                suggested_next_tool="ask_entry_path",
+                suggested_args=_suggested_args_for_tool(
+                    "ask_entry_path", {}, state.last_user_message or ""
                 ),
                 task_id=state.session.task_id or "",
             )
@@ -2637,6 +2751,7 @@ def build_chat_tools(state: ChatControlState) -> list:
         associate_elements,
         dissociate_chapter_element,
         remove_document_element,
+        collect_to_element_library,
         associate_element_knowledge,
         open_element_library,
         open_blueprint_library,
@@ -2742,6 +2857,7 @@ _UI_SHORTCUT_ACTIONS = frozenset(
         "configure_chapter",
         "add_chapter_element",
         "associate_elements",
+        "collect_to_element_library",
         "associate_element_knowledge",
         "open_element_library",
         "open_blueprint_library",
@@ -2896,6 +3012,7 @@ def _tool_args_for_ui_action(action: str, payload: dict[str, Any]) -> dict[str, 
         "configure_chapter",
         "add_chapter_element",
         "associate_elements",
+        "collect_to_element_library",
         "associate_element_knowledge",
         "retry_chapter",
         "retry_search_chapter",

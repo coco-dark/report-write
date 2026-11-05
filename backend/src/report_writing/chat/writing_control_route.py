@@ -2,6 +2,7 @@
 
 `apply_writing_control_classification` / `classify_writing_message` 供 Tool 与单测复用；
 勿再以认领路由挂回 `run_chat_control`。
+绑定 `expected_tool` 时若分类结果是另一个 Tool，只返回 `suggested_next_tool` 事件，不执行。
 """
 
 from __future__ import annotations
@@ -438,8 +439,29 @@ def apply_writing_control_classification(
     data: dict[str, Any],
     *,
     emit: EmitFn | None = None,
+    expected_tool: str | None = None,
 ) -> tuple[str, list[Any], list[dict[str, Any]]] | None:
-    tool = str(data.get("tool") or "").strip()
+    requested = str(data.get("tool") or "").strip()
+    bound = (expected_tool or requested).strip()
+    if expected_tool:
+        expected = expected_tool.strip()
+        if requested and requested != expected:
+            payload = dict(data.get("payload") or {})
+            return (
+                f"本轮绑定的是 {expected}，分类结果是 {requested}。"
+                f"请改调 {requested}；本函数不执行其它总控 Tool。",
+                [],
+                [
+                    {
+                        "type": "suggested_next_tool",
+                        "tool": requested,
+                        "args": payload,
+                    }
+                ],
+            )
+        tool = bound
+    else:
+        tool = requested
     payload = dict(data.get("payload") or {})
     from report_writing.chat.session_documents import enrich_payload_with_message_document
 
@@ -532,7 +554,7 @@ def apply_writing_control_classification(
         from report_writing.chat.actions import _action_add_chapter_element
         from report_writing.chat.helpers import _emit_process
 
-        # 收录 vs 加要素：由分类器选 collect_to_element_library，不再用口语正则改道
+        # 收录 vs 加要素：分类器另选 collect 时由调用方 hop，本分支只执行加要素
         merged = dict(_structural_chapter_hint(message))
         for key, value in payload.items():
             if value not in (None, "", [], {}):
@@ -610,15 +632,17 @@ def apply_writing_control_classification(
 
     return None
 
-def suggest_tool_instead_of_submit_points(
+def suggest_other_writing_control_tool(
     home: Path,
     session: ChatSession,
     message: str,
     *,
+    expected_tool: str,
     invoke: Callable[[str, str], str] | None = None,
     intent_invoke: Callable[[str, str], str] | None = None,
 ) -> dict[str, Any] | None:
-    """submit_points 被误调时：只建议改调哪一个 Tool，不在本函数里执行。"""
+    """分类器点名其它写作控制 Tool 时只建议改调，不执行。"""
+    expected = (expected_tool or "").strip()
     data = classify_writing_message(
         home, session, message, invoke=invoke, intent_invoke=intent_invoke
     )
@@ -635,9 +659,28 @@ def suggest_tool_instead_of_submit_points(
             pl = steps[0].get("payload")
             if isinstance(pl, dict):
                 payload = pl
-    if not tool or tool in {"submit_points", "none"}:
+    if not tool or tool in {expected, "none"}:
         return None
     return {"tool": tool, "payload": payload}
+
+
+def suggest_tool_instead_of_submit_points(
+    home: Path,
+    session: ChatSession,
+    message: str,
+    *,
+    invoke: Callable[[str, str], str] | None = None,
+    intent_invoke: Callable[[str, str], str] | None = None,
+) -> dict[str, Any] | None:
+    """submit_points 被误调时：只建议改调哪一个 Tool，不在本函数里执行。"""
+    return suggest_other_writing_control_tool(
+        home,
+        session,
+        message,
+        expected_tool="submit_points",
+        invoke=invoke,
+        intent_invoke=intent_invoke,
+    )
 
 
 def reroute_submit_points_if_needed(

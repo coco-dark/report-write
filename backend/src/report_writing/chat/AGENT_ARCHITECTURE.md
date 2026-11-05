@@ -73,7 +73,7 @@ handle_chat → run_chat_control
 | 项 | 做什么 | 状态 |
 |----|--------|------|
 | B1 | `clarify_llm.py` 作为窄分类器入口；`intent_llm` 兼容 re-export | 已做 |
-| B2 | Tool 内缺参 → `missing_slots` observation，少调分类器选 Tool | `submit_points` 误调改为 suggested_next_tool；写作 Tool 仍有补槽 LLM |
+| B2 | Tool 内缺参 → `missing_slots` observation，少调分类器选 Tool | `submit_points` / 写作控制误调改为 `suggested_next_tool`；写作 Tool 仍可补本 Tool 槽 |
 | B3 | 口语主路径不再 `dispatch_suggested_onboarding_tools`；Agent 读 `suggested_next_tools` | 已做（函数仍供 force_new 同轮续跑） |
 | B4 | `entry_intent` / 入职 path 有 invoke 时不静默 lexical | 已做 |
 | B5 | 资料包 / 待补要素按钮绑成同名 Tool | 已做 |
@@ -98,13 +98,13 @@ handle_chat → run_chat_control
 | P1 | 入职链：`execute_clarify_spec` 去掉 skip+outline 实跑；`continue_after_new_document` 只 prepare；生产路径禁止 `apply_plan=True` | 已做 |
 | P2 | 无蓝本链：`skip_blueprint` 不再调 `_collect_freeform_meta`；定名走 `set_session_meta`；目录 / 要点 / 开写各一跳 | 已做 |
 | P3 | 蓝本 / 向导：子代理去掉 `is_create_blueprint_intent` 自动 begin；`resolve_wizard_action` 只补本 Tool 槽 | 已做 |
-| P4 | 写作中：`add_elements` / associate / retry 可填本 Tool 槽，不得在本函数改调另一个总控 Tool | 待做 |
+| P4 | 写作中：`add_elements` / associate / retry 可填本 Tool 槽，不得在本函数改调另一个总控 Tool | 已做 |
 | P5 | 黄金路径从 `handle_chat` 断言 Tool 名与阶段；离线脚本只跟 `suggested_next_tools`；JSON 计划夹具不动 | 待做 |
 | P6 | `wants_*` 仅测试别名；`intent_*` 文件改名放到行为稳定之后 | 待做 |
 
 P1 必须覆盖：口语「写一份…」→ 生成目录；点选自动大纲 / 用模版 / 创建蓝本；「再写一份」隔离后由 Agent hop；shortcut 在零 ToolMessage 时仍保 UX。
 
-P0–P3 已落地。下一步 **P4**（写作中控制缺槽不换 Tool）。
+P0–P4 已落地。下一步 **P5**（`handle_chat` 黄金路径）。
 
 ### Phase C
 
