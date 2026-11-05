@@ -430,7 +430,7 @@ def test_explicit_select_can_bind_matched_blueprint(tmp_path: Path):
     )
     session = get_session(tmp_path, resp.session_id)
     assert session is not None
-    # 显式「就用」允许自动订上唯一对口候选
+    # 显式「就用」：match 只出候选，总控再调 select_blueprint
     assert (session.blueprint_id or "").strip() == "bp_only"
 
 

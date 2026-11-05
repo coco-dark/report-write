@@ -429,3 +429,34 @@ def test_agent_user_text_exposes_suggested_next_tools(tmp_path: Path):
     )
     assert body.get("suggested_next_tools")
     assert "suggested_next_tools" in str(body.get("routing_hint") or "")
+
+
+def test_materials_pack_and_supplement_tools_are_bound(tmp_path: Path):
+    session = ChatSession(id="s-mp-bound")
+    state = ChatControlState(home=tmp_path, session=session)
+    names = {t.name for t in build_chat_tools(state)}
+    assert "materials_pack_skip" in names
+    assert "materials_pack_use" in names
+    assert "check_writing_supplements" in names
+    assert "skip_writing_supplement_check" in names
+
+
+def test_handle_chat_materials_pack_skip_via_agent(tmp_path: Path):
+    from report_writing.chat_orchestrator import handle_chat
+    from report_writing.domain.models import ChatRequest, WritingTask
+    from report_writing.services.chat_session import load_or_create
+    from report_writing.services.store import TaskStore
+
+    TaskStore(tmp_path / "tasks" / "w-mp").save(WritingTask(id="w-mp", title="资料"))
+    resp = handle_chat(
+        tmp_path,
+        ChatRequest(
+            action="materials_pack_skip",
+            action_payload={"task_id": "w-mp"},
+        ),
+        invoke=lambda _s, _u: "{}",
+    )
+    session = load_or_create(tmp_path, resp.session_id)
+    skipped = (session.freeform or {}).get("materials_pack_skipped_tasks") or {}
+    assert skipped.get("w-mp") or (session.freeform or {}).get("materials_pack_skipped")
+    assert "资料包" in (resp.reply or "") or "不用" in (resp.reply or "")

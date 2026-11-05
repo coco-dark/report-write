@@ -36,34 +36,7 @@ def finish_blueprint_match(
     emit: EmitFn | None = None,
 ) -> tuple[str, list[Any]]:
     from report_writing.chat.cards import _blueprint_list_card, _skip_blueprint_card
-    from report_writing.chat.helpers import _emit_process
-    from report_writing.chat.intent_router import allows_agent_blueprint_select, pick_auto_blueprint_id, touch_session_plan
-    from report_writing.chat_orchestrator import _action_select_blueprint
-
-    auto_id = ""
-    if allows_agent_blueprint_select(message=message, user_action="", invoke=invoke, session=session):
-        auto_id = pick_auto_blueprint_id(message, matches, invoke=invoke)
-    if auto_id:
-        _emit_process(emit, "已按你的描述选定蓝本，正在准备章节…")
-        reply, cards = _action_select_blueprint(home, session, {"blueprint_id": auto_id})
-        touch_session_plan(
-            session,
-            goal="write_with_blueprint",
-            blueprint_id=auto_id,
-            auto_selected=True,
-        )
-        title = next((getattr(m, "title", "") for m in matches if getattr(m, "id", "") == auto_id), auto_id)
-        hint = f"好，我已经帮你订上「{title or auto_id}」了。{reply.strip()}".strip()
-        from report_writing.chat.session_documents import append_doc_name_clarify_if_needed
-
-        hint, cards = append_doc_name_clarify_if_needed(
-            session,
-            message=message,
-            reply=hint,
-            cards=cards,
-            invoke=invoke,
-        )
-        return hint, cards
+    from report_writing.chat.intent_router import touch_session_plan
 
     if matches:
         session.phase = ChatPhase.BLUEPRINT_SELECT.value
@@ -105,6 +78,7 @@ def finish_blueprint_match(
 
     from report_writing.chat.entry_intent import extract_wizard_title_hint, is_create_blueprint_intent
     from report_writing.chat.entry_sample import guess_report_title_from_message, user_brings_own_sample_document
+    from report_writing.chat.helpers import _emit_process
     from report_writing.chat.resource_actions import _action_blueprint_wizard, _begin_blueprint_wizard
 
     if user_brings_own_sample_document(

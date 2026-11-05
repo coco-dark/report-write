@@ -76,6 +76,8 @@ handle_chat → run_chat_control
 | B2 | Tool 内缺参 → `missing_slots` observation，少调分类器选 Tool | 改名等已做；写作 Tool 仍有补槽 LLM |
 | B3 | 口语主路径不再 `dispatch_suggested_onboarding_tools`；Agent 读 `suggested_next_tools` | 已做（函数仍供 force_new 同轮续跑） |
 | B4 | `entry_intent` / 入职 path 有 invoke 时不静默 lexical | 已做 |
+| B5 | 资料包 / 待补要素按钮绑成同名 Tool | 已做 |
+| B6 | `match_blueprints` 不再代选；明确选用走 `select_blueprint` | 已做 |
 
 ### Phase C
 

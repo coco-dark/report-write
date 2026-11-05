@@ -290,56 +290,11 @@ def _finish_blueprint_match(
     agent_reply: str,
     matches: list,
 ) -> str:
-    """匹配蓝本：仅用户明确点名时代选，否则出列表让用户选用。"""
-    from report_writing.chat.intent_router import allows_agent_blueprint_select, pick_auto_blueprint_id, touch_session_plan
-    from report_writing.chat_orchestrator import _action_select_blueprint, _blueprint_list_card, _skip_blueprint_card
+    """匹配蓝本：只出候选，不代选。明确选用由 Agent 再调 select_blueprint。"""
+    from report_writing.chat.intent_router import touch_session_plan
+    from report_writing.chat_orchestrator import _blueprint_list_card, _skip_blueprint_card
 
     msg = message or state.last_user_message
-    auto_id = ""
-    if allows_agent_blueprint_select(
-        message=msg,
-        user_action=state.user_action or "",
-        invoke=state.intent_invoke or state.invoke,
-        session=state.session,
-    ):
-        auto_id = pick_auto_blueprint_id(msg, matches, invoke=state.intent_invoke or state.invoke)
-    if auto_id:
-        _emit_process(state, "已按你的描述选定蓝本，正在准备章节…")
-        reply, cards = _action_select_blueprint(state.home, state.session, {"blueprint_id": auto_id})
-        _set_cards(state, cards)
-        touch_session_plan(
-            state.session,
-            goal="write_with_blueprint",
-            blueprint_id=auto_id,
-            auto_selected=True,
-        )
-        title = next((getattr(m, "title", "") for m in matches if getattr(m, "id", "") == auto_id), auto_id)
-        hint = (
-            f"好，我已经帮你订上「{title or auto_id}」了。"
-            f"{reply.strip()}"
-        ).strip()
-        from report_writing.chat.session_documents import append_doc_name_clarify_if_needed, is_writing_document_named
-
-        hint, cards = append_doc_name_clarify_if_needed(
-            state.session,
-            message=msg,
-            reply=hint,
-            cards=cards,
-            invoke=state.intent_invoke or state.invoke,
-        )
-        _set_cards(state, cards)
-        return _dump(
-            {
-                "ok": True,
-                "reply_hint": hint,
-                "matched": len(matches),
-                "auto_selected": True,
-                "blueprint_id": auto_id,
-                "phase": state.session.phase,
-                "needs_doc_name": not is_writing_document_named(state.session),
-            }
-        )
-
     if matches:
         state.session.phase = ChatPhase.BLUEPRINT_SELECT.value
         cards = [_blueprint_list_card(matches), _skip_blueprint_card()]
@@ -378,18 +333,103 @@ def _finish_blueprint_match(
             goal="pick_blueprint",
             candidates=[getattr(m, "id", "") for m in matches],
         )
+        ids = [str(getattr(m, "id", "") or "").strip() for m in matches]
+        ids = [i for i in ids if i]
         return _dump(
             {
                 "ok": True,
                 "reply_hint": hint,
                 "matched": len(matches),
-                "ids": [m.id for m in matches],
+                "ids": ids,
+                "candidate_ids": ids,
                 "awaiting_user_choice": True,
                 "needs_doc_name": not is_writing_document_named(state.session),
+                "observation": (
+                    f"匹配到 {len(ids)} 份候选 {ids}。"
+                    "禁止在本 Tool 内代选。"
+                    "用户明确点名或说「就用这份」且仅一份时，下一步 select_blueprint(blueprint_id)；"
+                    "否则等点「选用」。"
+                ),
             }
         )
 
     return _ask_path_after_no_blueprint_match(state, message or state.last_user_message or "")
+
+
+_PAYLOAD_JSON_ACTIONS = frozenset(
+    {
+        "check_writing_supplements",
+        "skip_writing_supplement_check",
+        "dismiss_writing_supplement",
+    }
+)
+
+
+def _bind_payload_json_tools(state: ChatControlState, names: list[str]) -> list:
+    """把 dispatch / 资料包动作绑成同名 LangChain Tool（点选走 Agent）。"""
+    from langchain_core.tools import StructuredTool
+    from report_writing.chat.materials_pack_gate import (
+        MATERIALS_PACK_ACTIONS,
+        apply_materials_pack_choice,
+    )
+
+    tools = []
+    for name in names:
+
+        def _run(payload_json: str = "{}", *, _name: str = name) -> str:
+            _tool_begin(state, _name)
+            try:
+                payload = json.loads(payload_json or "{}")
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict):
+                payload = {}
+            if _name in MATERIALS_PACK_ACTIONS:
+                try:
+                    reply, cards = apply_materials_pack_choice(
+                        state.home, state.session, _name, payload, emit=state.emit
+                    )
+                except ValueError as error:
+                    return _dump({"ok": False, "reply_hint": str(error)})
+                _set_cards(state, cards)
+                return _dump(
+                    {
+                        "ok": True,
+                        "reply_hint": reply,
+                        "observation": f"已执行 {_name}。",
+                    }
+                )
+            from report_writing.chat.intent_dispatch import execute_dispatch_tool
+
+            hit = execute_dispatch_tool(
+                state.home,
+                state.session,
+                {"tool": _name, "args": dict(payload)},
+                str(state.last_user_message or ""),
+                emit=state.emit,
+                invoke=state.invoke,
+            )
+            if hit is None:
+                return _dump({"ok": False, "reply_hint": f"无法执行 {_name}。"})
+            reply, cards, events = hit
+            _set_cards(state, cards)
+            state.events.extend(events or [])
+            return _dump(
+                {
+                    "ok": True,
+                    "reply_hint": reply,
+                    "observation": f"已执行 {_name}。",
+                }
+            )
+
+        tools.append(
+            StructuredTool.from_function(
+                func=_run,
+                name=name,
+                description=name,
+            )
+        )
+    return tools
 
 
 def build_chat_tools(state: ChatControlState) -> list:
@@ -529,15 +569,21 @@ def build_chat_tools(state: ChatControlState) -> list:
         _set_cards(state, cards)
         types = _card_types(cards)
         matched_n = 0
+        ids: list[str] = []
         for c in cards or []:
             if getattr(c, "type", "") == "blueprint_list":
                 items = (getattr(c, "payload", None) or {}).get("items") or []
                 if isinstance(items, list):
                     matched_n = len(items)
+                    ids = [
+                        str(item.get("id") or "").strip()
+                        for item in items
+                        if isinstance(item, dict) and str(item.get("id") or "").strip()
+                    ]
         obs_parts = [
-            f"match_blueprints 完成：候选约 {matched_n} 份。",
+            f"match_blueprints 完成：候选约 {matched_n} 份 {ids}。",
             (
-                "请用户点选或 select_blueprint(blueprint_id=…)。"
+                "禁止代选。用户明确点名或「就用这份」且仅一份时，下一步 select_blueprint(blueprint_id)；否则等点选用。"
                 if matched_n
                 else "无对口蓝本：可 ask_entry_path / begin_blueprint_wizard(explicit_create=true) / skip_blueprint。"
             ),
@@ -552,6 +598,9 @@ def build_chat_tools(state: ChatControlState) -> list:
                 "ok": True,
                 "reply_hint": reply,
                 "matched": matched_n,
+                "ids": ids,
+                "candidate_ids": ids,
+                "awaiting_user_choice": matched_n > 0,
                 "observation": " ".join(obs_parts),
                 "awaiting_path_choice": "intent_clarify" in types or matched_n == 0,
                 "needs_doc_name": needs_name,
@@ -2440,6 +2489,14 @@ def build_chat_tools(state: ChatControlState) -> list:
     from report_writing.agents.resource_tools import build_export_resource_tools
 
     tools.extend(build_export_resource_tools(state))
+    from report_writing.chat.materials_pack_gate import MATERIALS_PACK_ACTIONS
+
+    tools.extend(
+        _bind_payload_json_tools(
+            state,
+            sorted(MATERIALS_PACK_ACTIONS | _PAYLOAD_JSON_ACTIONS),
+        )
+    )
     from report_writing.chat.intent_router import user_chose_skip_blueprint
 
     if user_chose_skip_blueprint(state.session):
@@ -2691,6 +2748,10 @@ def _tool_args_for_ui_action(action: str, payload: dict[str, Any]) -> dict[str, 
             "option_label": str(payload.get("option_label") or "").strip(),
             "clarify_id": str(payload.get("clarify_id") or "").strip(),
         }
+    from report_writing.chat.materials_pack_gate import MATERIALS_PACK_ACTIONS
+
+    if action in MATERIALS_PACK_ACTIONS or action in _PAYLOAD_JSON_ACTIONS:
+        return {"payload_json": json.dumps(payload or {}, ensure_ascii=False)}
     return {}
 
 
@@ -3298,6 +3359,20 @@ class ChatControlScriptModel(ScriptedChatModel):
                     ).strip():
                         return self.finish(str(data.get("reply_hint") or "").strip())
                     return self.call("ask_entry_path", {"message": msg})
+                if (
+                    tool_name == "match_blueprints"
+                    and data.get("ok") is True
+                    and data.get("awaiting_user_choice")
+                ):
+                    ids = [
+                        str(x).strip()
+                        for x in (data.get("ids") or data.get("candidate_ids") or [])
+                        if str(x).strip()
+                    ]
+                    if len(ids) == 1 and any(
+                        k in msg for k in ("就用", "选用这份", "用这份", "用这个蓝本")
+                    ):
+                        return self.call("select_blueprint", {"blueprint_id": ids[0]})
                 if data.get("ok") is False and "doc_name" in (data.get("missing_slots") or []):
                     from report_writing.chat.session_documents import quick_title_from_write_message
 
@@ -3312,10 +3387,6 @@ class ChatControlScriptModel(ScriptedChatModel):
                 break
 
         if action:
-            from report_writing.chat.materials_pack_gate import MATERIALS_PACK_ACTIONS
-
-            if action in MATERIALS_PACK_ACTIONS:
-                return self.finish("")
             return self.call(
                 _ui_action_tool_name(action),
                 _tool_args_for_ui_action(action, payload) or {},
@@ -3470,6 +3541,11 @@ class ChatControlScriptModel(ScriptedChatModel):
                         "title_hint": tip,
                     },
                 )
+            from report_writing.chat.session_documents import message_requests_list_blueprints
+
+            if message_requests_list_blueprints(msg):
+                return self.call("list_blueprints", {"q": ""})
+
             from report_writing.chat.intent_router import message_requests_blueprint_match
 
             wants_write = message_requests_blueprint_match(msg) or any(
