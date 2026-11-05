@@ -277,6 +277,10 @@ def try_run_oral_multi_intent(
 
     高置信（含单 Tool）执行；缺槽挂卡；不确定多轮确认；否则 None 交 ReAct。
     """
+    from report_writing.infra.config_settings import intent_plan_enabled
+
+    if not intent_plan_enabled():
+        return None
     del min_tools
     from report_writing.chat.intent_turn_plan import apply_turn_plan
 

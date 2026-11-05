@@ -15,20 +15,11 @@ from typing import Any, Callable
 
 _log = logging.getLogger(__name__)
 
+from report_writing.chat.tool_registry import WIZARD_COMMAND_HINTS, WRITING_CONTROL_TOOLS
+
 InvokeFn = Callable[[str, str], str]
 
-WIZARD_COMMANDS: dict[str, str] = {
-    "submit_meta": "提交蓝本名称并创建蓝本（当前在「填写名称」步，用户给出了名称）",
-    "mark_upload_done": "用户表示样板已上传完成，进入「提取目录」步（与点上传完成同类）",
-    "re_extract_outline": "从已上传样板识别、生成或修正章节目录（提取/重新提取目录）",
-    "re_upload_sample": "重新上传或更换 Word/PDF 样板文件",
-    "go_outline_confirm": "进入「确认目录」步骤，在拓扑图里核对章节（尚未最终确认）",
-    "confirm_outline": "用户确认目录无误（只确认目录，不自动学习；与点「确认目录」同类）",
-    "go_study": "进入分析要点并开始分析全部章节写作要点（与点「开始分析全部」同类；用户说「开始学习」也算）；指定章节范围请用 re_study_chapters",
-    "re_study_chapters": "对指定章节重新分析写作要点（如第1-2章、把第三章再分析一遍；用户说「学习/再学/重新分析本章」也算）。未指定方式时后端会追问：根据原文 / 依据样本或自动分析",
-    "abandon_wizard": "不要当前这份蓝本、退出向导、换别的蓝本或改用不绑蓝本写（不是跳过某一步）",
-    "none": "与当前向导无关、闲聊，或信息不足需要追问",
-}
+WIZARD_COMMANDS: dict[str, str] = WIZARD_COMMAND_HINTS
 
 _MIN_CONFIDENCE = 0.52
 
@@ -353,21 +344,6 @@ def resolve_wizard_command(
     return str(hit.get("command") or "").strip() or None
 
 
-WRITING_CONTROL_TOOLS: dict[str, str] = {
-    "add_chapter_element": "为某一章新建或配置写作要素草稿（键值对、固定文案、文件、引用槽位、引用其它要素结果等）",
-    "collect_to_element_library": "把本任务里已有的要素收入个人要素库（不是新建章节要素，也不是打开要素库浏览）",
-    "associate_elements": "把已有要素关联到某章（打开关联面板勾选，不是新建）",
-    "dissociate_chapter_element": "取消某章与要素的关联（不删要素、不删要素库）；同名多个时先澄清",
-    "remove_document_element": "从当前写作文档删除要素（含各章关联）；不删除个人要素库",
-    "open_element_library": "用户要查看/打开要素库（浏览个人要素，不是给章节加要素）",
-    "open_blueprint_library": "用户要查看/浏览蓝本库（管理页，不是 match 选型、也不是 list 选用）",
-    "open_knowledge": "用户要查看/打开资料库（资料库是放资料包的地方；兼容旧称「知识库」）",
-    "remember_writing_goal": "记住用户身份、岗位、项目背景等后续写作都要遵守的约束",
-    "submit_points": "用户在补充各章「怎么写」的写作要点（通常较长、或明确在谈写法/结构）",
-    "none": "其它意图：由总控自行选工具、澄清或闲聊",
-}
-
-
 def classify_writing_control_llm(
     message: str,
     *,
@@ -386,6 +362,7 @@ def classify_writing_control_llm(
 
     allowed = [k for k in WRITING_CONTROL_TOOLS if k != "none"]
     from report_writing.chat.intent_action_chain import MULTI_ACTION_JSON_HINT
+    from report_writing.infra.config_settings import intent_tool_catalog_in_prompt
 
     dialogue_lines = []
     for item in (dialogue_tail or [])[-8:]:
@@ -410,9 +387,12 @@ def classify_writing_control_llm(
         "多工具时后端按 remember_writing_goal → add_chapter_element → submit_points 校正；"
         "open_* 可与其它工具并列。\n"
         "\n"
-        "## 工具含义\n"
-        + _intent_lines(WRITING_CONTROL_TOOLS)
-        + "\n\n"
+    )
+    if intent_tool_catalog_in_prompt():
+        system += "## 工具含义\n" + _intent_lines(WRITING_CONTROL_TOOLS) + "\n\n"
+    else:
+        system += "各 tool 的调用语义以 LangChain 总控 Tool 的 description 为准；此处只列 id。\n\n"
+    system += (
         "## payload 规则\n"
         "- add_chapter_element：从原话提取 kind/name/category/tags/purpose/kv_pairs/query/value/prompt/"
         "ref_element_name/chapter_key_hint；缺省 kind=kv。"
@@ -549,7 +529,18 @@ def _invoke_control_plan_json(
         if line:
             dialogue_lines.append(f"{role}: {line}")
 
-    system = (
+    from report_writing.infra.config_settings import intent_tool_catalog_in_prompt
+    from report_writing.chat.plan_classifier_prompt import turn_plan_system_prompt
+
+    if not intent_tool_catalog_in_prompt():
+        system = turn_plan_system_prompt(
+            allowed,
+            freeform_path=freeform_path,
+            include_tool_catalog=False,
+            multi_action_hint=MULTI_ACTION_JSON_HINT,
+        )
+    if intent_tool_catalog_in_prompt():
+        system = (
         "你是对话写文档的统一意图调度器（唯一大脑）。根据本轮、近期对话与会话快照选出 1～4 个 Tool；"
         "说法不固定，按意思判断，不要靠固定句式。"
         "一句可含多个意图（定名+匹配+资料包+开写等），须全部列入 tools，不要只返回第一个。\n"
@@ -658,37 +649,37 @@ def _invoke_control_plan_json(
         "范围未说清 → missing=[write_scope] 或 study_scope；要素/资料包未点名 → missing=[element_id]/[pack_id]。\n"
         "禁止低置信静默 start_writing / 选蓝本 / 删要素 / 收录入库。\n"
         "写作中途同样适用：改名、开写、确认章、加要素、资料包，都按 slots/tools/missing 输出，勿只服务开场。\n"
-    )
-    if freeform_path:
+        )
+        if freeform_path:
+            system += (
+                "\n"
+                "## 当前已走无蓝本\n"
+                "禁止 match/list/select/begin 蓝本与 re_study_chapters；"
+                "学习/分析本章/生成写作信息 → generate_freeform_points；"
+                "定题目/改名 → set_session_meta（必须 args.title=新名，可选 message=原话）；"
+                "目录 → submit_outline。\n"
+            )
         system += (
             "\n"
-            "## 当前已走无蓝本\n"
-            "禁止 match/list/select/begin 蓝本与 re_study_chapters；"
-            "学习/分析本章/生成写作信息 → generate_freeform_points；"
-            "定题目/改名 → set_session_meta（必须 args.title=新名，可选 message=原话）；"
-            "目录 → submit_outline。\n"
+            "## 示例\n"
+            "帮我写2.3章节 → select_write_chapters，chapter_sequences=[\"2.3\"]。\n"
+            "为2.2添加文件要素 检索词为… → add_chapter_element，kind=file。\n"
+            "查看资料库 → open_knowledge；列出资料包 → materials_pack_list；"
+            "新建资料包叫变电站资料包 → materials_pack_create。\n"
+            "改个名字 2026个人述职报告 / 改名为年度总结 → set_session_meta(title=新名)，"
+            "args 带 message=原话、title=新名；不要 focus_document。\n"
+            "改名叫年度总结然后开始写 → set_session_meta + select_write_chapters/start_writing（已绑蓝本时）。\n"
+            "开写前查待补要素 → check_writing_supplements；用户说先写再说/不补了 → skip_writing_supplement_check。\n"
+            "新建资料包叫XX再继续写 → materials_pack_create + 后续写作 Tool。\n"
+            "已绑蓝本「把刚才那章写了」→ select_write_chapters；"
+            "未绑「帮我出个安全预评价」→ missing 含 writing_path 或 ask_intent；"
+            "「这一章」没说写还是学 → uncertain=true 或 ask_intent；"
+            "看看有哪些要素 → open_element_library；"
+            "收入要素库 → collect_to_element_library；"
+            "看看有哪些蓝本 → list_blueprints；"
+            "切到职业病那份 / 打开安全预评价文档 → focus_document；"
+            "用这份蓝本，选前两章开始写 → select_blueprint + select_write_chapters + start_writing。"
         )
-    system += (
-        "\n"
-        "## 示例\n"
-        "帮我写2.3章节 → select_write_chapters，chapter_sequences=[\"2.3\"]。\n"
-        "为2.2添加文件要素 检索词为… → add_chapter_element，kind=file。\n"
-        "查看资料库 → open_knowledge；列出资料包 → materials_pack_list；"
-        "新建资料包叫变电站资料包 → materials_pack_create。\n"
-        "改个名字 2026个人述职报告 / 改名为年度总结 → set_session_meta(title=新名)，"
-        "args 带 message=原话、title=新名；不要 focus_document。\n"
-        "改名叫年度总结然后开始写 → set_session_meta + select_write_chapters/start_writing（已绑蓝本时）。\n"
-        "开写前查待补要素 → check_writing_supplements；用户说先写再说/不补了 → skip_writing_supplement_check。\n"
-        "新建资料包叫XX再继续写 → materials_pack_create + 后续写作 Tool。\n"
-        "已绑蓝本「把刚才那章写了」→ select_write_chapters；"
-        "未绑「帮我出个安全预评价」→ missing 含 writing_path 或 ask_intent；"
-        "「这一章」没说写还是学 → uncertain=true 或 ask_intent；"
-        "看看有哪些要素 → open_element_library；"
-        "收入要素库 → collect_to_element_library；"
-        "看看有哪些蓝本 → list_blueprints；"
-        "切到职业病那份 / 打开安全预评价文档 → focus_document；"
-        "用这份蓝本，选前两章开始写 → select_blueprint + select_write_chapters + start_writing。"
-    )
     docs_block = (session_documents_brief or "").strip() or "（尚无其它文档登记）"
     focus_line = (focus_document_brief or "").strip() or "（尚无焦点文档）"
     observe_line = (gaps_context_line or "").strip()

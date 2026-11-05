@@ -48,7 +48,7 @@
 
 ## 口语主路径（整段会话统一大脑）
 
-- `run_chat_control`：pending clarify / UI 之后 → `try_run_oral_multi_intent` / `apply_turn_plan`（JSON `slots`+`tools`+`missing`+`uncertain`：确定执行 / 缺项引导 / 不确定追问）→ 未命中再 `run_react`
+- `run_chat_control`：pending clarify / UI 之后 →（可选，`features.intent_plan`）`try_run_oral_multi_intent` / `apply_turn_plan` → 未命中再 `run_react`（`create_agent` + Tool description）
 - 开场与写作中途同一契约；禁止再用标题/原话截取工具名当执行清单
 - 单测 / Tool 执行层：`execute_intent_plan` / `execute_dispatch_tool` / `apply_*` / clarify 构建器
 - Chat Tool 统一 `ok` / `reply_hint` / `observation` / `missing_slots`
@@ -84,3 +84,5 @@
 ## 配置
 
 意图分类使用 `live_intent_model()` / `config/bailian.local.yml` 的 `intent-model-name`。
+`features.intent_plan`（env `REPORT_WRITING_INTENT_PLAN`）控制口语 JSON 计划短路；默认 true。
+`features.intent_tool_catalog_in_prompt`（env `REPORT_WRITING_INTENT_TOOL_CATALOG`）控制分类器 system 是否附带工具含义表；默认 false，语义以 `@tool` docstring 为准。

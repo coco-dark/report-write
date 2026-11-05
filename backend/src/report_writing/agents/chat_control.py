@@ -25,7 +25,7 @@ CONTROL_INSTRUCTIONS = """你是「智能文档协作」对话写文档总控（
 职责：根据 writing_brief、dialogue_full、session_goal、用户原话与界面 action，选择并调用 Tool 推进写作。禁止靠关键词表猜意图；禁止编造蓝本名称或工具未返回的事实。
 
 ## 0. 整段会话自主决策（开场 / 向导 / 写作中途同一套）
-每轮先按意图 JSON（或 observation）判断：**确定就执行、缺项就引导、不确定就多轮确认**。
+每轮根据 Tool 返回的 observation / missing_slots（及后端注入的 session 快照）决策：**确定就执行、缺项就引导、不确定就多轮确认**。
 - **确定**：本句或上下文已给出的槽位 → 立刻调对应 Tool；一句可多 Tool（改名+开写、匹配+选章、加要素+确认等）。
 - **缺项**：只补还缺的（如缺章节号、缺文档名、缺写作方式、缺蓝本 id）；不要机械重走整条流水线。
 - **不确定**：指代不明、写还是学未定、多文档歧义（已定名后又说「写一份关于××」是新开还是改名）、破坏性动作把握不足 → ask_intent / 澄清卡；禁止猜第一章、代选蓝本、静默开写/删除/收录/用题材改名。
@@ -63,20 +63,12 @@ CONTROL_INSTRUCTIONS = """你是「智能文档协作」对话写文档总控（
 - 开写前缺要点：先问是否生成；同意后再 generate_freeform_points。
 - 多章未指定 writing_pace 时 start_writing 会先澄清「一次写完 / 写一章看一章」；开写前可 check_writing_supplements 查待补要素；用户说先写再说 → skip_writing_supplement_check；卡片上忽略某项 → dismiss_writing_supplement（仅取消该章关联）。
 
-## 4. 写作与章节工具
-- 入口：ask_entry_path；选型：match_blueprints / list_blueprints / select_blueprint / begin_blueprint_wizard / skip_blueprint
-- 选章开写：select_write_chapters / start_writing
-- 开写后 study/search/write/check 由后台 supervisor 执行
-- 章操作：confirm_chapter、retry_chapter、configure_chapter、add_chapter_element、retry_search_chapter
-- 暂停：pause_writing，或 confirm 时 pause_after=true
-- 导出 Word：prepare_export_word
-- 要素：associate_elements / dissociate_chapter_element / remove_document_element / collect_to_element_library
+## 4. 工具调用约定
+- 你只能调用已绑定的 Tool；**何时调用、参数与禁忌见各 Tool 的 description**（LangChain 工具注解），不要在脑中另备一份工具表。
+- 每调一次 Tool 必读 ok / observation / missing_slots / reply_hint，再决定下一跳或口语收尾。
+- 按章检索、写正文、核对引用由后台 supervisor 流水线执行，勿在对话里编造章节正文。
 
-## 5. 资源与子 Agent
-- 渲染模版 / Word 样式：优先 CRUD Tool 与 open_*_wizard；等价 render_subagent / style_subagent
-- 蓝本配置期可用 blueprint_subagent；禁止无必要时 handoff 去蓝本页
-
-## 5b. 蓝本库 vs 对话内「依据模版」（必守）
+## 5. 蓝本库 vs 对话内「依据模版」（必守）
 - **蓝本库**（bp*）：不在对话里新建完成入库或删除；请在「蓝本管理」维护。
 - **对话内** begin_blueprint_wizard / blueprint_wizard：当前文档 w* 副本；收录前不入库。
 - **写入蓝本库**：save_freeform_as_blueprint 或文档窗「收录到蓝本库」。
@@ -2907,6 +2899,9 @@ def build_agent_user_text(
     from report_writing.chat.next_step import infer_suggested_next_step
 
     body["suggested_next_step"] = infer_suggested_next_step(session, home=home, message=message or "")
+    snap = (session.freeform or {}).get("session_gaps_snapshot")
+    if isinstance(snap, dict) and snap.get("context_line"):
+        body["session_gaps"] = snap
     return json.dumps(body, ensure_ascii=False)
 
 
@@ -3178,9 +3173,15 @@ def run_chat_control(
             state.events.extend(events)
             return (reply or "").strip() or "好的。"
 
-    # 整段会话统一大脑：JSON slots/tools/missing → 确定执行 / 缺项引导 / 不确定追问。
-    # 开场、向导、写作中途同一入口；未命中再交 ReAct 观察闭环。
-    if not (state.user_action or action) and message and intent_llm is not None:
+    # 整段会话：可选 JSON 计划短路；未命中再 ReAct（LangChain create_agent 工具循环）。
+    from report_writing.infra.config_settings import intent_plan_enabled
+
+    if (
+        intent_plan_enabled()
+        and not (state.user_action or action)
+        and message
+        and intent_llm is not None
+    ):
         from report_writing.chat.intent_multi_plan import try_run_oral_multi_intent
 
         multi_hit = try_run_oral_multi_intent(
@@ -3196,8 +3197,17 @@ def run_chat_control(
             state.events.extend(events)
             return (reply or "").strip() or "好的。"
 
-    # 口语主路径：pending clarify / UI / 多意图短路之后直接 ReAct 观察闭环。
-    # 不再走 dispatch / 域路由 / plan_route「认领即串行执行后 return」。
+    # 口语主路径：ReAct 观察闭环；刷新只读 gaps 供 user 上下文。
+    if not (state.user_action or action) and message:
+        from report_writing.chat.session_gaps import refresh_session_gaps
+
+        refresh_session_gaps(
+            state.session,
+            message=message,
+            home=state.home,
+            invoke=intent_llm if intent_llm is not None else state.invoke,
+        )
+
     tools = build_chat_tools(state)
 
     from report_writing.chat.react_speed import control_react_rounds

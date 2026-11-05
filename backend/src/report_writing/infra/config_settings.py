@@ -175,5 +175,23 @@ def scripted_chat() -> bool:
     return setting("features", "scripted_chat", default=False, coerce=bool)
 
 
+def intent_plan_enabled() -> bool:
+    env = (os.environ.get("REPORT_WRITING_INTENT_PLAN", "") or "").strip().lower()
+    if env in {"0", "false", "off", "no"}:
+        return False
+    if env in {"1", "true", "on", "yes"}:
+        return True
+    return setting("features", "intent_plan", default=True, coerce=bool)
+
+
+def intent_tool_catalog_in_prompt() -> bool:
+    env = (os.environ.get("REPORT_WRITING_INTENT_TOOL_CATALOG", "") or "").strip().lower()
+    if env in {"1", "true", "on", "yes"}:
+        return True
+    if env in {"0", "false", "off", "no"}:
+        return False
+    return setting("features", "intent_tool_catalog_in_prompt", default=False, coerce=bool)
+
+
 def database_jdbc_url_override() -> str:
     return str(setting("database", "jdbc_url", default="", env="REPORT_WRITING_DATABASE_URL") or "").strip()
