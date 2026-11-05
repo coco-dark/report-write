@@ -34,7 +34,8 @@ CONTROL_INSTRUCTIONS = """你是「智能文档协作」对话写文档总控（
 - **一句多动作**：把短名、路径、生成目录、章数拆开执行；禁止把整句写入 title / set_session_meta。
   「作lzb述职报告 自动生成章节目录 三个大章节就可以」→ 工作名 lzb述职报告 + skip_blueprint + submit_outline（一级章=3）。
   「再给我写一份述职报告 三个章节 名字叫做lzb述职报告」→ 定名 lzb述职报告 + 无蓝本自动大纲三章；不要开模版向导。
-- 无固定步骤顺序；缺什么补什么；禁止对用户展示 Tool 名；界面点选与口语等价。
+- 无固定步骤顺序；缺什么补什么；禁止对用户展示 Tool 名。
+- **界面点选**：user JSON 的 action 非空 = 点了按钮/卡片，本轮须调用同名 Tool（含 resolve_intent_clarify），payload 原样传入，不要另猜意图。点选与口语等价。
 
 观察闭环：调 Tool → 读 ok / observation / missing_slots → 再决定下一跳或收尾。
 硬门闩仅限：写盘必须落在当前车道；收录/导出前须正式定名。工作名即可匹配蓝本、向导、生成目录、开写。
@@ -163,6 +164,7 @@ def _emit_process(state: ChatControlState, message: str, **extra: Any) -> None:
 def _tool_begin(state: ChatControlState, tool_name: str) -> None:
     from report_writing.chat.user_process import emit_tool_step
 
+    state.did_invoke_tool = True
     emit_tool_step(state.emit, tool_name)
 
 
@@ -608,23 +610,9 @@ def build_chat_tools(state: ChatControlState) -> list:
 
     @tool
     def select_blueprint(blueprint_id: str = "") -> str:
-        """选用蓝本：用户点「选用」或口头明确指定且 agent_may_select 为真时调用。"""
+        """选用蓝本：用户点「选用」或口语明确给出 blueprint_id 时调用。禁止无 id 代选。"""
         from report_writing.chat_orchestrator import _action_select_blueprint
 
-        action = (state.user_action or "").strip()
-        if action != "select_blueprint" and not state.agent_may_select_blueprint:
-            return _obs_fail(
-                error="need_user_confirm",
-                reply_hint=(
-                    "我还不能擅自定蓝本。你可以说清楚要用哪一份，或看下方面板点「选用」；"
-                    "没有合适的也可以说「依据模版编写」或「无蓝本 · 自动大纲」。"
-                ),
-                observation=(
-                    "select_blueprint 需要用户明确点名或点「选用」。"
-                    "可 match_blueprints 出列表，或等用户确认后再带 blueprint_id 调用。"
-                ),
-                missing_slots=["blueprint_id"],
-            )
         bid = (blueprint_id or "").strip()
         if not bid:
             return _obs_fail(
@@ -2359,6 +2347,47 @@ def build_chat_tools(state: ChatControlState) -> list:
             }
         )
 
+    @tool
+    def resolve_intent_clarify(
+        option_id: str = "",
+        option_label: str = "",
+        clarify_id: str = "",
+        message: str = "",
+    ) -> str:
+        """用户点选了澄清卡片，或用原话回答当前 pending 选项。按 option_id 执行已选槽位。"""
+        del clarify_id
+        _tool_begin(state, "resolve_intent_clarify")
+        payload = {
+            "option_id": (option_id or "").strip(),
+            "option_label": (option_label or "").strip(),
+        }
+        reply, cards, events = apply_resolve_intent_clarify(
+            home=state.home,
+            session=state.session,
+            invoke=state.intent_invoke or state.invoke,
+            emit=state.emit,
+            payload=payload,
+            message=(message or option_label or state.last_user_message or "").strip(),
+        )
+        state.cards.extend(cards or [])
+        state.events.extend(events or [])
+        return _dump(
+            {
+                "ok": True,
+                "reply_hint": reply,
+                "observation": "已按澄清点选执行。读 cards / reply_hint，不要再猜意图。",
+            }
+        )
+
+    @tool
+    def usage_guide() -> str:
+        """用户要使用说明 / 怎么用本产品。"""
+        from report_writing.chat.product_guide import build_usage_guide_reply
+
+        _tool_begin(state, "usage_guide")
+        reply = build_usage_guide_reply(state.invoke)
+        return _dump({"ok": True, "reply_hint": reply, "observation": "已给出使用说明。"})
+
     tools = [
         list_blueprints,
         ask_entry_path,
@@ -2405,6 +2434,8 @@ def build_chat_tools(state: ChatControlState) -> list:
         save_freeform_as_blueprint,
         sync_document_to_blueprint_library,
         remember_writing_goal,
+        resolve_intent_clarify,
+        usage_guide,
     ]
     from report_writing.agents.resource_tools import build_export_resource_tools
 
@@ -2686,6 +2717,52 @@ def _try_ui_action_shortcut(state: ChatControlState, user_text: str) -> str | No
     return None
 
 
+def apply_resolve_intent_clarify(
+    *,
+    home: Path,
+    session: ChatSession,
+    invoke: InvokeFn | None,
+    emit: EmitFn | None,
+    payload: dict[str, Any],
+    message: str,
+) -> tuple[str, list[Any], list[dict]]:
+    """执行澄清点选（卡片按钮或 Agent Tool）。"""
+    from report_writing.chat.intent_clarify import (
+        execute_clarify_spec,
+        resolve_clarify,
+        try_handle_pending_message,
+    )
+
+    option_id = str((payload or {}).get("option_id") or "").strip()
+    option_label = str((payload or {}).get("option_label") or "").strip()
+    hit = None
+    if option_id:
+        hit = resolve_clarify(session, option_id)
+    if hit is None:
+        from report_writing.chat.intent_clarify import restore_pending_from_last_clarify
+
+        if restore_pending_from_last_clarify(session) is not None and option_id:
+            hit = resolve_clarify(session, option_id)
+    if hit is None:
+        choice = option_label or option_id or str(message or "").strip()
+        hit = try_handle_pending_message(session, choice, invoke=invoke, home=home)
+    else:
+        choice = option_label or option_id
+    if isinstance(hit, str):
+        return hit, [], []
+    if isinstance(hit, dict):
+        reply, cards, events = execute_clarify_spec(
+            home, session, hit, message=choice, emit=emit, invoke=invoke
+        )
+        return reply, cards, events
+    from report_writing.chat.intent_clarify import rehang_last_clarify
+
+    rehang = rehang_last_clarify(session)
+    if rehang is not None:
+        return rehang[0], list(rehang[1] or []), []
+    return "这轮确认好像过期了，你再说一下想做什么就行。", [], []
+
+
 def run_ui_action_shortcut(
     *,
     home: Path,
@@ -2697,49 +2774,19 @@ def run_ui_action_shortcut(
     payload: dict[str, Any],
     message: str,
 ) -> tuple[str, list[Any], list[dict]] | None:
-    """已知 UI action：不调 LLM，只执行同名工具一次。"""
+    """已知 UI action：执行同名工具（Agent 未调 Tool 时的兜底，以及资料包等未绑定 Tool）。"""
     key = (action or "").strip()
     if key not in UI_SHORTCUT_ACTIONS:
         return None
     if key == "resolve_intent_clarify":
-        from report_writing.chat.intent_clarify import (
-            execute_clarify_spec,
-            resolve_clarify,
-            try_handle_pending_message,
+        return apply_resolve_intent_clarify(
+            home=home,
+            session=session,
+            invoke=invoke,
+            emit=emit,
+            payload=payload,
+            message=message,
         )
-
-        option_id = str((payload or {}).get("option_id") or "").strip()
-        option_label = str((payload or {}).get("option_label") or "").strip()
-        # 按钮点选优先按 option_id 消歧，避免只靠文案、槽位丢失
-        hit = None
-        if option_id:
-            hit = resolve_clarify(session, option_id)
-        if hit is None:
-            # pending 被误清：先从 last 快照恢复再消歧，勿直接报过期逼用户再点一次
-            from report_writing.chat.intent_clarify import restore_pending_from_last_clarify
-
-            if restore_pending_from_last_clarify(session) is not None and option_id:
-                hit = resolve_clarify(session, option_id)
-        if hit is None:
-            choice = option_label or option_id or str(message or "").strip()
-            # 文案复述 / 口语别名：用活模型结合 pending 上下文，勿强制离线短语
-            hit = try_handle_pending_message(session, choice, invoke=invoke, home=home)
-        else:
-            choice = option_label or option_id
-        if isinstance(hit, str):
-            return hit, [], []
-        if isinstance(hit, dict):
-            # 保留选项文案供 entry_path 文案启发式；执行时仍优先用 candidate.payload.message
-            reply, cards, events = execute_clarify_spec(
-                home, session, hit, message=choice, emit=emit, invoke=invoke
-            )
-            return reply, cards, events
-        from report_writing.chat.intent_clarify import rehang_last_clarify
-
-        rehang = rehang_last_clarify(session)
-        if rehang is not None:
-            return rehang[0], list(rehang[1] or []), []
-        return "这轮确认好像过期了，你再说一下想做什么就行。", [], []
     from report_writing.chat.materials_pack_gate import MATERIALS_PACK_ACTIONS
 
     if key in MATERIALS_PACK_ACTIONS:
@@ -2869,7 +2916,7 @@ def build_agent_user_text(
         body["recent_dialogue"] = summary
     if action:
         body["hint"] = (
-            f"用户点击了界面操作「{action}」：优先调用同名工具一次完成；"
+            f"用户点击了界面操作「{action}」：本轮必须调用同名 Tool 一次完成（payload 原样传入）；"
             "勿改用其它工具替代（例如保存蓝本勿用 blueprint_subagent）。"
         )
         if action == "save_freeform_as_blueprint" and home is not None:
@@ -2900,6 +2947,22 @@ def build_agent_user_text(
                 "已定名但缺写作入口：下一步唯一 Tool 是 ask_entry_path（或等用户点选入口卡）；"
                 "禁止再调 remember_writing_goal / set_session_meta 只回「记下了」。"
             )
+    from report_writing.chat.intent_clarify import get_pending
+
+    pending = get_pending(session)
+    if isinstance(pending, dict) and pending:
+        body["pending_clarify"] = {
+            "id": pending.get("id") or "",
+            "source": pending.get("source") or "",
+            "question": pending.get("question") or "",
+            "options": list(pending.get("options") or [])[:6],
+        }
+        extra = (
+            "有 pending 澄清卡：用户点选或口语对应选项时调用 resolve_intent_clarify"
+            "（option_id / option_label）；不要另开一套意图分类。"
+        )
+        prev = str(body.get("routing_hint") or "").strip()
+        body["routing_hint"] = f"{prev} {extra}".strip() if prev else extra
     from report_writing.chat.turn_context import build_writing_turn_context, merge_turn_context_into_agent_body
     from report_writing.chat.writing_brief import brief_to_dict_for_body
 
@@ -3104,7 +3167,10 @@ def run_langchain_chat_control(
         session=state.session,
         emit=state.emit,
     )
-    return _final_text(result.get("messages") or [], state)
+    messages = result.get("messages") or []
+    if any(isinstance(m, ToolMessage) for m in messages):
+        state.did_invoke_tool = True
+    return _final_text(messages, state)
 
 
 def run_chat_control(
@@ -3114,9 +3180,9 @@ def run_chat_control(
     user_text: str,
     system_prompt: str,
 ) -> str:
-    """运行一轮对话总控：确定性前置（UI/澄清卡）→ LangChain Agent 闭环。
+    """运行一轮对话总控：卡片/按钮作为对话交给 LangChain Agent。
 
-    没有「意图分类」层；入职队列 suggested_next_tools 交给 Agent 读观察后自行调用。
+    点选结果与原先同名 Tool 执行一致；Agent 未调 Tool 时才走 UI 兜底。
     """
     action, message, _phase = _parse_user_message_from_agent_text(user_text)
     state.last_user_message = message
@@ -3132,96 +3198,12 @@ def run_chat_control(
 
         intent_llm = intent_invoke_fn(state.invoke)
 
-    from report_writing.chat.intent_router import allows_agent_blueprint_select
-
-    state.agent_may_select_blueprint = allows_agent_blueprint_select(
-        message=message,
-        user_action=state.user_action or action,
-        invoke=intent_llm if intent_llm is not None else state.invoke,
-        session=state.session,
+    state.agent_may_select_blueprint = (state.user_action or action or "").strip() == (
+        "select_blueprint"
     )
 
-    shortcut = _try_ui_action_shortcut(state, user_text)
-    if shortcut is not None:
-        _record_oral_route(state, "ui_action", action=state.user_action or action or "")
-        return shortcut
-
-    # 全局意图澄清：有 pending 时优先消歧，再走各路由
     if not (state.user_action or action) and message:
-        from report_writing.chat.intent_clarify import (
-            execute_clarify_spec,
-            try_handle_pending_message,
-        )
-
-        clarify_hit = try_handle_pending_message(
-            state.session, message, invoke=intent_llm, home=state.home
-        )
-        if isinstance(clarify_hit, str):
-            from report_writing.chat.intent_clarify import get_pending
-            from report_writing.domain.models import ChatCard
-
-            pending = get_pending(state.session) or {}
-            opts = list(pending.get("options") or [])
-            if opts:
-                state.cards.append(
-                    ChatCard(
-                        type="intent_clarify",
-                        title="请帮我确认一下",
-                        payload={
-                            "clarify_id": pending.get("id") or "",
-                            "question": clarify_hit,
-                            "options": opts,
-                            "source": pending.get("source") or "",
-                        },
-                    )
-                )
-            _record_oral_route(state, "clarify_pending")
-            return clarify_hit
-        if isinstance(clarify_hit, dict):
-            from report_writing.chat.helpers import _emit_process
-
-            _emit_process(state.emit, "正在按你确认的意图继续…")
-            reply, cards, events = execute_clarify_spec(
-                state.home,
-                state.session,
-                clarify_hit,
-                message=message,
-                emit=state.emit,
-                invoke=state.invoke,
-            )
-            state.cards.extend(cards)
-            state.events.extend(events)
-            _record_oral_route(state, "clarify_execute")
-            return (reply or "").strip() or "好的。"
-
-    if not (state.user_action or action) and message:
-        from report_writing.chat.session_documents import (
-            ensure_write_onboarding_started,
-            focus_has_active_writing_context,
-            message_is_chitchat_only,
-            message_requests_list_blueprints,
-        )
-
-        if message_is_chitchat_only(message) and not focus_has_active_writing_context(
-            state.session
-        ):
-            t = message.strip()
-            if t.startswith(("谢", "感谢")):
-                return "不客气～有需要写文档随时叫我。"
-            return (
-                "你好呀～想写什么直接说就行；有蓝本可以说用哪个，"
-                "没有也可以说不用蓝本，咱们边聊边做，不必按固定步骤一项项填。"
-            )
-
-        if message_requests_list_blueprints(message):
-            from report_writing.chat_orchestrator import _action_list_blueprints
-
-            _tool_begin(state, "list_blueprints")
-            reply, cards = _action_list_blueprints(
-                state.home, state.session, {"q": ""}
-            )
-            state.cards.extend(cards or [])
-            return (reply or "").strip() or "好的。"
+        from report_writing.chat.session_documents import ensure_write_onboarding_started
 
         ensure_write_onboarding_started(
             state.session,
@@ -3231,14 +3213,44 @@ def run_chat_control(
             emit=state.emit,
         )
 
-    return run_langchain_chat_control(
-        model=model,
-        state=state,
-        user_text=user_text,
-        system_prompt=system_prompt,
-        message=message,
-        action=action or state.user_action or "",
-    )
+    act = (state.user_action or action or "").strip()
+    reply = ""
+    can_agent = hasattr(model, "bind_tools")
+    if can_agent:
+        try:
+            reply = run_langchain_chat_control(
+                model=model,
+                state=state,
+                user_text=user_text,
+                system_prompt=system_prompt,
+                message=message,
+                action=action or state.user_action or "",
+            )
+        except Exception:
+            _log.exception("control agent failed; UI action will fall back if present")
+            state.did_invoke_tool = False
+            reply = ""
+    if act in UI_SHORTCUT_ACTIONS and not state.did_invoke_tool:
+        payload: dict[str, Any] = {}
+        if user_text:
+            _, payload, _ = _parse_agent_body(user_text)
+        hit = run_ui_action_shortcut(
+            home=state.home,
+            session=state.session,
+            robot=state.robot,
+            invoke=intent_llm or state.invoke,
+            emit=state.emit,
+            action=act,
+            payload=payload,
+            message=message,
+        )
+        if hit is not None:
+            text, cards, events = hit
+            state.cards.extend(cards or [])
+            state.events.extend(events or [])
+            _record_oral_route(state, "ui_action_fallback", action=act)
+            return (text or "").strip() or "好的。"
+    return reply
 
 
 def _script_user_message(text: str) -> str:
@@ -3298,6 +3310,35 @@ class ChatControlScriptModel(ScriptedChatModel):
                 return self.finish(hint or "好的。")
             if isinstance(message, HumanMessage):
                 break
+
+        if action:
+            from report_writing.chat.materials_pack_gate import MATERIALS_PACK_ACTIONS
+
+            if action in MATERIALS_PACK_ACTIONS:
+                return self.finish("")
+            return self.call(
+                _ui_action_tool_name(action),
+                _tool_args_for_ui_action(action, payload) or {},
+            )
+
+        if not action and msg:
+            for message in reversed(messages):
+                if isinstance(message, HumanMessage):
+                    raw = (
+                        message.content
+                        if isinstance(message.content, str)
+                        else json.dumps(message.content, ensure_ascii=False)
+                    )
+                    try:
+                        body = json.loads(raw) if str(raw).lstrip().startswith("{") else {}
+                    except json.JSONDecodeError:
+                        body = {}
+                    if isinstance(body, dict) and body.get("pending_clarify"):
+                        return self.call(
+                            "resolve_intent_clarify",
+                            {"message": msg, "option_label": msg},
+                        )
+                    break
 
         if action == "select_blueprint":
             return self.call("select_blueprint", {"blueprint_id": str(payload.get("blueprint_id") or "")})

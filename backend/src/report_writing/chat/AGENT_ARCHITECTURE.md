@@ -32,8 +32,8 @@
 | 层 | 模块 | 是否 LangChain Agent | 说明 |
 |----|------|----------------------|------|
 | **口语闭环** | `agents/react.run_react` → `run_langchain_chat_control` | **是** | 理解用户说什么 + 选 Tool + 读 observation |
-| **确定性入口** | UI `action`、`_try_ui_action_shortcut` | 否 | 点按钮 = 直接调同名 Tool |
-| **选择卡** | `intent_clarify` + pending | 否 | 结构化选项/续跑 |
+| **卡片/按钮** | `action` 写入 Agent user JSON | **是** | 点选当一轮对话；Agent 调同名 Tool；未调到才兜底 |
+| **选择卡 UX** | `intent_clarify` pending + `resolve_intent_clarify` Tool | 否（执行）/是（决策） | 挂卡仍是 UX；点选由总控分析 |
 | **调度执行** | `intent_dispatch.execute_dispatch_tool` | 否 | tool+args 已确定后的执行 |
 | **只读观察** | `session_gaps` + `suggested_next_tools` | 否 | 写入 Agent user JSON；口语不自动执行队列 |
 | **子域** | `subagents/runner.run_domain_subagent` | **是** | 总控 Tool 委派 |
@@ -43,9 +43,9 @@
 
 ```
 handle_chat → run_chat_control
-  → pending 选择卡 / UI shortcut / 寒暄
-  → ensure_write_onboarding_started（只记账，不派 Tool）
-  → run_langchain_chat_control（create_agent；读 suggested_next_tools）
+  → ensure_write_onboarding_started（只记账）
+  → run_langchain_chat_control（create_agent）
+  → 若点了按钮且 Agent 未调 Tool：run_ui_action_shortcut 兜底（保持现有点选结果）
 ```
 
 ## 配置

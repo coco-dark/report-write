@@ -321,6 +321,56 @@ def test_run_chat_control_ignores_intent_plan_flag(tmp_path: Path, monkeypatch):
     config_settings._application.cache_clear()
 
 
+def test_click_action_is_in_agent_user_text(tmp_path: Path):
+    from report_writing.agents.chat_control import build_agent_user_text
+
+    session = ChatSession(id="s-click", phase=ChatPhase.INTENT.value)
+    body = json.loads(
+        build_agent_user_text(
+            action="skip_blueprint",
+            payload={},
+            message="",
+            session=session,
+            home=tmp_path,
+        )
+    )
+    assert body.get("action") == "skip_blueprint"
+    assert "同名" in str(body.get("hint") or "")
+
+
+def test_handle_chat_click_selects_blueprint_via_agent(tmp_path: Path):
+    from report_writing.chat_orchestrator import handle_chat
+    from report_writing.controller import ensure_task
+    from report_writing.domain.models import ChatRequest, OutlineNode, OutlineTree, WritingTask
+    from report_writing.services.robots import create_robot
+    from report_writing.services.store import TaskStore
+
+    create_robot(tmp_path, {"id": "r-click", "name": "bot"})
+    path = tmp_path / "tasks" / "bp_click"
+    ensure_task(path)
+    task = TaskStore(path).load()
+    task.title = "点击蓝本"
+    task.outline = OutlineTree(
+        chapters=[OutlineNode(key="c1", title="概况", points=["p"], sequence="1")]
+    )
+    task.outline_confirmed = True
+    TaskStore(path).save(task)
+    resp = handle_chat(
+        tmp_path,
+        ChatRequest(
+            message="",
+            action="select_blueprint",
+            action_payload={"blueprint_id": "bp_click"},
+            robot_id="r-click",
+        ),
+        invoke=lambda _s, _u: "{}",
+    )
+    from report_writing.services.chat_session import load_or_create
+
+    session = load_or_create(tmp_path, resp.session_id, robot_id="r-click")
+    assert session.blueprint_id == "bp_click" or "蓝本" in (resp.reply or "")
+
+
 def test_clarify_llm_reexports_narrow_classifiers():
     from report_writing.chat import clarify_llm, intent_llm
 

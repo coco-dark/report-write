@@ -72,6 +72,11 @@ CHAT_CONTROL_TOOL_DOCS: dict[str, str] = {
     "remember_writing_goal": (
         "记住岗位/项目/写作约束（session_goal），供后续各章遵守。notes=摘要。"
     ),
+    "resolve_intent_clarify": (
+        "用户点选澄清卡片或用原话回答 pending 选项。"
+        "传入 option_id（及可选 option_label / message）；按已选槽位执行，不要重新分类意图。"
+    ),
+    "usage_guide": "用户要使用说明或问怎么用本产品。",
     "confirm_chapter": (
         "确认本章草稿；pause_after=true 时确认后暂停写作。"
     ),

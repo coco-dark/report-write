@@ -28,3 +28,4 @@ class ChatControlState:
     last_user_message: str = ""
     control_model: BaseChatModel | None = None
     turn_context: Any = None  # WritingTurnContext | None
+    did_invoke_tool: bool = False

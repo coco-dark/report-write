@@ -75,7 +75,6 @@ def handle_chat(
         UI_SHORTCUT_ACTIONS,
         build_agent_user_text,
         run_chat_control,
-        run_ui_action_shortcut,
     )
 
     try:
@@ -180,35 +179,7 @@ def handle_chat(
     events: list[dict[str, Any]] = []
     reply = ""
     act = (action or "").strip()
-    shortcut_hit = None
-    if act in UI_SHORTCUT_ACTIONS:
-        shortcut_hit = run_ui_action_shortcut(
-            home=home,
-            session=session,
-            robot=robot,
-            invoke=invoke,
-            emit=out,
-            action=act,
-            payload=payload,
-            message=message,
-        )
-    if shortcut_hit is None and not reply and not act:
-        from report_writing.chat.product_guide import message_requests_usage_guide
-
-        if message_requests_usage_guide(message):
-            shortcut_hit = run_ui_action_shortcut(
-                home=home,
-                session=session,
-                robot=robot,
-                invoke=invoke,
-                emit=out,
-                action="usage_guide",
-                payload={},
-                message=message,
-            )
-    if shortcut_hit is not None:
-        reply, cards, events = shortcut_hit
-    if shortcut_hit is None and not reply:
+    if True:  # 点选与口语同一 Agent 路径（块缩进保持）
         from report_writing.infra.config_settings import llm_mode, scripted_chat
 
         force_scripted = bool(
