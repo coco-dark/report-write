@@ -836,7 +836,7 @@ def apply_materials_pack_choice(
             )
         new_name = str(body.get("name") or body.get("pack_name") or "").strip()
         if not new_name:
-            from report_writing.chat.intent_clarify import begin_clarify
+            from report_writing.chat.clarify_flow import begin_clarify
 
             return begin_clarify(
                 session,
@@ -935,7 +935,7 @@ def apply_materials_pack_choice(
         # materials_pack_update_slot
         new_name = str(body.get("name") or body.get("slot_name") or "").strip()
         if not new_name:
-            from report_writing.chat.intent_clarify import begin_clarify
+            from report_writing.chat.clarify_flow import begin_clarify
 
             return begin_clarify(
                 session,

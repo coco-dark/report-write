@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from report_writing.chat.intent_dispatch import execute_dispatch_tool
+from report_writing.chat.tool_dispatch import execute_dispatch_tool
 from report_writing.chat.intent_turn_plan import TurnPlan, apply_declared_slots
 from report_writing.chat.session_documents import (
     begin_document_onboarding,
@@ -184,7 +184,7 @@ def test_apply_declared_slots_does_not_lock_path_when_unnamed(tmp_path: Path):
 
 
 def test_skip_blueprint_unnamed_returns_name_card(tmp_path: Path):
-    from report_writing.chat.intent_clarify import get_pending
+    from report_writing.chat.clarify_flow import get_pending
 
     (tmp_path / "tasks").mkdir(parents=True)
     session = ChatSession(id="iso_skip", phase=ChatPhase.INTENT.value)
@@ -208,7 +208,7 @@ def test_skip_blueprint_unnamed_returns_name_card(tmp_path: Path):
 
 
 def test_submit_outline_regenerate_unnamed_returns_name_card(tmp_path: Path):
-    from report_writing.chat.intent_clarify import get_pending
+    from report_writing.chat.clarify_flow import get_pending
 
     (tmp_path / "tasks").mkdir(parents=True)
     session = ChatSession(id="iso_out", phase=ChatPhase.INTENT.value)
@@ -235,7 +235,7 @@ def test_submit_outline_regenerate_unnamed_returns_name_card(tmp_path: Path):
 
 
 def test_after_name_auto_outline_does_not_reask_name(tmp_path: Path):
-    from report_writing.chat.intent_clarify import build_entry_path_clarify, get_pending
+    from report_writing.chat.clarify_flow import build_entry_path_clarify, get_pending
     from unittest.mock import MagicMock
 
     (tmp_path / "tasks").mkdir(parents=True)

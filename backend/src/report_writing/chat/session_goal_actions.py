@@ -148,7 +148,7 @@ def _set_session_meta(
     if message_repeats_assistant_reply(session, message):
         if is_writing_document_named(session):
             return "刚才那句是我的回复，不会拿来当文档名。要改名直接说「名字叫…」。", []
-        from report_writing.chat.intent_clarify import build_document_name_clarify
+        from report_writing.chat.clarify_flow import build_document_name_clarify
 
         return build_document_name_clarify(
             session,
@@ -212,7 +212,7 @@ def _set_session_meta(
             need_scope_clarify = True
             scope_topic = blocked or topic_hint
     if need_scope_clarify:
-        from report_writing.chat.intent_clarify import build_document_scope_clarify
+        from report_writing.chat.clarify_flow import build_document_scope_clarify
 
         return build_document_scope_clarify(
             session,
@@ -314,7 +314,7 @@ def _set_session_meta(
                     f"先按「{subject}」来写，正式名字之后还能改。",
                     [],
                 )
-            from report_writing.chat.intent_clarify import build_document_name_clarify
+            from report_writing.chat.clarify_flow import build_document_name_clarify
 
             tip = title or str((session.freeform or {}).get("title") or "").strip()
             gate_msg = raw_message or message
@@ -362,7 +362,7 @@ def _set_session_meta(
         from report_writing.chat.session_goal import get_session_goal, session_goal_brief
 
         if not (patch.get("doc_category") or patch.get("doc_title")):
-            from report_writing.chat.intent_clarify import build_session_meta_clarify
+            from report_writing.chat.clarify_flow import build_session_meta_clarify
             from report_writing.chat.session_goal import get_session_goal
 
             goal = get_session_goal(session)
@@ -393,7 +393,7 @@ def _set_session_meta(
             and not explicit_doc_title_from_message(message)
             and title_is_write_subject_not_doc_name(message, doc_title)
         ):
-            from report_writing.chat.intent_clarify import build_document_scope_clarify
+            from report_writing.chat.clarify_flow import build_document_scope_clarify
 
             return build_document_scope_clarify(
                 session,
@@ -486,7 +486,7 @@ def _set_session_meta(
             session_documents_map,
             should_mint_new_document_slot,
         )
-        from report_writing.chat.intent_clarify import build_document_name_clarify
+        from report_writing.chat.clarify_flow import build_document_name_clarify
         from report_writing.chat.session_documents import try_confirm_document_name_from_message
 
         if focus_needs_doc_name(session):
@@ -550,7 +550,7 @@ def _set_session_meta(
     brief = session_goal_brief(session)
     tip = doc_title or (brief.split("：")[-1].strip() if brief else "")
     if focus_needs_entry_path(session) and not session_blueprint_already_selected(session):
-        from report_writing.chat.intent_clarify import build_entry_path_clarify
+        from report_writing.chat.clarify_flow import build_entry_path_clarify
 
         reply2, cards2 = build_entry_path_clarify(
             session,

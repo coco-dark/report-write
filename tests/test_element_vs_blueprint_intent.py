@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from report_writing.chat.intent_dispatch import execute_intent_plan
+from report_writing.chat.tool_dispatch import execute_intent_plan
 from report_writing.domain.models import ChatSession
 
 

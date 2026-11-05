@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from report_writing.chat.intent_clarify import (
+from report_writing.chat.clarify_flow import (
     build_entry_path_clarify,
     execute_clarify_spec,
     get_pending,

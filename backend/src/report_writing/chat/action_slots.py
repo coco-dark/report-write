@@ -154,7 +154,7 @@ def build_action_slot_clarify(
     blueprints: list[Any] | None = None,
 ) -> tuple[str, list[ChatCard]]:
     """挂起 action_slots 澄清；options 携带要合并进 args 的槽位。"""
-    from report_writing.chat.intent_clarify import begin_clarify
+    from report_writing.chat.clarify_flow import begin_clarify
 
     name = str(tool or "").strip()
     body = dict(payload or {})
@@ -387,7 +387,7 @@ def try_resolve_action_slot_message(
     """pending=action_slots 时，用原话匹配章节序号/标题或选项，合成 spec。"""
     import re
 
-    from report_writing.chat.intent_clarify import _spec_from_option, clear_pending, get_pending
+    from report_writing.chat.clarify_flow import _spec_from_option, clear_pending, get_pending
 
     pending = get_pending(session)
     if not pending or str(pending.get("source") or "") != ACTION_SLOT_SOURCE:

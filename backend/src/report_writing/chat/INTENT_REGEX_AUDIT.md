@@ -12,7 +12,7 @@
 | 无蓝本：目录/要点/托管起草 | ReAct → `submit_outline` / `generate_freeform_points` / `start_writing`（`wants_*` 仅测试别名） |
 | 写作中：要素/关联/查看库/记目标 | ReAct Tool；执行复用 `apply_writing_control_classification` |
 | 统一调度（非口语主路径） | `execute_intent_plan` / `execute_dispatch_tool`（UI·clarify·单测；**禁止** `message_wants_*` 改写 plan） |
-| 澄清回复（全部 source） | `classify_clarify_reply_llm` / `classify_doc_name_reply_llm` → `intent_clarify.try_handle_pending_message` |
+| 澄清回复（全部 source） | `classify_clarify_reply_llm` / `classify_doc_name_reply_llm` → `clarify_flow.try_handle_pending_message` |
 
 **原则**：口语「用户要做什么」禁止正则短切；LLM 失败或 `none` → clarify / 总控 ReAct，不用正则猜工具。一切澄清口语（定名 / 改名 / 资料包名 / 学习范围 / 入口路径 / 写作确认等）必须结合对话上下文走模型；精确 UI 点选与「类型｜标题」等结构行除外。禁止把短句字面或短语别名当主判决。
 
@@ -27,15 +27,15 @@
 - `message_wants_new_document_strong` / `quick_title_from_write_message` / `explicit_doc_title_from_message`：另开文档结构提示 / 标题候选；显式定名结构仅 **invoke=None 离线兜底**（有模型时以计划 JSON `slots.doc_name` 为准）
 - `progress_continue.is_progress_continue_message`：短句「继续」结构判断（非抢路由）
 - Agent 写作/检索：引用、待补标记等文本处理
-- `intent_clarify._OPTION_ALIASES`：澄清选项别名（离线复述/UI；定名确认语不靠此表，有模型时走 `classify_doc_name_reply_llm`）
+- `clarify_flow._OPTION_ALIASES`：澄清选项别名（离线复述/UI；定名确认语不靠此表，有模型时走 `classify_doc_name_reply_llm`）
 
 ## 已移除的意图正则短切与认领路由
 
 - `writing_control_route.message_wants_*` / `extract_add_element_hint`
-- `intent_dispatch` 对 open/associate/add 的 plan 注入；`message_means_outline_extract_done` extract_ack
+- `tool_dispatch` 对 open/associate/add 的 plan 注入；`message_means_outline_extract_done` extract_ack
 - `write_chapter_intent.message_wants_write_*`；`chat_control` 开写正则旁路
 - `wizard_phrase_rules` 抢先于 LLM；蓝本向导 `message_wants_*` 跳出
-- `intent_clarify.message_means_study_all` / `_CLEAR_*` 意图短路 / `message_looks_like_vague_*`
+- `clarify_flow.message_means_study_all` / `_CLEAR_*` 意图短路 / `message_looks_like_vague_*`
 - `freeform_intent` 短语抢先（有模型时）；`lexical_freeform_intent` 仅离线兜底 / 无目录误调度恢复
 - clarify 有模型后用 `looks_like_new_intent` 清 pending（仅离线兜底）
 - UI `resolve_intent_clarify` 文案回退强制 `invoke=None`（现传活模型）

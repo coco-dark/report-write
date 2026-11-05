@@ -21,7 +21,7 @@ def _start_writing_from_freeform(
     emit: EmitFn | None = None,
 ) -> tuple[str, list[Any], list[dict[str, Any]]]:
     from report_writing.chat.helpers import _emit_process
-    from report_writing.chat.intent_dispatch import execute_dispatch_tool
+    from report_writing.chat.tool_dispatch import execute_dispatch_tool
 
     _emit_process(emit, "好，按无蓝本任务开写…")
     hit = execute_dispatch_tool(

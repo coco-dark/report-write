@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from report_writing.chat.intent_clarify import (
+from report_writing.chat.clarify_flow import (
     apply_safe_default,
     begin_clarify,
     build_entry_path_clarify,
@@ -87,7 +87,7 @@ def test_new_intent_discards_pending():
     # 「写报告」过泛：可能挂起名/选路，也可能只给工作名后不挂卡
     pending0 = get_pending(session)
     if pending0 is None:
-        from report_writing.chat.intent_clarify import begin_clarify
+        from report_writing.chat.clarify_flow import begin_clarify
 
         begin_clarify(
             session,
@@ -333,7 +333,7 @@ def test_entry_and_writing_builders_have_options():
 
 def test_ask_intent_llm_options_enrich_freeform_slots():
     """截图复现：大脑生成「不用蓝本，直接搭目录写」但未填 tool → 点选后应走到 skip_blueprint。"""
-    from report_writing.chat.intent_clarify import (
+    from report_writing.chat.clarify_flow import (
         begin_clarify,
         enrich_control_option_slots,
         execute_clarify_spec,
@@ -380,7 +380,7 @@ def test_ask_intent_llm_options_enrich_freeform_slots():
         calls.append(str(action or ""))
         return "行，不用蓝本。接下来起草目录。", []
 
-    import report_writing.chat.intent_dispatch as dispatch_mod
+    import report_writing.chat.tool_dispatch as dispatch_mod
     import report_writing.chat.blueprint_actions as bp_mod
 
     orig = dispatch_mod.execute_dispatch_tool

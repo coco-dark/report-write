@@ -1444,7 +1444,7 @@ def onboarding_lane_active(session: ChatSession) -> bool:
     if str(wiz.get("working_task_id") or wiz.get("blueprint_id") or "").strip():
         return True
     try:
-        from report_writing.chat.intent_clarify import get_pending
+        from report_writing.chat.clarify_flow import get_pending
 
         pending = get_pending(session) or {}
         if str(pending.get("source") or "") in {
@@ -1834,7 +1834,7 @@ def user_wants_existing_blueprint_match(
     if bound and "使用" in compact and message_looks_like_new_write_topic(msg):
         return True
     try:
-        from report_writing.chat.intent_clarify import _clear_entry_tool_from_message
+        from report_writing.chat.clarify_flow import _clear_entry_tool_from_message
 
         if _clear_entry_tool_from_message(msg, session=session, invoke=invoke) == "match_blueprints":
             return True
@@ -1871,7 +1871,7 @@ def append_doc_name_clarify_if_needed(
             hint = extra
         return hint.strip(), merged
 
-    from report_writing.chat.intent_clarify import build_document_name_clarify
+    from report_writing.chat.clarify_flow import build_document_name_clarify
 
     pending = peek_pending_entry(session)
     tip = str(pending.get("title") or (session.freeform or {}).get("title") or "").strip()
@@ -1950,7 +1950,7 @@ def preferred_entry_path_resolved(session: ChatSession, message: str = "", *, in
         pass
     if invoke is not None:
         try:
-            from report_writing.chat.intent_clarify import entry_path_from_routing_message
+            from report_writing.chat.clarify_flow import entry_path_from_routing_message
 
             ep = entry_path_from_routing_message(msg, session=session, invoke=invoke)
             if ep in _ENTRY_PATH_VALUES:

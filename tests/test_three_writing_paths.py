@@ -264,7 +264,7 @@ def test_path_select_blocks_create_commands_and_allows_study(tmp_path: Path):
 
 def test_path_select_start_study_maps_to_go_study(tmp_path: Path):
     """选用蓝本后说「开始学习」应走 go_study，而不是指定章解析失败。"""
-    from report_writing.chat.intent_dispatch import execute_dispatch_tool
+    from report_writing.chat.tool_dispatch import execute_dispatch_tool
 
     bid = "bp_sel_study_all"
     _ready_blueprint(tmp_path, bid, analyzed=False)
@@ -287,7 +287,7 @@ def test_path_select_start_study_maps_to_go_study(tmp_path: Path):
 
 
 def test_path_select_continue_study_maps_to_go_study(tmp_path: Path):
-    from report_writing.chat.intent_dispatch import execute_dispatch_tool
+    from report_writing.chat.tool_dispatch import execute_dispatch_tool
 
     bid = "bp_sel_continue"
     _ready_blueprint(tmp_path, bid, analyzed=False)
@@ -310,7 +310,7 @@ def test_path_select_continue_study_maps_to_go_study(tmp_path: Path):
 
 
 def test_path_select_re_study_specific_chapter(tmp_path: Path):
-    from report_writing.chat.intent_dispatch import execute_dispatch_tool
+    from report_writing.chat.tool_dispatch import execute_dispatch_tool
 
     bid = "bp_sel_restudy"
     _ready_blueprint(tmp_path, bid, analyzed=True)

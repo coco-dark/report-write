@@ -346,7 +346,7 @@ def _hang_entry_path_after_named(
     after_doc_name_confirm: bool = True,
 ) -> tuple[str, list[ChatCard]]:
     """已定名缺入口：挂有蓝本/无蓝本（或模版/自动大纲）澄清卡。"""
-    from report_writing.chat.intent_clarify import build_entry_path_clarify
+    from report_writing.chat.clarify_flow import build_entry_path_clarify
 
     intent_fn = state.intent_invoke if state.intent_invoke is not None else state.invoke
     return build_entry_path_clarify(
@@ -507,7 +507,7 @@ def _bind_payload_json_tools(state: ChatControlState, names: list[str]) -> list:
                         "observation": f"已执行 {_name}。",
                     }
                 )
-            from report_writing.chat.intent_dispatch import execute_dispatch_tool
+            from report_writing.chat.tool_dispatch import execute_dispatch_tool
 
             hit = execute_dispatch_tool(
                 state.home,
@@ -556,7 +556,7 @@ def build_chat_tools(state: ChatControlState) -> list:
     @tool
     def ask_entry_path(message: str = "", title_hint: str = "") -> str:
         """新建文档：读 gaps，只挂缺的澄清卡；已明确的要素见 suggested_next_tools（顺序非固定）。"""
-        from report_writing.chat.intent_clarify import build_entry_path_clarify
+        from report_writing.chat.clarify_flow import build_entry_path_clarify
         from report_writing.chat.session_documents import is_writing_document_named
 
         msg = (message or state.last_user_message or "").strip()
@@ -580,7 +580,7 @@ def build_chat_tools(state: ChatControlState) -> list:
         ff = dict(state.session.freeform or {})
         follow_spec = ff.pop("clarify_follow_spec", None)
         if isinstance(follow_spec, dict):
-            from report_writing.chat.intent_clarify import execute_clarify_spec
+            from report_writing.chat.clarify_flow import execute_clarify_spec
 
             state.session.freeform = ff
             reply2, cards2, events2 = execute_clarify_spec(
@@ -1201,7 +1201,7 @@ def build_chat_tools(state: ChatControlState) -> list:
 
         miss = missing_for_tool(state.session, "prepare_export_word", home=state.home)
         if "doc_name" in miss:
-            from report_writing.chat.intent_clarify import build_document_name_clarify
+            from report_writing.chat.clarify_flow import build_document_name_clarify
 
             reply, cards = build_document_name_clarify(
                 state.session,
@@ -1796,7 +1796,7 @@ def build_chat_tools(state: ChatControlState) -> list:
                 state.session, msg, title_hint=tip or msg, invoke=state.invoke
             )
         ):
-            from report_writing.chat.intent_clarify import (
+            from report_writing.chat.clarify_flow import (
                 build_document_scope_clarify,
                 pending_document_scope_reply,
             )
@@ -1888,7 +1888,7 @@ def build_chat_tools(state: ChatControlState) -> list:
         needs_entry = False
         # 定名成功且缺入口：必挂选路卡（不单靠 write_like 关键字）
         if tip:
-            from report_writing.chat.intent_clarify import (
+            from report_writing.chat.clarify_flow import (
                 clear_pending,
                 get_pending,
             )
@@ -2473,7 +2473,7 @@ def build_chat_tools(state: ChatControlState) -> list:
             state.session, "save_freeform_as_blueprint", home=state.home
         )
         if "doc_name" in miss and not (title or "").strip():
-            from report_writing.chat.intent_clarify import build_document_name_clarify
+            from report_writing.chat.clarify_flow import build_document_name_clarify
 
             reply, cards = build_document_name_clarify(
                 state.session,
@@ -3076,7 +3076,7 @@ def apply_resolve_intent_clarify(
     message: str,
 ) -> tuple[str, list[Any], list[dict]]:
     """执行澄清点选（卡片按钮或 Agent Tool）。"""
-    from report_writing.chat.intent_clarify import (
+    from report_writing.chat.clarify_flow import (
         execute_clarify_spec,
         resolve_clarify,
         try_handle_pending_message,
@@ -3088,7 +3088,7 @@ def apply_resolve_intent_clarify(
     if option_id:
         hit = resolve_clarify(session, option_id)
     if hit is None:
-        from report_writing.chat.intent_clarify import restore_pending_from_last_clarify
+        from report_writing.chat.clarify_flow import restore_pending_from_last_clarify
 
         if restore_pending_from_last_clarify(session) is not None and option_id:
             hit = resolve_clarify(session, option_id)
@@ -3104,7 +3104,7 @@ def apply_resolve_intent_clarify(
             home, session, hit, message=choice, emit=emit, invoke=invoke
         )
         return reply, cards, events
-    from report_writing.chat.intent_clarify import rehang_last_clarify
+    from report_writing.chat.clarify_flow import rehang_last_clarify
 
     rehang = rehang_last_clarify(session)
     if rehang is not None:
@@ -3153,7 +3153,7 @@ def run_ui_action_shortcut(
         "skip_writing_supplement_check",
         "dismiss_writing_supplement",
     }:
-        from report_writing.chat.intent_dispatch import execute_dispatch_tool
+        from report_writing.chat.tool_dispatch import execute_dispatch_tool
 
         hit = execute_dispatch_tool(
             home,
@@ -3296,7 +3296,7 @@ def build_agent_user_text(
                 "已定名但缺写作入口：下一步唯一 Tool 是 ask_entry_path（或等用户点选入口卡）；"
                 "禁止再调 remember_writing_goal / set_session_meta 只回「记下了」。"
             )
-    from report_writing.chat.intent_clarify import get_pending
+    from report_writing.chat.clarify_flow import get_pending
 
     pending = get_pending(session)
     if isinstance(pending, dict) and pending:

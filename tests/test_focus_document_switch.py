@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from report_writing.chat.intent_dispatch import execute_dispatch_tool
+from report_writing.chat.tool_dispatch import execute_dispatch_tool
 from report_writing.chat.session_documents import (
     focus_document_key,
     set_focus_document_key,

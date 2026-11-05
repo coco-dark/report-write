@@ -364,7 +364,7 @@ def test_match_does_not_auto_bind_without_explicit_select(tmp_path: Path):
     assert session is not None
     assert not (session.blueprint_id or "").strip()
     confirm_writing_document_name(session, "安全预评价报告", message="写一份安全预评价报告")
-    from report_writing.chat.intent_clarify import clear_pending
+    from report_writing.chat.clarify_flow import clear_pending
 
     clear_pending(session)
     save_session(tmp_path, session)
@@ -386,7 +386,7 @@ def test_match_does_not_auto_bind_without_explicit_select(tmp_path: Path):
 
 
 def test_explicit_select_can_bind_matched_blueprint(tmp_path: Path):
-    from report_writing.chat.intent_clarify import clear_pending
+    from report_writing.chat.clarify_flow import clear_pending
     from report_writing.chat.session_documents import confirm_writing_document_name
     from report_writing.controller import ensure_task
     from report_writing.domain.models import OutlineNode, OutlineTree

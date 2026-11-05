@@ -2117,7 +2117,7 @@ def _collect_freeform_meta(
 
     # 助手原文被误记成用户话时，不能拿来定名，也不能把上一份文档的标题拼进来。
     if message_repeats_assistant_reply(session, raw_in):
-        from report_writing.chat.intent_clarify import build_document_name_clarify
+        from report_writing.chat.clarify_flow import build_document_name_clarify
 
         return build_document_name_clarify(
             session,
@@ -2147,7 +2147,7 @@ def _collect_freeform_meta(
         and not explicit_title
         and not filled_structured
     ):
-        from report_writing.chat.intent_clarify import build_document_scope_clarify
+        from report_writing.chat.clarify_flow import build_document_scope_clarify
 
         return build_document_scope_clarify(
             session,
@@ -2165,7 +2165,7 @@ def _collect_freeform_meta(
                 [],
             )
         session.phase = ChatPhase.FREEFORM_ASK.value
-        from report_writing.chat.intent_clarify import build_document_name_clarify
+        from report_writing.chat.clarify_flow import build_document_name_clarify
 
         return build_document_name_clarify(
             session,
@@ -2190,7 +2190,7 @@ def _collect_freeform_meta(
         and focus_needs_doc_name(session)
         and title
     ):
-        from report_writing.chat.intent_clarify import build_document_name_clarify
+        from report_writing.chat.clarify_flow import build_document_name_clarify
         from report_writing.chat.session_documents import stash_pending_entry
 
         session.freeform = {

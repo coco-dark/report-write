@@ -375,7 +375,7 @@ def _prompt_confirm_outline_before_study(
         title=_wizard_card_title("outline_confirm", mode=mode),
         extra={"chapters": preview, **wizard},
     )
-    from report_writing.chat.intent_clarify import begin_clarify
+    from report_writing.chat.clarify_flow import begin_clarify
 
     question = (
         f"目录还没确认（共 {len(chapters)} 章），还不能{want}。"
@@ -1141,7 +1141,7 @@ def _action_blueprint_wizard(
         seqs = list(payload.get("chapter_sequences") or [])
         resolved_scope = str(payload.get("study_scope") or "").strip()
         if not keys:
-            from report_writing.chat.intent_clarify import (
+            from report_writing.chat.clarify_flow import (
                 build_study_scope_clarify,
                 study_scope_needs_clarify,
             )
@@ -1170,7 +1170,7 @@ def _action_blueprint_wizard(
                 if judged in STUDY_SCOPES:
                     resolved_scope = judged
             if resolved_scope in STUDY_SCOPES:
-                from report_writing.chat.intent_clarify import merge_study_message_with_scope
+                from report_writing.chat.clarify_flow import merge_study_message_with_scope
 
                 msg = merge_study_message_with_scope(msg, resolved_scope)
             elif tops and study_scope_needs_clarify(
@@ -1223,7 +1223,7 @@ def _action_blueprint_wizard(
         elif keys:
             chapter_label = f"已选 {len(keys)} 章"
         if method not in {"source", "sample", "auto"}:
-            from report_writing.chat.intent_clarify import build_study_method_clarify
+            from report_writing.chat.clarify_flow import build_study_method_clarify
 
             return build_study_method_clarify(
                 session,

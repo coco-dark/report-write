@@ -191,7 +191,7 @@ def dissociate_chapter_element(
         if len(linked) == 1:
             chapter_key = linked[0][0]
         elif len(linked) > 1:
-            from report_writing.chat.intent_clarify import begin_clarify
+            from report_writing.chat.clarify_flow import begin_clarify
 
             body = {**body, "task_id": task_id, "element_id": eid, "element_name": el.name}
             options = []

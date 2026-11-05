@@ -160,7 +160,7 @@ def run_blueprint_action(
             or body.get("explicit_create")
         )
         if not confirmed:
-            from report_writing.chat.intent_clarify import build_entry_path_clarify
+            from report_writing.chat.clarify_flow import build_entry_path_clarify
 
             return build_entry_path_clarify(
                 session,

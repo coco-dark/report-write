@@ -7,8 +7,8 @@ from report_writing.chat.action_slots import (
     build_action_slot_clarify,
     missing_action_slots,
 )
-from report_writing.chat.intent_clarify import get_pending
-from report_writing.chat.intent_dispatch import execute_dispatch_tool
+from report_writing.chat.clarify_flow import get_pending
+from report_writing.chat.tool_dispatch import execute_dispatch_tool
 from report_writing.chat.writing_control_route import apply_writing_control_classification
 from report_writing.controller import ensure_task
 from report_writing.domain.models import ChatSession, ElementNode, OutlineNode, OutlineTree

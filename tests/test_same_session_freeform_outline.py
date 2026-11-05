@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from report_writing.agents.chat_control import ChatControlState, build_chat_tools
-from report_writing.chat.intent_clarify import (
+from report_writing.chat.clarify_flow import (
     build_entry_branch_clarify,
     build_entry_path_clarify,
     execute_clarify_spec,
@@ -145,7 +145,7 @@ def test_auto_freeform_outline_no_match_bleed(tmp_path: Path):
     tools = [str(s.get("tool") or "") for s in suggested]
     assert "match_blueprints" not in tools
     assert "skip_blueprint" in tools
-    from report_writing.chat.intent_dispatch import execute_dispatch_tool
+    from report_writing.chat.tool_dispatch import execute_dispatch_tool
 
     for step in suggested:
         hit = execute_dispatch_tool(
@@ -167,8 +167,8 @@ def test_auto_freeform_chain_single_outline_message(tmp_path: Path):
     """点选自动大纲只落槽；Agent 再 hop skip + submit_outline 时目录文案只出现一次。"""
     from unittest.mock import MagicMock
 
-    from report_writing.chat.intent_clarify import execute_clarify_spec
-    from report_writing.chat.intent_dispatch import execute_dispatch_tool
+    from report_writing.chat.clarify_flow import execute_clarify_spec
+    from report_writing.chat.tool_dispatch import execute_dispatch_tool
     from report_writing.chat.session_documents import confirm_writing_document_name
 
     (tmp_path / "tasks").mkdir(parents=True)
@@ -304,7 +304,7 @@ def test_entry_freeform_template_returns_wizard_meta_card(tmp_path: Path):
         for c in (cards or [])
         if str(getattr(c, "type", "") or "") == "blueprint_wizard"
     ]
-    from report_writing.chat.intent_dispatch import execute_dispatch_tool
+    from report_writing.chat.tool_dispatch import execute_dispatch_tool
 
     hop = execute_dispatch_tool(
         tmp_path,

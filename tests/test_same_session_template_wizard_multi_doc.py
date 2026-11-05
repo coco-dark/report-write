@@ -338,7 +338,7 @@ def test_begin_wizard_force_new_leaves_old_bp_focus(tmp_path: Path):
 
 def test_unnamed_new_doc_template_returns_wizard_not_doc_name(tmp_path: Path):
     """同会话已有文档后再说「用我的模版」：必须带 blueprint_wizard，不能只回定名澄清。"""
-    from report_writing.chat.intent_clarify import build_entry_path_clarify, get_pending
+    from report_writing.chat.clarify_flow import build_entry_path_clarify, get_pending
 
     home = tmp_path
     (home / "tasks").mkdir(parents=True)

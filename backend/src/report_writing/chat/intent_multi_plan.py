@@ -197,7 +197,7 @@ def _upgrade_ask_entry_to_concrete_path(
     ):
         return steps
     try:
-        from report_writing.chat.intent_clarify import _clear_entry_tool_from_message
+        from report_writing.chat.clarify_flow import _clear_entry_tool_from_message
 
         tool = _clear_entry_tool_from_message(message, session=session, invoke=invoke)
     except Exception:
@@ -234,7 +234,7 @@ def _hang_low_confidence_clarify(
     steps: list[dict[str, Any]],
     confidence: float,
 ) -> tuple[str, list[Any], list[dict[str, Any]]]:
-    from report_writing.chat.intent_clarify import begin_clarify
+    from report_writing.chat.clarify_flow import begin_clarify
 
     chain = _tool_chain_label(steps)
     question = f"我理解你想依次做：{chain}。是这样吗？"

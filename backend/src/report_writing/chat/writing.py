@@ -90,7 +90,7 @@ def maybe_offer_writing_pace_clarify(
     task_id_hint: str = "",
 ) -> tuple[str, list[ChatCard]] | None:
     """多章且本轮未选定节奏时返回澄清卡片。"""
-    from report_writing.chat.intent_clarify import build_writing_pace_clarify
+    from report_writing.chat.clarify_flow import build_writing_pace_clarify
 
     keys = [str(k).strip() for k in (chapter_keys or []) if str(k).strip()]
     if len(keys) < 2:

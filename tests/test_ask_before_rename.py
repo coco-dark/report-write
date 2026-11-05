@@ -5,12 +5,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from report_writing.chat.intent_clarify import (
+from report_writing.chat.clarify_flow import (
     build_document_scope_clarify,
     execute_clarify_spec,
     get_pending,
 )
-from report_writing.chat.intent_dispatch import execute_dispatch_tool
+from report_writing.chat.tool_dispatch import execute_dispatch_tool
 from report_writing.chat.intent_turn_plan import TurnPlan, apply_turn_plan
 from report_writing.chat.session_documents import (
     confirm_writing_document_name,

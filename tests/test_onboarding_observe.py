@@ -139,11 +139,11 @@ def test_ask_entry_path_does_not_auto_dispatch_onboarding(tmp_path: Path, monkey
         raise AssertionError("ask_entry_path must not auto-dispatch onboarding tools")
 
     monkeypatch.setattr(
-        "report_writing.chat.intent_clarify.dispatch_suggested_onboarding_tools",
+        "report_writing.chat.clarify_flow.dispatch_suggested_onboarding_tools",
         _boom,
     )
     monkeypatch.setattr(
-        "report_writing.chat.intent_dispatch.execute_dispatch_tool",
+        "report_writing.chat.tool_dispatch.execute_dispatch_tool",
         _boom,
     )
     (tmp_path / "tasks").mkdir(parents=True)
@@ -192,7 +192,7 @@ def test_entry_freeform_auto_outline_observe_only(tmp_path: Path, monkeypatch):
         raise AssertionError("entry clarify must not execute skip/outline")
 
     monkeypatch.setattr(
-        "report_writing.chat.intent_dispatch.execute_dispatch_tool",
+        "report_writing.chat.tool_dispatch.execute_dispatch_tool",
         _boom,
     )
     (tmp_path / "tasks").mkdir(parents=True)
@@ -273,11 +273,11 @@ def test_continue_after_new_document_does_not_dispatch(tmp_path: Path, monkeypat
         raise AssertionError("new document must not auto-dispatch onboarding tools")
 
     monkeypatch.setattr(
-        "report_writing.chat.intent_clarify.dispatch_suggested_onboarding_tools",
+        "report_writing.chat.clarify_flow.dispatch_suggested_onboarding_tools",
         _boom,
     )
     monkeypatch.setattr(
-        "report_writing.chat.intent_dispatch.execute_dispatch_tool",
+        "report_writing.chat.tool_dispatch.execute_dispatch_tool",
         _boom,
     )
     monkeypatch.setattr(

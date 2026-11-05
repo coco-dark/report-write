@@ -894,7 +894,7 @@ def classify_unclear_intent_llm(
             args = item.get("args") if isinstance(item.get("args"), dict) else {}
             # 入口三条：模型常留空 tool，按 id/label 补全，避免点选后无槽位
             if not tool:
-                from report_writing.chat.intent_clarify import enrich_control_option_slots
+                from report_writing.chat.clarify_flow import enrich_control_option_slots
 
                 enriched = enrich_control_option_slots(oid, label, {})
                 tool = str(enriched.get("tool") or "").strip()

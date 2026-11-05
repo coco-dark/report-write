@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from report_writing.chat.intent_clarify import execute_clarify_spec, try_handle_pending_message
+from report_writing.chat.clarify_flow import execute_clarify_spec, try_handle_pending_message
 from report_writing.chat.resource_actions import execute_wizard_command
 from report_writing.chat.study_chapter_resolve import bound_study_method, infer_study_method
 from report_writing.controller import ensure_task

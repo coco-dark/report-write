@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from report_writing.chat.intent_dispatch import DISPATCH_TOOLS, execute_dispatch_tool
+from report_writing.chat.tool_dispatch import DISPATCH_TOOLS, execute_dispatch_tool
 from report_writing.chat.intent_multi_plan import _SAFE_SILENT_MULTI_TOOLS
 from report_writing.chat.session_documents import (
     confirm_writing_document_name,
@@ -116,7 +116,7 @@ def test_scenario_dispatch_save_blueprint_missing_task_raises(tmp_path: Path):
 
 def test_scenario_generate_outline_asks_entry_not_silent_wizard(tmp_path: Path):
     """已定名但未选路径时「生成目录」应入口三选，不得静默 begin_blueprint_wizard。"""
-    from report_writing.chat.intent_clarify import build_entry_path_clarify, get_pending
+    from report_writing.chat.clarify_flow import build_entry_path_clarify, get_pending
 
     home = tmp_path
     (home / "tasks").mkdir(parents=True)

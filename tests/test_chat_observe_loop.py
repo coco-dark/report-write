@@ -315,7 +315,7 @@ def test_configure_chapter_missing_key(tmp_path: Path):
 
 def test_oral_entry_skips_domain_claim_modules():
     """口语主路径模块不得再导出 try_* 认领入口。"""
-    import report_writing.chat.intent_dispatch as intent_dispatch
+    import report_writing.chat.tool_dispatch as intent_dispatch
     import report_writing.chat.progress_continue as progress_continue
     import report_writing.chat.writing_control_route as writing_control_route
 
@@ -439,7 +439,7 @@ def test_run_chat_control_does_not_auto_dispatch_onboarding(tmp_path: Path, monk
         raise AssertionError("oral path must not auto-dispatch suggested_next_tools")
 
     monkeypatch.setattr(
-        "report_writing.chat.intent_clarify.dispatch_suggested_onboarding_tools",
+        "report_writing.chat.clarify_flow.dispatch_suggested_onboarding_tools",
         _boom,
     )
     session = _session_named(tmp_path)

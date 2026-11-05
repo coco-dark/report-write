@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from report_writing.chat.intent_clarify import execute_clarify_spec, try_handle_pending_message
-from report_writing.chat.intent_dispatch import execute_intent_plan
+from report_writing.chat.clarify_flow import execute_clarify_spec, try_handle_pending_message
+from report_writing.chat.tool_dispatch import execute_intent_plan
 from report_writing.chat.intent_llm import resolve_wizard_action
 from report_writing.controller import ensure_task
 from report_writing.domain.models import ChatPhase, ChatSession, OutlineNode, OutlineTree

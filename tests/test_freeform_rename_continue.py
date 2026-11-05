@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from report_writing.chat.actions import _action_submit_outline, _collect_freeform_outline
-from report_writing.chat.intent_clarify import (
+from report_writing.chat.clarify_flow import (
     build_freeform_next_clarify,
     execute_clarify_spec,
     get_pending,
@@ -149,7 +149,7 @@ def test_rename_requires_structured_title_not_regex(tmp_path: Path):
 
 def test_dispatch_set_session_meta_needs_structured_title(tmp_path: Path):
     """调度层空 args 不再用改名正则补 title；须由上游传入结构化 title。"""
-    from report_writing.chat.intent_dispatch import execute_dispatch_tool
+    from report_writing.chat.tool_dispatch import execute_dispatch_tool
 
     session = _session_with_outline(tmp_path)
     hit = execute_dispatch_tool(

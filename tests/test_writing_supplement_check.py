@@ -10,7 +10,7 @@ from report_writing.chat.actions import (
     _action_retry_chapter,
     _action_start_writing,
 )
-from report_writing.chat.intent_clarify import get_pending
+from report_writing.chat.clarify_flow import get_pending
 from report_writing.chat.writing import maybe_offer_writing_pace_clarify
 from report_writing.chat.writing_supplement_check import (
     collect_deterministic_gaps,

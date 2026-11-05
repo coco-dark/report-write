@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from report_writing.chat.dialogue import format_full_dialogue
-from report_writing.chat.intent_clarify import build_ask_intent_clarify
+from report_writing.chat.clarify_flow import build_ask_intent_clarify
 from report_writing.chat.session_documents import (
     ensure_named_freeform_document,
     focus_document_prefers_freeform_path,
