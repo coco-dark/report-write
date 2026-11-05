@@ -128,6 +128,27 @@ def _obs_fail(
     return _dump(body)
 
 
+def _suggested_args_for_tool(
+    tool: str, payload: dict[str, Any], message: str
+) -> dict[str, Any]:
+    key = (tool or "").strip()
+    body = dict(payload or {})
+    if key in {
+        "add_chapter_element",
+        "associate_elements",
+        "associate_element_knowledge",
+        "dissociate_chapter_element",
+        "remove_document_element",
+        "collect_to_element_library",
+    }:
+        return {"payload_json": json.dumps(body, ensure_ascii=False)}
+    if key == "remember_writing_goal":
+        return {"notes": str(body.get("notes") or message or "").strip()}
+    if key.startswith("open_"):
+        return {}
+    return body
+
+
 def _gate_writing_doc_named(state: ChatControlState, tool_name: str) -> str | None:
     """按 Tool 能力检查缺槽；工作名即可开写，正式名仅收录/导出需要。"""
     from report_writing.chat.session_documents import mark_focus_entry_path
@@ -1978,7 +1999,7 @@ def build_chat_tools(state: ChatControlState) -> list:
     @tool
     def submit_points(message: str = "") -> str:
         """无蓝本路径：补充要点或直接开写。"""
-        from report_writing.chat.writing_control_route import reroute_submit_points_if_needed
+        from report_writing.chat.writing_control_route import suggest_tool_instead_of_submit_points
         from report_writing.chat_orchestrator import _collect_freeform_points
 
         msg = message or state.last_user_message or ""
@@ -1987,22 +2008,25 @@ def build_chat_tools(state: ChatControlState) -> list:
             from report_writing.chat.intent_invoke import intent_invoke_fn
 
             intent_llm = intent_invoke_fn(state.invoke)
-        rerouted = reroute_submit_points_if_needed(
+        suggestion = suggest_tool_instead_of_submit_points(
             state.home,
             state.session,
             msg,
             invoke=state.invoke,
             intent_invoke=intent_llm,
         )
-        if rerouted is not None:
-            reply, cards = rerouted
-            _set_cards(state, cards)
-            return _dump(
-                {
-                    "ok": True,
-                    "reply_hint": reply,
-                    "observation": "submit_points 已改调其它写作动作，见 reply_hint。",
-                }
+        if suggestion is not None:
+            nxt = str(suggestion.get("tool") or "").strip()
+            payload = dict(suggestion.get("payload") or {})
+            return _obs_fail(
+                missing_slots=["points_text"],
+                reply_hint="这句不像在补写作要点，我按更合适的动作来。",
+                observation=(
+                    f"submit_points 不适合本句。下一步 Tool：{nxt}。"
+                    "请改调该 Tool，不要把加要素/关联/记目标写进要点。"
+                ),
+                suggested_next_tool=nxt,
+                suggested_args=_suggested_args_for_tool(nxt, payload, msg),
             )
         reply, cards = _collect_freeform_points(
             state.home,
@@ -3373,6 +3397,12 @@ class ChatControlScriptModel(ScriptedChatModel):
                         k in msg for k in ("就用", "选用这份", "用这份", "用这个蓝本")
                     ):
                         return self.call("select_blueprint", {"blueprint_id": ids[0]})
+                nxt = str(data.get("suggested_next_tool") or "").strip()
+                if nxt and nxt != tool_name:
+                    args = data.get("suggested_args")
+                    if not isinstance(args, dict):
+                        args = {}
+                    return self.call(nxt, args)
                 if data.get("ok") is False and "doc_name" in (data.get("missing_slots") or []):
                     from report_writing.chat.session_documents import quick_title_from_write_message
 

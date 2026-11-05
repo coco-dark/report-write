@@ -40,7 +40,7 @@
 - clarify 有模型后用 `looks_like_new_intent` 清 pending（仅离线兜底）
 - UI `resolve_intent_clarify` 文案回退强制 `invoke=None`（现传活模型）
 - entry / sample / remember / no-match 分类丢 `dialogue_tail`（现统一带上下文）
-- `should_prefer_react_over_freeform_dispatch` 被 `wants_*` 抢先锁 freeform（现有模型时交 dispatch 路由）
+- 无蓝本 `freeform_fast` / `react` 分流已删除；口语一律总控 Agent
 - 改名 `_RENAME_TITLE_RE` / `extract_rename_title`（改名须结构化 `title`）
 - `message_wants_collect_to_library` 改道加要素
 - 弱 `message_wants_new_document` 抢 force_new（仅保留 strong / 标题冲突）

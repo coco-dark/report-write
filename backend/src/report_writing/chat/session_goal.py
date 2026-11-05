@@ -405,36 +405,3 @@ def _llm_extract_goal_patch(
     return out or None
 
 
-def should_prefer_react_over_freeform_dispatch(
-    session: ChatSession,
-    message: str,
-    *,
-    invoke: InvokeFn | None = None,
-) -> bool:
-    """无蓝本快车道：复杂句交给总控 ReAct。
-
-    有模型时交给 dispatch 路由分类器（可识别「生成目录 + 看要素库」等复合句）；
-    不再用单动作 wants_* 抢先锁死 freeform。
-    """
-    text = (message or "").strip()
-    if not text:
-        return False
-    if is_session_goal_message(text, invoke=invoke, session=session) and not _META_SPLIT_RE.search(
-        text
-    ):
-        return False
-    if invoke is None:
-        return False
-    from report_writing.chat.intent_context import pack_classifier_context
-    from report_writing.chat.intent_llm import classify_freeform_dispatch_route_llm
-
-    phase = str(session.phase or "")
-    ctx = pack_classifier_context(session)
-    route = classify_freeform_dispatch_route_llm(
-        text,
-        phase=phase or str(ctx.get("phase") or ""),
-        dialogue_tail=list(ctx.get("dialogue_tail") or []),
-        focus_document_brief=str(ctx.get("focus_document_brief") or ""),
-        invoke=invoke,
-    )
-    return route == "react"

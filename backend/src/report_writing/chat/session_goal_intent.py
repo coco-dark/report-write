@@ -45,15 +45,3 @@ def doc_meta_patch_from_message(
         focus_document_brief=str(ctx.get("focus_document_brief") or ""),
         invoke=invoke,
     )
-
-
-def prefer_react_over_freeform_dispatch(
-    message: str,
-    *,
-    phase: str = "",
-    invoke: InvokeFn | None = None,
-) -> bool:
-    from report_writing.chat.intent_llm import classify_freeform_dispatch_route_llm
-
-    # 无 session 时仅用 phase；有上下文的调用方走 session_goal.prefer_*
-    return classify_freeform_dispatch_route_llm(message, phase=phase, invoke=invoke) == "react"

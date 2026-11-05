@@ -610,6 +610,36 @@ def apply_writing_control_classification(
 
     return None
 
+def suggest_tool_instead_of_submit_points(
+    home: Path,
+    session: ChatSession,
+    message: str,
+    *,
+    invoke: Callable[[str, str], str] | None = None,
+    intent_invoke: Callable[[str, str], str] | None = None,
+) -> dict[str, Any] | None:
+    """submit_points 被误调时：只建议改调哪一个 Tool，不在本函数里执行。"""
+    data = classify_writing_message(
+        home, session, message, invoke=invoke, intent_invoke=intent_invoke
+    )
+    if not data:
+        return None
+    tool = str(data.get("tool") or "").strip()
+    payload = data.get("payload")
+    if not isinstance(payload, dict):
+        payload = {}
+    if not tool:
+        steps = data.get("tools")
+        if isinstance(steps, list) and steps and isinstance(steps[0], dict):
+            tool = str(steps[0].get("tool") or "").strip()
+            pl = steps[0].get("payload")
+            if isinstance(pl, dict):
+                payload = pl
+    if not tool or tool in {"submit_points", "none"}:
+        return None
+    return {"tool": tool, "payload": payload}
+
+
 def reroute_submit_points_if_needed(
     home: Path,
     session: ChatSession,
@@ -618,13 +648,6 @@ def reroute_submit_points_if_needed(
     invoke: Callable[[str, str], str] | None = None,
     intent_invoke: Callable[[str, str], str] | None = None,
 ) -> tuple[str, list[Any]] | None:
-    """submit_points 被误调时，用同一套模型分类改道。"""
-    data = classify_writing_message(
-        home, session, message, invoke=invoke, intent_invoke=intent_invoke
-    )
-    if not data or data.get("tool") == "submit_points":
-        return None
-    hit = apply_writing_control_classification(home, session, message, data)
-    if hit is None:
-        return None
-    return hit[0], hit[1]
+    """已废弃静默改道。请读 submit_points 的 suggested_next_tool。"""
+    del home, session, message, invoke, intent_invoke
+    return None

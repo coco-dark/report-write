@@ -2852,12 +2852,6 @@ def _collect_freeform_points(
         return run_blueprint_action(
             home, session, "skip_blueprint", {}, invoke=invoke, emit=emit
         )
-    if text and invoke is not None:
-        from report_writing.chat.writing_control_route import reroute_submit_points_if_needed
-
-        rerouted = reroute_submit_points_if_needed(home, session, text, invoke=invoke)
-        if rerouted is not None:
-            return rerouted[0], rerouted[1]
     task = _load_task(home, task_id)
     meta = dict(session.freeform or {})
     pl = dict(payload or {})

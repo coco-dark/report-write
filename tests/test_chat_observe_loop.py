@@ -460,3 +460,39 @@ def test_handle_chat_materials_pack_skip_via_agent(tmp_path: Path):
     skipped = (session.freeform or {}).get("materials_pack_skipped_tasks") or {}
     assert skipped.get("w-mp") or (session.freeform or {}).get("materials_pack_skipped")
     assert "资料包" in (resp.reply or "") or "不用" in (resp.reply or "")
+
+
+def test_submit_points_suggests_other_tool_without_silent_reroute(tmp_path: Path):
+    session = _session_named(tmp_path)
+    session.phase = ChatPhase.FREEFORM_POINTS.value
+
+    def invoke(system: str, user: str) -> str:
+        if "写作对话总控" in system or "选工具" in system:
+            return json.dumps(
+                {
+                    "tool": "add_chapter_element",
+                    "confidence": 0.92,
+                    "payload": {"name": "气候", "kind": "kv"},
+                },
+                ensure_ascii=False,
+            )
+        return "{}"
+
+    state = ChatControlState(
+        home=tmp_path,
+        session=session,
+        invoke=invoke,
+        intent_invoke=invoke,
+    )
+    tools = {t.name: t for t in build_chat_tools(state)}
+    raw = tools["submit_points"].invoke({"message": "给这章加个气候要素"})
+    data = json.loads(raw)
+    assert data.get("ok") is False
+    assert data.get("suggested_next_tool") == "add_chapter_element"
+    assert "add_chapter_element" in str(data.get("observation") or "")
+    from report_writing.chat.writing_control_route import reroute_submit_points_if_needed
+
+    assert (
+        reroute_submit_points_if_needed(tmp_path, session, "给这章加个气候要素", invoke=invoke)
+        is None
+    )
