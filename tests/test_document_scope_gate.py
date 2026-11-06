@@ -7,7 +7,7 @@ from pathlib import Path
 
 from report_writing.agents.chat_control import build_chat_tools
 from report_writing.agents.state import ChatControlState
-from report_writing.chat.intent_clarify import (
+from report_writing.chat.clarify_flow import (
     build_document_scope_clarify,
     execute_clarify_spec,
     get_pending,

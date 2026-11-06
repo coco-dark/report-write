@@ -49,12 +49,13 @@ def llm_discover_descendants(
     existing_sequences: set[str],
     *,
     parent_titles: dict[str, str] | None = None,
+    model=None,
 ) -> list[OutlineNode]:
     """从正文片段中提取父序号下的子章节目录（单章/多父章均可）。"""
     from report_writing.domain.chapter_locator import focus_text_for_parents
-    from report_writing.infra.llm import live_model
+    from report_writing.infra.llm import or_live_model
 
-    model = live_model()
+    model = or_live_model(model)
     parents = [p for p in parent_sequences if p]
     if model is None or not parents or not (text or "").strip():
         return []
@@ -117,6 +118,7 @@ def expand_outline_chapterwise(
     use_llm: bool = False,
     max_chars_per_chapter: int = 80000,
     on_event: EmitFn | None = None,
+    model=None,
 ) -> OutlineTree:
     """第二轮：按粗目录逐章切正文，规则发现子节；use_llm 时再走模型补漏。"""
     text = (full_text or "").strip()
@@ -180,6 +182,7 @@ def expand_outline_chapterwise(
                 [pseq],
                 existing,
                 parent_titles={pseq: (parent.title or "").strip()},
+                model=model,
             )
             merged = _merge_discovered_nodes(regex_hits, llm_hits)
 

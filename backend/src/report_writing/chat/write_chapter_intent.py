@@ -286,7 +286,7 @@ def try_write_chapters_from_message(
             if judged in WRITE_SCOPES:
                 scope = judged
         if scope not in WRITE_SCOPES:
-            from report_writing.chat.intent_clarify import build_write_scope_clarify
+            from report_writing.chat.clarify_flow import build_write_scope_clarify
 
             reply, cards = build_write_scope_clarify(
                 session, sequences=probe_seqs, write_message=text

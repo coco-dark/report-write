@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from report_writing.domain.models import ChatPhase, ChatSession
+from report_writing.domain.models import ChatActionPayload, ChatPayload, ChatPhase, ChatSession
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1444,7 +1444,7 @@ def onboarding_lane_active(session: ChatSession) -> bool:
     if str(wiz.get("working_task_id") or wiz.get("blueprint_id") or "").strip():
         return True
     try:
-        from report_writing.chat.intent_clarify import get_pending
+        from report_writing.chat.clarify_flow import get_pending
 
         pending = get_pending(session) or {}
         if str(pending.get("source") or "") in {
@@ -1834,7 +1834,7 @@ def user_wants_existing_blueprint_match(
     if bound and "使用" in compact and message_looks_like_new_write_topic(msg):
         return True
     try:
-        from report_writing.chat.intent_clarify import _clear_entry_tool_from_message
+        from report_writing.chat.clarify_flow import _clear_entry_tool_from_message
 
         if _clear_entry_tool_from_message(msg, session=session, invoke=invoke) == "match_blueprints":
             return True
@@ -1871,7 +1871,7 @@ def append_doc_name_clarify_if_needed(
             hint = extra
         return hint.strip(), merged
 
-    from report_writing.chat.intent_clarify import build_document_name_clarify
+    from report_writing.chat.clarify_flow import build_document_name_clarify
 
     pending = peek_pending_entry(session)
     tip = str(pending.get("title") or (session.freeform or {}).get("title") or "").strip()
@@ -1914,17 +1914,13 @@ def preferred_entry_path_resolved(session: ChatSession, message: str = "", *, in
     if not msg:
         return ""
     try:
-        from report_writing.chat.freeform_outline import wants_generate_outline
+        from report_writing.chat.freeform_intent import utterance_mentions_generate_outline
 
         pending = peek_pending_entry(session)
         original = str(pending.get("message") or "").strip() or msg
         branch = str(ob.get("entry_branch") or "").strip()
-        gen_msg = wants_generate_outline(
-            msg, invoke=invoke, phase=str(session.phase or ""), session=session
-        )
-        gen_orig = wants_generate_outline(
-            original, invoke=invoke, phase=str(session.phase or ""), session=session
-        )
+        gen_msg = utterance_mentions_generate_outline(msg)
+        gen_orig = utterance_mentions_generate_outline(original)
         if gen_msg or gen_orig:
             # 已选无蓝本 → 生成目录即 freeform（可跳过模版/自动二选一）
             if branch == "without_blueprint":
@@ -1941,13 +1937,7 @@ def preferred_entry_path_resolved(session: ChatSession, message: str = "", *, in
                 or quick_title_from_write_message(msg)
             )
             if (named_in_orig and gen_orig) or (named_in_msg and gen_msg):
-                from report_writing.chat.freeform_intent import lexical_freeform_intent
-
-                if lexical_freeform_intent(msg) == "generate_outline" or (
-                    original != msg
-                    and lexical_freeform_intent(original) == "generate_outline"
-                ):
-                    return "freeform"
+                return "freeform"
         try:
             from report_writing.chat.freeform_outline import outline_top_chapter_count
 
@@ -1960,7 +1950,7 @@ def preferred_entry_path_resolved(session: ChatSession, message: str = "", *, in
         pass
     if invoke is not None:
         try:
-            from report_writing.chat.intent_clarify import entry_path_from_routing_message
+            from report_writing.chat.clarify_flow import entry_path_from_routing_message
 
             ep = entry_path_from_routing_message(msg, session=session, invoke=invoke)
             if ep in _ENTRY_PATH_VALUES:
@@ -2002,11 +1992,9 @@ def observe_new_document_gaps(
 
     residual_intents: list[str] = []
     try:
-        from report_writing.chat.freeform_outline import wants_generate_outline
+        from report_writing.chat.freeform_intent import utterance_mentions_generate_outline
 
-        if msg and wants_generate_outline(
-            msg, invoke=invoke, phase=str(session.phase or ""), session=session
-        ):
+        if msg and utterance_mentions_generate_outline(msg):
             residual_intents.append("generate_outline")
     except Exception:
         pass
@@ -2051,6 +2039,8 @@ def suggest_next_tools_from_gaps(
         base_args["title_hint"] = tip
         base_args["title"] = tip
     ep = str(gaps.get("declared_entry_path") or "").strip()
+    if not ep and session is not None:
+        ep = str(focus_onboarding(session).get("entry_path") or "").strip()
     bp_bound = session is not None and session_blueprint_already_selected(session)
 
     if message_wants_own_template(msg):
@@ -2101,12 +2091,19 @@ def suggest_next_tools_from_gaps(
                 return tools
             if str(ob.get("entry_path") or "").strip() != "freeform":
                 return tools
-        tools.append({"tool": "skip_blueprint", "args": dict(base_args)})
-        # auto_outline 槽位本身即「自动生成大纲」意图，勿等标题句再命中 generate_outline
+        skip_args = dict(base_args)
         want_gen = (
             str(gaps.get("declared_freeform_mode") or "").strip() == "auto_outline"
             or "generate_outline" in list(gaps.get("residual_intents") or [])
+            or (
+                session is not None
+                and str(focus_onboarding(session).get("freeform_mode") or "").strip()
+                == "auto_outline"
+            )
         )
+        if want_gen:
+            skip_args["path_setup_only"] = True
+        tools.append({"tool": "skip_blueprint", "args": skip_args})
         if want_gen:
             tools.append(
                 {
@@ -2155,10 +2152,7 @@ def prepare_observed_onboarding(
             if path_ep == "template" and message_wants_own_template(msg):
                 mark_focus_entry_path(session, "template")
             elif path_ep == "freeform":
-                from report_writing.chat.freeform_intent import lexical_freeform_intent
-
-                if lexical_freeform_intent(msg) == "generate_outline":
-                    mark_focus_entry_path(session, "freeform")
+                mark_focus_entry_path(session, "freeform")
     elif branch == "with_blueprint":
         path_ep = preferred_entry_path_resolved(session, msg, invoke=invoke) or "match"
         if path_ep:
@@ -2805,7 +2799,7 @@ def _writing_copy_id_for_blueprint(session: ChatSession, blueprint_id: str) -> s
 
 def resolve_task_id(
     session: ChatSession,
-    payload: dict[str, Any] | None = None,
+    payload: ChatActionPayload | dict[str, Any] | None = None,
     *,
     require: bool = False,
 ) -> str:
@@ -2816,7 +2810,7 @@ def resolve_task_id(
     """
     from report_writing.services.task_ids import is_blueprint_task_id, is_writing_task_id
 
-    body = dict(payload or {})
+    body = ChatActionPayload.parse(payload).as_dict()
     payload_wid = str(body.get("writing_task_id") or "").strip()
     if payload_wid and is_writing_task_id(payload_wid):
         return payload_wid
@@ -2862,9 +2856,9 @@ def resolve_task_id(
 
 def resolve_blueprint_id(
     session: ChatSession,
-    payload: dict[str, Any] | None = None,
+    payload: ChatPayload = None,
 ) -> str:
-    body = dict(payload or {})
+    body = ChatActionPayload.parse(payload).as_dict()
     payload_bid = str(body.get("blueprint_id") or "").strip()
     if payload_bid:
         return payload_bid
@@ -3603,12 +3597,12 @@ def apply_matched_document_to_session(
 def enrich_payload_with_message_document(
     session: ChatSession,
     message: str,
-    payload: dict[str, Any] | None = None,
+    payload: ChatPayload = None,
     *,
     switch_focus: bool = True,
 ) -> dict[str, Any]:
     """若用户话点名了登记表中的文档，写入 task_id/blueprint_id；可切换焦点。"""
-    body = dict(payload or {})
+    body = ChatActionPayload.parse(payload).as_dict()
     if str(body.get("task_id") or "").strip() or str(body.get("blueprint_id") or "").strip():
         return body
     hint = str(
@@ -3909,11 +3903,9 @@ def message_confirms_write_document_intent(
     if message_declares_document_title(msg, ""):
         return True
     try:
-        from report_writing.chat.freeform_outline import wants_generate_outline
+        from report_writing.chat.freeform_intent import utterance_mentions_generate_outline
 
-        if wants_generate_outline(
-            msg, invoke=invoke, phase=str(getattr(session, "phase", "") or ""), session=session
-        ):
+        if utterance_mentions_generate_outline(msg):
             return True
     except Exception:
         pass
@@ -4325,6 +4317,17 @@ def message_explicitly_creates_blueprint(
 
         return is_create_blueprint_intent(t, invoke=invoke, session=session)
     return any(h in t for h in _EXPLICIT_CREATE_BLUEPRINT_HINTS)
+
+
+_RENAME_NEEDS_TITLE_RE = re.compile(
+    r"(改个名字|改名叫|改名为|重命名|标题改|名字改|文档名改|改一下名)"
+)
+
+
+def message_requires_structured_rename_title(text: str) -> bool:
+    """口语含改名指令但未通过 Tool/args 传 title 时，须追问或要求结构化 title。"""
+    return bool(_RENAME_NEEDS_TITLE_RE.search((text or "").replace(" ", "")))
+
 
 def explicit_doc_title_from_message(text: str) -> str:
     """无模型时的窄兜底：定名「名字叫… / 就叫…」与改名「名字改一下叫做 / 改名叫…」。

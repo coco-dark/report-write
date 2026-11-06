@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from report_writing.domain.models import ChatSession, ElementNode, WritingTask
+from report_writing.domain.models import ChatActionPayload, ChatPayload, ChatSession, ElementNode, WritingTask
 
 def extract_collect_element_name(text: str) -> str:
     """无模型时的窄兜底：常见「把××收入要素库」句式。有 invoke 请用 resolve_collect_element_name。"""
@@ -114,7 +114,7 @@ def collect_task_elements_to_library(
     home: Path,
     session: ChatSession,
     message: str,
-    payload: dict[str, Any] | None = None,
+    payload: ChatPayload = None,
     *,
     invoke=None,
 ) -> tuple[str, list[Any]]:
@@ -131,7 +131,7 @@ def collect_task_elements_to_library(
         upsert_library_item,
     )
 
-    body = dict(payload or {})
+    body = ChatActionPayload.parse(payload).as_dict()
     task_id = str(body.get("task_id") or "").strip()
     if not task_id:
         task_id = str(getattr(session, "task_id", "") or "").strip()

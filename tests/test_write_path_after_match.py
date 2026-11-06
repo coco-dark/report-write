@@ -34,6 +34,24 @@ def test_finish_match_without_results_asks_instead_of_outline(tmp_path: Path):
     assert "49" not in reply
 
 
+def test_no_match_with_template_talk_does_not_auto_start_wizard(tmp_path: Path):
+    session = ChatSession(id="s-tpl")
+    reply, cards = finish_blueprint_match(
+        tmp_path,
+        session,
+        "我有模版写一份环境报告",
+        "",
+        [],
+        invoke=None,
+    )
+    wiz = dict((session.freeform or {}).get("blueprint_wizard") or {})
+    assert not str(wiz.get("step") or "").strip()
+    assert is_awaiting_path_after_no_match(session) or any(
+        getattr(c, "type", "") in {"intent_clarify", "skip_blueprint"} for c in cards
+    )
+    assert "向导" not in (reply or "") or "怎么开始" in (reply or "") or "蓝本" in (reply or "")
+
+
 def test_write_path_help_outline_clears_pending(tmp_path: Path):
     session = ChatSession(id="s2")
     reply_ask_write_path(session, "安全预评价报告")

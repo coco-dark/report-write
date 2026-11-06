@@ -89,6 +89,7 @@ def derive_chapter_meta_from_points(
     category: str = "报告",
     parent_title: str = "",
     point_items: list[Any] | None,
+    model=None,
 ) -> tuple[str, str]:
     """返回 (describes, aux_prompt)。无要点时返回空字符串对。"""
     items = [x for x in list(point_items or []) if isinstance(x, dict)]
@@ -107,9 +108,9 @@ def derive_chapter_meta_from_points(
     aux_fb = _aux_from_points(items)
 
     try:
-        from report_writing.infra.llm import live_model
+        from report_writing.infra.llm import or_live_model
 
-        model = live_model()
+        model = or_live_model(model)
     except Exception:
         model = None
 
@@ -165,6 +166,7 @@ def apply_meta_from_points_to_node(
     *,
     category: str = "报告",
     parent_title: str = "",
+    model=None,
 ) -> bool:
     """若 node 有可写要点，则重写 describes / aux_prompt。返回是否已更新。"""
     if bool(getattr(node, "structure_only", False)):
@@ -181,6 +183,7 @@ def apply_meta_from_points_to_node(
         category=category,
         parent_title=parent_title,
         point_items=items if items else [{"text": p} for p in points],
+        model=model,
     )
     node.describes = describes
     node.aux_prompt = aux

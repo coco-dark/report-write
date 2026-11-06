@@ -53,7 +53,7 @@ def build_no_match_path_clarify(
 ) -> tuple[str, list[Any]]:
     """无匹配后的入口澄清：两步（有蓝本 / 无蓝本）。"""
     from report_writing.chat.cards import _skip_blueprint_card
-    from report_writing.chat.intent_clarify import begin_clarify, build_entry_branch_clarify
+    from report_writing.chat.clarify_flow import begin_clarify, build_entry_branch_clarify
     from report_writing.domain.models import ChatCard
 
     tip = (topic or message or "").strip()

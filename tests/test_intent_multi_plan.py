@@ -1,15 +1,29 @@
-"""会话全程多意图：JSON 计划排序、关键续步、高/低置信门闩。"""
+"""遗留 JSON 计划（口语主路径已不走）。"""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
+import pytest
+
 from report_writing.chat.intent_multi_plan import (
     expand_plan_auto_continue,
     try_run_oral_multi_intent,
 )
 from report_writing.domain.models import ChatSession
+
+pytestmark = pytest.mark.legacy_plan
+
+
+@pytest.fixture(autouse=True)
+def _enable_intent_plan_for_multi_tests(monkeypatch):
+    monkeypatch.setenv("REPORT_WRITING_INTENT_PLAN", "1")
+    from report_writing.infra import config_settings
+
+    config_settings._application.cache_clear()
+    yield
+    config_settings._application.cache_clear()
 
 
 def test_expand_plan_auto_continue_naming_then_entry():
@@ -65,7 +79,7 @@ def test_high_confidence_silent_chain(tmp_path: Path, monkeypatch):
         return "已按顺序办理。", [], []
 
     monkeypatch.setattr(
-        "report_writing.chat.intent_dispatch.execute_intent_plan",
+        "report_writing.chat.tool_dispatch.execute_intent_plan",
         fake_execute,
     )
     hit = try_run_oral_multi_intent(
@@ -97,7 +111,7 @@ def test_low_confidence_asks_before_chain(tmp_path: Path, monkeypatch):
         raise AssertionError("low confidence must not silent-execute")
 
     monkeypatch.setattr(
-        "report_writing.chat.intent_dispatch.execute_intent_plan",
+        "report_writing.chat.tool_dispatch.execute_intent_plan",
         boom,
     )
     hit = try_run_oral_multi_intent(
@@ -134,7 +148,7 @@ def test_single_high_confidence_tool_executes(tmp_path: Path, monkeypatch):
         return "已打开资料库。", [], []
 
     monkeypatch.setattr(
-        "report_writing.chat.intent_dispatch.execute_intent_plan",
+        "report_writing.chat.tool_dispatch.execute_intent_plan",
         fake_execute,
     )
     hit = try_run_oral_multi_intent(tmp_path, session, "打开资料库", invoke=invoke)
@@ -170,7 +184,7 @@ def test_mid_session_rename_and_write_plan(tmp_path: Path, monkeypatch):
         return "改名并开写。", [], []
 
     monkeypatch.setattr(
-        "report_writing.chat.intent_dispatch.execute_intent_plan",
+        "report_writing.chat.tool_dispatch.execute_intent_plan",
         fake_execute,
     )
     hit = try_run_oral_multi_intent(

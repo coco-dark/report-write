@@ -35,30 +35,6 @@ _POINTS_SYSTEM = (
 )
 
 
-def wants_generate_points(
-    message: str,
-    *,
-    invoke: InvokeFn | None = None,
-    phase: str = "",
-    task_id: str = "",
-) -> bool:
-    from report_writing.chat.freeform_intent import wants_generate_points as _intent
-
-    return _intent(message, invoke=invoke, phase=phase, task_id=task_id)
-
-
-def wants_skip_points(
-    message: str,
-    *,
-    invoke: InvokeFn | None = None,
-    phase: str = "",
-    task_id: str = "",
-) -> bool:
-    from report_writing.chat.freeform_intent import wants_skip_points as _intent
-
-    return _intent(message, invoke=invoke, phase=phase, task_id=task_id)
-
-
 def count_chapters_missing_points(task: WritingTask) -> int:
     if not task.outline or not task.outline.chapters:
         return 0
@@ -188,30 +164,21 @@ def _fallback_describes(title: str, category: str, parent_title: str = "") -> st
     )
 
 
-def _invoke_points_batch(invoke: InvokeFn, system: str, user: str) -> str:
+def _invoke_points_batch(invoke: InvokeFn, system: str, user: str, *, model=None) -> str:
     """要点专用调用：尽量 temperature=0，失败则回落普通 invoke。"""
-    try:
-        from report_writing.api.deps import live_model
+    from report_writing.infra.llm import or_live_model
+    from report_writing.infra.llm_invoke import invoke_prompt
 
-        model = live_model()
-        if model is not None and hasattr(model, "invoke"):
-            # 部分封装支持 temperature；不支持则忽略
+    chosen = or_live_model(model)
+    if chosen is not None:
+        try:
+            cold = chosen.bind(temperature=0.0) if hasattr(chosen, "bind") else chosen
+            return str(invoke_prompt(cold, system, user) or "").strip()
+        except Exception:
             try:
-                if hasattr(model, "bind"):
-                    cold = model.bind(temperature=0.0)
-                    msg = cold.invoke(
-                        [
-                            {"role": "system", "content": system},
-                            {"role": "user", "content": user},
-                        ]
-                    )
-                    content = getattr(msg, "content", None)
-                    if content is not None:
-                        return str(content).strip()
+                return str(invoke_prompt(chosen, system, user) or "").strip()
             except Exception:
                 pass
-    except Exception:
-        pass
     return str(invoke(system, user) or "").strip()
 
 
@@ -223,6 +190,7 @@ def llm_draft_chapter_points(
     max_chapters: int = 40,
     emit: Any = None,
     target_keys: set[str] | list[str] | None = None,
+    model=None,
 ) -> list[OutlineNode]:
     from report_writing.chat.user_process import emit_user_process
 
@@ -273,7 +241,7 @@ def llm_draft_chapter_points(
             },
             ensure_ascii=False,
         )
-        raw = _invoke_points_batch(invoke, _POINTS_SYSTEM, user)
+        raw = _invoke_points_batch(invoke, _POINTS_SYSTEM, user, model=model)
         for row in _parse_chapter_points_json(raw):
             key = str(row.get("key") or "").strip()
             if key:

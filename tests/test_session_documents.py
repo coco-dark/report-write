@@ -37,7 +37,7 @@ def test_quick_title_and_pending_entry_for_new_write():
 def test_multi_action_sentence_is_not_document_title():
     from report_writing.chat.freeform_intent import lexical_freeform_intent
     from report_writing.chat.freeform_outline import outline_top_chapter_count
-    from report_writing.chat.intent_clarify import split_doc_name_answer
+    from report_writing.chat.clarify_flow import split_doc_name_answer
     from report_writing.chat.session_documents import (
         preferred_path_from_write_message,
         sanitize_candidate_document_title,

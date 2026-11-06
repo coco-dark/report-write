@@ -116,6 +116,10 @@ def _make_wizard_scripted_model(state: ChatControlState, invoke) -> ScriptedChat
             wizard = active_blueprint_wizard(state.session) or {}
             if wizard:
                 hit = resolve_wizard_action(text, wizard, invoke=invoke)
+                if hit and hit.get("type") == "command":
+                    name = str(hit.get("command") or "").strip()
+                    if name in _COMMAND_TO_TOOL:
+                        return self.call(_COMMAND_TO_TOOL[name], {})
                 if hit:
                     reply, cards, _events = apply_wizard_action(
                         state.home,
@@ -126,38 +130,35 @@ def _make_wizard_scripted_model(state: ChatControlState, invoke) -> ScriptedChat
                     )
                     state.cards = list(cards)
                     return self.finish(reply or "好的。")
-
-            if is_create_blueprint_intent(
-                text, invoke=invoke, session=state.session
-            ) and not wizard.get("blueprint_id"):
-                return self.call(
-                    "begin_blueprint_wizard",
-                    {
-                        "title_hint": extract_wizard_title_hint(
-                            text, invoke=invoke, session=state.session
-                        )
-                    },
+                return self.finish(
+                    "没太听懂。你可以说：重新提取目录、换样板、确认目录、开始分析，或点下方卡片按钮。"
                 )
 
-            cmd = resolve_wizard_action(text, wizard, invoke=invoke)
-            if cmd and cmd.get("type") == "command":
-                name = str(cmd.get("command") or "").strip()
-                if name in _COMMAND_TO_TOOL:
-                    return self.call(_COMMAND_TO_TOOL[name], {})
-
+            # 向导未开始：禁止在子代理内代调 begin；只 observation 给总控 hop。
             if is_create_blueprint_intent(text, invoke=invoke, session=state.session):
-                return self.call(
-                    "begin_blueprint_wizard",
+                hint = extract_wizard_title_hint(
+                    text, invoke=invoke, session=state.session
+                )
+                ff = dict(state.session.freeform or {})
+                ff["suggested_next_tools"] = [
                     {
-                        "title_hint": extract_wizard_title_hint(
-                            text, invoke=invoke, session=state.session
-                        )
-                    },
+                        "tool": "begin_blueprint_wizard",
+                        "args": {
+                            "explicit_create": True,
+                            "from_entry_path": True,
+                            "title_hint": hint,
+                        },
+                    }
+                ]
+                state.session.freeform = ff
+                return self.finish(
+                    "向导还没开始。请总控调用 begin_blueprint_wizard(explicit_create=true)，"
+                    "或让用户点选「依据模版编写」。"
                 )
 
             return self.finish(
-                "没太听懂。你可以说：创建蓝本、重新提取目录、换样板、"
-                "确认目录（或确认第×到×章）、开始分析全部、分析第×到×章，或点下方卡片按钮。"
+                "没太听懂。依据模版编写请先 begin_blueprint_wizard；"
+                "向导进行中可以说：重新提取目录、换样板、确认目录、开始分析，或点卡片。"
             )
 
     return _WizardScripted()

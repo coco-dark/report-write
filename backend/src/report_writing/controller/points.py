@@ -12,7 +12,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from report_writing.agents.supervisor import run_supervisor
 from report_writing.services.corpus import load_template, normalize_biz_type
-from report_writing.infra.llm import live_model
+from report_writing.infra.llm import or_live_model
 from report_writing.domain.models import (
     ChapterRequirement,
     ChapterState,
@@ -264,16 +264,16 @@ def _polish_keywords(title: str, points: list[str], keywords: list[str]) -> list
     return out[:10]
 
 
-def parse_writing_points(text: str, *, title: str = "", sequence: str = "") -> list[str]:
+def parse_writing_points(text: str, *, title: str = "", sequence: str = "", model=None) -> list[str]:
     """粘贴原文，让模型抽出本章写作要点；无模型时按行切分。"""
     points, _keywords, _describes, _blocks, _ref, _structure, _slots = parse_points_and_keywords(
-        text, title=title, sequence=sequence
+        text, title=title, sequence=sequence, model=model
     )
     return points
 
 
 def parse_points_and_keywords(
-    text: str, *, title: str = "", sequence: str = ""
+    text: str, *, title: str = "", sequence: str = "", model=None
 ) -> tuple[list[str], list[str], str, list[dict], str, bool, list[dict]]:
     """同一次解析：简述 + 写法要点 + 检索词 + 版式块 + 参考正文 + 是否纯目录。
 
@@ -286,7 +286,7 @@ def parse_points_and_keywords(
     cleaned = (text or "").strip()
     if not cleaned:
         raise RuntimeError("请粘贴本章原文")
-    model = live_model()
+    model = or_live_model(model)
     if model is None:
         points = _points_from_plain(cleaned)
         keywords = _keywords_from_title_points(title, points)

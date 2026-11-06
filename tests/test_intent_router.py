@@ -79,3 +79,19 @@ def test_explicit_select_single():
 def test_message_explicitly_requests_blueprint():
     assert message_explicitly_requests_blueprint("看看有哪些蓝本", invoke=_entry_invoke) is True
     assert message_explicitly_requests_blueprint("写一份航天器说明书", invoke=_entry_invoke) is False
+
+
+def test_create_blueprint_lexical_only_when_offline():
+    from report_writing.chat.entry_intent import is_create_blueprint_intent
+
+    assert is_create_blueprint_intent("我有模版写一份报告", invoke=None) is True
+
+    def _none(_s: str, _u: str) -> str:
+        return json.dumps({"intent": "none", "confidence": 0.9})
+
+    assert is_create_blueprint_intent("我有模版写一份报告", invoke=_none) is False
+
+    def _create(_s: str, _u: str) -> str:
+        return json.dumps({"intent": "create_blueprint", "confidence": 0.9})
+
+    assert is_create_blueprint_intent("按样本写环境报告", invoke=_create) is True

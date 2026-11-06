@@ -10,7 +10,6 @@ from pathlib import Path
 
 from report_writing.agents.supervisor import run_supervisor
 from report_writing.services.corpus import load_template, normalize_biz_type
-from report_writing.infra.llm import live_model
 from report_writing.domain.models import (
     ChapterRequirement,
     ChapterState,

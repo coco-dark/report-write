@@ -131,6 +131,7 @@ def resolve_elements_for_chapter(
     home: Path | None = None,
     task_id: str = "",
     biz_type: str = "002",
+    model=None,
 ) -> ChapterRequirement:
     by_id = {item.id: item for item in elements if item.id}
     results = []
@@ -161,6 +162,7 @@ def resolve_elements_for_chapter(
             home=home,
             task_id=task_id,
             biz_type=biz_type,
+            model=model,
         )
         node.result = value
         kind = (node.kind or "").strip()
@@ -347,6 +349,7 @@ def _resolve_one(
     home: Path | None = None,
     task_id: str = "",
     biz_type: str = "002",
+    model=None,
 ) -> str:
     kind = (node.kind or "fixed").strip()
     if kind == "kv":
@@ -398,9 +401,9 @@ def _resolve_one(
         if not prompt:
             return ""
         try:
-            from report_writing.infra.llm import live_model
+            from report_writing.infra.llm import or_live_model
 
-            model = live_model()
+            model = or_live_model(model)
             if model is None:
                 return prompt
             message = model.invoke(f"请根据提示生成简短要素内容，不要解释：\n{prompt}")
@@ -432,6 +435,7 @@ def _resolve_one(
             home=home,
             task_id=task_id,
             biz_type=biz_type,
+            model=model,
         )
     return (node.value or "").strip()
 
@@ -450,6 +454,7 @@ def _resolve_ref(
     home: Path | None = None,
     task_id: str = "",
     biz_type: str = "002",
+    model=None,
 ) -> str:
     ref_key = (node.ref_key or "").strip()
     if not ref_key or ref_key in seen:
@@ -478,6 +483,7 @@ def _resolve_ref(
             home=home,
             task_id=task_id,
             biz_type=biz_type,
+            model=model,
         )
     if outline is None:
         return ""

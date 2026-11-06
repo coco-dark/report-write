@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from report_writing.domain.models import ChatSession, ElementNode, WritingTask
+from report_writing.domain.models import ChatActionPayload, ChatPayload, ChatSession, ElementNode, WritingTask
 
 
 def extract_element_name_hint(text: str) -> str:
@@ -95,8 +95,9 @@ def chapters_linking_element(task: WritingTask | None, element_id: str) -> list[
     return rows
 
 
-def _resolve_name_hint(body: dict[str, Any], message: str, *, invoke=None) -> str:
-    hint = str(body.get("element_name") or body.get("name") or "").strip()
+def _resolve_name_hint(body: ChatPayload, message: str, *, invoke=None) -> str:
+    payload = ChatActionPayload.parse(body)
+    hint = str(payload.get("element_name") or payload.get("name") or "").strip()
     if hint:
         return hint
     if invoke is not None:
@@ -113,7 +114,7 @@ def _resolve_name_hint(body: dict[str, Any], message: str, *, invoke=None) -> st
 def _element_disambiguate_card(
     session: ChatSession,
     tool: str,
-    body: dict[str, Any],
+    body: ChatPayload,
     matches: list[ElementNode],
     *,
     task: WritingTask | None,
@@ -121,6 +122,7 @@ def _element_disambiguate_card(
 ) -> tuple[str, list[Any]]:
     from report_writing.chat.action_slots import build_action_slot_clarify
 
+    payload = ChatActionPayload.parse(body).as_dict()
     rows = [
         (str(getattr(el, "id", "") or "").strip(), str(getattr(el, "name", "") or "").strip())
         for el in matches
@@ -129,7 +131,7 @@ def _element_disambiguate_card(
     reply, cards = build_action_slot_clarify(
         session,
         tool,
-        body,
+        payload,
         ["element_id"],
         task=task,
         message=message,
@@ -142,7 +144,7 @@ def dissociate_chapter_element(
     home: Path,
     session: ChatSession,
     message: str,
-    payload: dict[str, Any] | None = None,
+    payload: ChatPayload = None,
     *,
     invoke=None,
 ) -> tuple[str, list[Any]]:
@@ -151,7 +153,7 @@ def dissociate_chapter_element(
     from report_writing.chat.writing import _apply_dissociate_chapter_element
     from report_writing.services.store import TaskStore
 
-    body = dict(payload or {})
+    body = ChatActionPayload.parse(payload).as_dict()
     task_id = str(body.get("task_id") or getattr(session, "task_id", "") or "").strip()
     if not task_id:
         return "还没有写作任务，先选定蓝本或确认大纲后再改要素。", []
@@ -191,7 +193,7 @@ def dissociate_chapter_element(
         if len(linked) == 1:
             chapter_key = linked[0][0]
         elif len(linked) > 1:
-            from report_writing.chat.intent_clarify import begin_clarify
+            from report_writing.chat.clarify_flow import begin_clarify
 
             body = {**body, "task_id": task_id, "element_id": eid, "element_name": el.name}
             options = []
@@ -256,7 +258,7 @@ def remove_document_element(
     home: Path,
     session: ChatSession,
     message: str,
-    payload: dict[str, Any] | None = None,
+    payload: ChatPayload = None,
     *,
     invoke=None,
 ) -> tuple[str, list[Any]]:
@@ -266,7 +268,7 @@ def remove_document_element(
     from report_writing.chat.writing import _apply_remove_document_element
     from report_writing.services.store import TaskStore
 
-    body = dict(payload or {})
+    body = ChatActionPayload.parse(payload).as_dict()
     task_id = str(body.get("task_id") or getattr(session, "task_id", "") or "").strip()
     if not task_id:
         return "还没有写作任务，先选定蓝本或确认大纲后再删要素。", []

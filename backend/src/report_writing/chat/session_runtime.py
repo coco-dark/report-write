@@ -21,7 +21,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from report_writing.domain.models import ChapterStatus, ChatPhase, ChatSession
+from report_writing.domain.models import ChapterStatus, ChatActionPayload, ChatPayload, ChatPhase, ChatSession
 
 RUNTIME_VERSION = 1
 
@@ -70,7 +70,8 @@ def workflow_patch(session: ChatSession, name: str, patch: dict[str, Any]) -> di
     return merged
 
 
-def workflow_touch_template(session: ChatSession, payload: dict[str, Any]) -> None:
+def workflow_touch_template(session: ChatSession, payload: ChatPayload) -> None:
+    payload = ChatActionPayload.parse(payload)
     data = {
         "resource": str(payload.get("resource") or "").strip(),
         "step": str(payload.get("step") or "choose").strip(),
@@ -601,7 +602,7 @@ def runtime_public_view(session: ChatSession, home: Path | None = None) -> dict[
         ),
         "composer_save_blueprint": composer_save,
         "blueprint_wizard": bp,
-        "session_goal": goal,
+        "session_goal": goal.to_dict(),
         "session_goal_brief": session_goal_brief(session),
         "writing_brief": brief,
         "writing_brief_prompt_preview": writing_brief_prompt_block(session)[:500],

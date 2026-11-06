@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -17,15 +18,25 @@ from report_writing.agents.state import ChatControlState, EmitFn, InvokeFn
 
 # 兼容旧 import
 __all__ = ["ChatControlState", "run_chat_control", "build_chat_tools", "ChatControlScriptModel"]
-from report_writing.domain.models import ChatCard, ChatPhase, ChatSession
+from report_writing.domain.models import ChatActionPayload, ChatCard, ChatPayload, ChatPhase, ChatSession
 
 _log = logging.getLogger(__name__)
+
+
+def _state_intent_llm(state: ChatControlState) -> InvokeFn | None:
+    if state.intent_invoke is not None:
+        return state.intent_invoke
+    from report_writing.chat.intent_invoke import intent_invoke_fn
+
+    if state.invoke is None and state.intent_model is None:
+        return None
+    return intent_invoke_fn(state.invoke, model=state.intent_model)
 
 CONTROL_INSTRUCTIONS = """你是「智能文档协作」对话写文档总控（角色：小墨）。
 职责：根据 writing_brief、dialogue_full、session_goal、用户原话与界面 action，选择并调用 Tool 推进写作。禁止靠关键词表猜意图；禁止编造蓝本名称或工具未返回的事实。
 
 ## 0. 整段会话自主决策（开场 / 向导 / 写作中途同一套）
-每轮先按意图 JSON（或 observation）判断：**确定就执行、缺项就引导、不确定就多轮确认**。
+你是 LangChain 绑定的总控 Agent：根据 user 消息里的 writing_brief、dialogue_full、session_gaps 等上下文，**自行选择 Tool** 并读每次 Tool 返回的 observation / missing_slots 闭环。
 - **确定**：本句或上下文已给出的槽位 → 立刻调对应 Tool；一句可多 Tool（改名+开写、匹配+选章、加要素+确认等）。
 - **缺项**：只补还缺的（如缺章节号、缺文档名、缺写作方式、缺蓝本 id）；不要机械重走整条流水线。
 - **不确定**：指代不明、写还是学未定、多文档歧义（已定名后又说「写一份关于××」是新开还是改名）、破坏性动作把握不足 → ask_intent / 澄清卡；禁止猜第一章、代选蓝本、静默开写/删除/收录/用题材改名。
@@ -34,7 +45,8 @@ CONTROL_INSTRUCTIONS = """你是「智能文档协作」对话写文档总控（
 - **一句多动作**：把短名、路径、生成目录、章数拆开执行；禁止把整句写入 title / set_session_meta。
   「作lzb述职报告 自动生成章节目录 三个大章节就可以」→ 工作名 lzb述职报告 + skip_blueprint + submit_outline（一级章=3）。
   「再给我写一份述职报告 三个章节 名字叫做lzb述职报告」→ 定名 lzb述职报告 + 无蓝本自动大纲三章；不要开模版向导。
-- 无固定步骤顺序；缺什么补什么；禁止对用户展示 Tool 名；界面点选与口语等价。
+- 无固定步骤顺序；缺什么补什么；禁止对用户展示 Tool 名。
+- **界面点选**：user JSON 的 action 非空 = 点了按钮/卡片，本轮须调用同名 Tool（含 resolve_intent_clarify），payload 原样传入，不要另猜意图。点选与口语等价。
 
 观察闭环：调 Tool → 读 ok / observation / missing_slots → 再决定下一跳或收尾。
 硬门闩仅限：写盘必须落在当前车道；收录/导出前须正式定名。工作名即可匹配蓝本、向导、生成目录、开写。
@@ -59,24 +71,16 @@ CONTROL_INSTRUCTIONS = """你是「智能文档协作」对话写文档总控（
 - 「写这一章」没说哪一章 → 追问章节，勿猜。
 - 「确认这一章并停止」→ confirm_chapter(pause_after=true)；勿确认后又自动写下章。
 - 「只保留前两章」→ 裁目录后 submit_outline。
-- 加要素/关联/收入库：缺参就问；同名多个挂澄清点选。
+- 加要素/关联/收入库/重试：缺参就问；同名多个挂澄清点选。误调时读 suggested_next_tool 改调，禁止在本 Tool 内执行另一个总控 Tool。
 - 开写前缺要点：先问是否生成；同意后再 generate_freeform_points。
 - 多章未指定 writing_pace 时 start_writing 会先澄清「一次写完 / 写一章看一章」；开写前可 check_writing_supplements 查待补要素；用户说先写再说 → skip_writing_supplement_check；卡片上忽略某项 → dismiss_writing_supplement（仅取消该章关联）。
 
-## 4. 写作与章节工具
-- 入口：ask_entry_path；选型：match_blueprints / list_blueprints / select_blueprint / begin_blueprint_wizard / skip_blueprint
-- 选章开写：select_write_chapters / start_writing
-- 开写后 study/search/write/check 由后台 supervisor 执行
-- 章操作：confirm_chapter、retry_chapter、configure_chapter、add_chapter_element、retry_search_chapter
-- 暂停：pause_writing，或 confirm 时 pause_after=true
-- 导出 Word：prepare_export_word
-- 要素：associate_elements / dissociate_chapter_element / remove_document_element / collect_to_element_library
+## 4. 工具调用约定
+- 你只能调用已绑定的 Tool；**何时调用、参数与禁忌见各 Tool 的 description**（LangChain 工具注解），不要在脑中另备一份工具表。
+- 每调一次 Tool 必读 ok / observation / missing_slots / reply_hint，再决定下一跳或口语收尾。
+- 按章检索、写正文、核对引用由后台 supervisor 流水线执行，勿在对话里编造章节正文。
 
-## 5. 资源与子 Agent
-- 渲染模版 / Word 样式：优先 CRUD Tool 与 open_*_wizard；等价 render_subagent / style_subagent
-- 蓝本配置期可用 blueprint_subagent；禁止无必要时 handoff 去蓝本页
-
-## 5b. 蓝本库 vs 对话内「依据模版」（必守）
+## 5. 蓝本库 vs 对话内「依据模版」（必守）
 - **蓝本库**（bp*）：不在对话里新建完成入库或删除；请在「蓝本管理」维护。
 - **对话内** begin_blueprint_wizard / blueprint_wizard：当前文档 w* 副本；收录前不入库。
 - **写入蓝本库**：save_freeform_as_blueprint 或文档窗「收录到蓝本库」。
@@ -135,6 +139,110 @@ def _obs_fail(
     return _dump(body)
 
 
+def _suggested_args_for_tool(
+    tool: str, payload: ChatPayload, message: str
+) -> dict[str, Any]:
+    key = (tool or "").strip()
+    body = ChatActionPayload.parse(payload).as_dict()
+    if key in {
+        "add_chapter_element",
+        "associate_elements",
+        "associate_element_knowledge",
+        "dissociate_chapter_element",
+        "remove_document_element",
+        "collect_to_element_library",
+    }:
+        return {"payload_json": json.dumps(body, ensure_ascii=False)}
+    if key == "remember_writing_goal":
+        return {"notes": str(body.get("notes") or message or "").strip()}
+    if key.startswith("open_"):
+        return {}
+    if key == "ask_entry_path":
+        return {"message": (message or "").strip()}
+    if key == "retry_chapter":
+        return {"payload_json": json.dumps(body, ensure_ascii=False)}
+    return body
+
+
+def _hop_if_other_writing_control(
+    state: ChatControlState, expected_tool: str, message: str = ""
+) -> str | None:
+    """分类器点名其它写作控制 Tool 时只观察 hop，不执行。点选同名 action 不分类。"""
+    if (state.user_action or "").strip() == expected_tool:
+        return None
+    msg = (message or state.last_user_message or "").strip()
+    if not msg:
+        return None
+    from report_writing.chat.writing_control_route import suggest_other_writing_control_tool
+
+    intent_llm = _state_intent_llm(state)
+    suggestion = suggest_other_writing_control_tool(
+        state.home,
+        state.session,
+        msg,
+        expected_tool=expected_tool,
+        invoke=state.invoke,
+        intent_invoke=intent_llm,
+    )
+    if suggestion is None:
+        return None
+    nxt = str(suggestion.get("tool") or "").strip()
+    payload = dict(suggestion.get("payload") or {})
+    if not nxt:
+        return None
+    return _obs_fail(
+        reply_hint="这句更适合另一个动作，我按那个来。",
+        observation=(
+            f"{expected_tool} 不执行其他总控 Tool。下一步 {nxt}。"
+            "请改调该 Tool。"
+        ),
+        suggested_next_tool=nxt,
+        suggested_args=_suggested_args_for_tool(nxt, payload, msg),
+    )
+
+
+def _dump_writing_control_result(
+    state: ChatControlState,
+    result: tuple[str, list, list] | None,
+    *,
+    expected_tool: str,
+    ok_observation: str,
+    fail_hint: str,
+    fail_slots: list[str] | None = None,
+) -> str:
+    if not result:
+        return _obs_fail(
+            missing_slots=fail_slots,
+            reply_hint=fail_hint,
+            observation=f"{expected_tool} 失败：{fail_hint}",
+        )
+    reply, cards, events = result
+    hop = next(
+        (
+            e
+            for e in (events or [])
+            if isinstance(e, dict) and str(e.get("type") or "") == "suggested_next_tool"
+        ),
+        None,
+    )
+    if hop:
+        nxt = str(hop.get("tool") or "").strip()
+        args = hop.get("args") if isinstance(hop.get("args"), dict) else {}
+        return _obs_fail(
+            reply_hint=reply,
+            observation=(
+                f"{expected_tool} 只处理本 Tool。本句更像 {nxt}。"
+                f"请改调 {nxt}，不要在本函数执行。"
+            ),
+            suggested_next_tool=nxt,
+            suggested_args=_suggested_args_for_tool(
+                nxt, dict(args or {}), state.last_user_message or ""
+            ),
+        )
+    _set_cards(state, cards)
+    return _dump({"ok": True, "reply_hint": reply, "observation": ok_observation})
+
+
 def _gate_writing_doc_named(state: ChatControlState, tool_name: str) -> str | None:
     """按 Tool 能力检查缺槽；工作名即可开写，正式名仅收录/导出需要。"""
     from report_writing.chat.session_documents import mark_focus_entry_path
@@ -171,6 +279,7 @@ def _emit_process(state: ChatControlState, message: str, **extra: Any) -> None:
 def _tool_begin(state: ChatControlState, tool_name: str) -> None:
     from report_writing.chat.user_process import emit_tool_step
 
+    state.did_invoke_tool = True
     emit_tool_step(state.emit, tool_name)
 
 
@@ -244,9 +353,9 @@ def _hang_entry_path_after_named(
     after_doc_name_confirm: bool = True,
 ) -> tuple[str, list[ChatCard]]:
     """已定名缺入口：挂有蓝本/无蓝本（或模版/自动大纲）澄清卡。"""
-    from report_writing.chat.intent_clarify import build_entry_path_clarify
+    from report_writing.chat.clarify_flow import build_entry_path_clarify
 
-    intent_fn = state.intent_invoke if state.intent_invoke is not None else state.invoke
+    intent_fn = _state_intent_llm(state) or state.invoke
     return build_entry_path_clarify(
         state.session,
         message=(message or state.last_user_message or "").strip(),
@@ -255,7 +364,7 @@ def _hang_entry_path_after_named(
         home=state.home,
         emit=state.emit,
         after_doc_name_confirm=after_doc_name_confirm,
-        apply_plan=bool((message or state.last_user_message or "").strip()),
+        apply_plan=False,
     )
 
 
@@ -273,7 +382,7 @@ def _ask_path_after_no_blueprint_match(state: ChatControlState, message: str) ->
     reply, cards = reply_ask_write_path(
         state.session,
         msg,
-        invoke=state.intent_invoke or state.invoke,
+        invoke=_state_intent_llm(state) or state.invoke,
     )
     _set_cards(state, cards)
     hint = (reply or "").strip() or (
@@ -296,56 +405,11 @@ def _finish_blueprint_match(
     agent_reply: str,
     matches: list,
 ) -> str:
-    """匹配蓝本：仅用户明确点名时代选，否则出列表让用户选用。"""
-    from report_writing.chat.intent_router import allows_agent_blueprint_select, pick_auto_blueprint_id, touch_session_plan
-    from report_writing.chat_orchestrator import _action_select_blueprint, _blueprint_list_card, _skip_blueprint_card
+    """匹配蓝本：只出候选，不代选。明确选用由 Agent 再调 select_blueprint。"""
+    from report_writing.chat.intent_router import touch_session_plan
+    from report_writing.chat_orchestrator import _blueprint_list_card, _skip_blueprint_card
 
     msg = message or state.last_user_message
-    auto_id = ""
-    if allows_agent_blueprint_select(
-        message=msg,
-        user_action=state.user_action or "",
-        invoke=state.intent_invoke or state.invoke,
-        session=state.session,
-    ):
-        auto_id = pick_auto_blueprint_id(msg, matches, invoke=state.intent_invoke or state.invoke)
-    if auto_id:
-        _emit_process(state, "已按你的描述选定蓝本，正在准备章节…")
-        reply, cards = _action_select_blueprint(state.home, state.session, {"blueprint_id": auto_id})
-        _set_cards(state, cards)
-        touch_session_plan(
-            state.session,
-            goal="write_with_blueprint",
-            blueprint_id=auto_id,
-            auto_selected=True,
-        )
-        title = next((getattr(m, "title", "") for m in matches if getattr(m, "id", "") == auto_id), auto_id)
-        hint = (
-            f"好，我已经帮你订上「{title or auto_id}」了。"
-            f"{reply.strip()}"
-        ).strip()
-        from report_writing.chat.session_documents import append_doc_name_clarify_if_needed, is_writing_document_named
-
-        hint, cards = append_doc_name_clarify_if_needed(
-            state.session,
-            message=msg,
-            reply=hint,
-            cards=cards,
-            invoke=state.intent_invoke or state.invoke,
-        )
-        _set_cards(state, cards)
-        return _dump(
-            {
-                "ok": True,
-                "reply_hint": hint,
-                "matched": len(matches),
-                "auto_selected": True,
-                "blueprint_id": auto_id,
-                "phase": state.session.phase,
-                "needs_doc_name": not is_writing_document_named(state.session),
-            }
-        )
-
     if matches:
         state.session.phase = ChatPhase.BLUEPRINT_SELECT.value
         cards = [_blueprint_list_card(matches), _skip_blueprint_card()]
@@ -376,7 +440,7 @@ def _finish_blueprint_match(
             message=message or msg,
             reply=hint.strip(),
             cards=cards,
-            invoke=state.intent_invoke or state.invoke,
+            invoke=_state_intent_llm(state) or state.invoke,
         )
         _set_cards(state, cards)
         touch_session_plan(
@@ -384,18 +448,98 @@ def _finish_blueprint_match(
             goal="pick_blueprint",
             candidates=[getattr(m, "id", "") for m in matches],
         )
+        ids = [str(getattr(m, "id", "") or "").strip() for m in matches]
+        ids = [i for i in ids if i]
         return _dump(
             {
                 "ok": True,
                 "reply_hint": hint,
                 "matched": len(matches),
-                "ids": [m.id for m in matches],
+                "ids": ids,
+                "candidate_ids": ids,
                 "awaiting_user_choice": True,
                 "needs_doc_name": not is_writing_document_named(state.session),
+                "observation": (
+                    f"匹配到 {len(ids)} 份候选 {ids}。"
+                    "禁止在本 Tool 内代选。"
+                    "用户明确点名或说「就用这份」且仅一份时，下一步 select_blueprint(blueprint_id)；"
+                    "否则等点「选用」。"
+                ),
             }
         )
 
     return _ask_path_after_no_blueprint_match(state, message or state.last_user_message or "")
+
+
+_PAYLOAD_JSON_ACTIONS = frozenset(
+    {
+        "check_writing_supplements",
+        "skip_writing_supplement_check",
+        "dismiss_writing_supplement",
+    }
+)
+
+
+def _bind_payload_json_tools(state: ChatControlState, names: list[str]) -> list:
+    """把 dispatch / 资料包动作绑成同名 LangChain Tool（点选走 Agent）。"""
+    from langchain_core.tools import StructuredTool
+    from report_writing.chat.materials_pack_gate import (
+        MATERIALS_PACK_ACTIONS,
+        apply_materials_pack_choice,
+    )
+
+    tools = []
+    for name in names:
+
+        def _run(payload_json: str = "{}", *, _name: str = name) -> str:
+            _tool_begin(state, _name)
+            payload = ChatActionPayload.parse(payload_json).as_dict()
+            if _name in MATERIALS_PACK_ACTIONS:
+                try:
+                    reply, cards = apply_materials_pack_choice(
+                        state.home, state.session, _name, payload, emit=state.emit
+                    )
+                except ValueError as error:
+                    return _dump({"ok": False, "reply_hint": str(error)})
+                _set_cards(state, cards)
+                return _dump(
+                    {
+                        "ok": True,
+                        "reply_hint": reply,
+                        "observation": f"已执行 {_name}。",
+                    }
+                )
+            from report_writing.chat.tool_dispatch import execute_dispatch_tool
+
+            hit = execute_dispatch_tool(
+                state.home,
+                state.session,
+                {"tool": _name, "args": dict(payload)},
+                str(state.last_user_message or ""),
+                emit=state.emit,
+                invoke=state.invoke,
+            )
+            if hit is None:
+                return _dump({"ok": False, "reply_hint": f"无法执行 {_name}。"})
+            reply, cards, events = hit
+            _set_cards(state, cards)
+            state.events.extend(events or [])
+            return _dump(
+                {
+                    "ok": True,
+                    "reply_hint": reply,
+                    "observation": f"已执行 {_name}。",
+                }
+            )
+
+        tools.append(
+            StructuredTool.from_function(
+                func=_run,
+                name=name,
+                description=name,
+            )
+        )
+    return tools
 
 
 def build_chat_tools(state: ChatControlState) -> list:
@@ -414,30 +558,27 @@ def build_chat_tools(state: ChatControlState) -> list:
     @tool
     def ask_entry_path(message: str = "", title_hint: str = "") -> str:
         """新建文档：读 gaps，只挂缺的澄清卡；已明确的要素见 suggested_next_tools（顺序非固定）。"""
-        from report_writing.chat.intent_clarify import build_entry_path_clarify
+        from report_writing.chat.clarify_flow import build_entry_path_clarify
         from report_writing.chat.session_documents import is_writing_document_named
 
         msg = (message or state.last_user_message or "").strip()
         tip = (title_hint or "").strip()
         _tool_begin(state, "ask_entry_path")
-        intent_fn = state.intent_invoke
-        if intent_fn is None and state.invoke is not None:
-            from report_writing.chat.intent_invoke import intent_invoke_fn
-
-            intent_fn = intent_invoke_fn(state.invoke)
+        intent_fn = _state_intent_llm(state) or state.invoke
         reply, cards = build_entry_path_clarify(
             state.session,
             message=msg,
             title_hint=tip,
-            invoke=intent_fn if intent_fn is not None else state.invoke,
+            invoke=intent_fn,
             home=state.home,
             emit=state.emit,
+            apply_plan=False,
         )
         # 一句多意图：首句定名后的残余路径 / follow spec
         ff = dict(state.session.freeform or {})
         follow_spec = ff.pop("clarify_follow_spec", None)
         if isinstance(follow_spec, dict):
-            from report_writing.chat.intent_clarify import execute_clarify_spec
+            from report_writing.chat.clarify_flow import execute_clarify_spec
 
             state.session.freeform = ff
             reply2, cards2, events2 = execute_clarify_spec(
@@ -535,17 +676,27 @@ def build_chat_tools(state: ChatControlState) -> list:
         _set_cards(state, cards)
         types = _card_types(cards)
         matched_n = 0
+        ids: list[str] = []
         for c in cards or []:
             if getattr(c, "type", "") == "blueprint_list":
                 items = (getattr(c, "payload", None) or {}).get("items") or []
                 if isinstance(items, list):
                     matched_n = len(items)
+                    ids = [
+                        str(item.get("id") or "").strip()
+                        for item in items
+                        if isinstance(item, dict) and str(item.get("id") or "").strip()
+                    ]
         obs_parts = [
-            f"match_blueprints 完成：候选约 {matched_n} 份。",
+            f"match_blueprints 完成：候选约 {matched_n} 份 {ids}。",
             (
-                "请用户点选或 select_blueprint(blueprint_id=…)。"
+                "禁止代选。用户明确点名或「就用这份」且仅一份时，下一步 select_blueprint(blueprint_id)；否则等点选用。"
                 if matched_n
-                else "无对口蓝本：可 ask_entry_path / begin_blueprint_wizard(explicit_create=true) / skip_blueprint。"
+                else (
+                    "无对口蓝本：禁止在本 Tool 内代开向导或 skip。"
+                    "下一步由总控选：用户有样板/要建蓝本 → begin_blueprint_wizard(explicit_create=true)；"
+                    "无蓝本 → skip_blueprint / submit_outline；否则 ask_entry_path 等点选。"
+                )
             ),
         ]
         needs_name = not is_writing_document_named(state.session)
@@ -558,6 +709,9 @@ def build_chat_tools(state: ChatControlState) -> list:
                 "ok": True,
                 "reply_hint": reply,
                 "matched": matched_n,
+                "ids": ids,
+                "candidate_ids": ids,
+                "awaiting_user_choice": matched_n > 0,
                 "observation": " ".join(obs_parts),
                 "awaiting_path_choice": "intent_clarify" in types or matched_n == 0,
                 "needs_doc_name": needs_name,
@@ -616,23 +770,9 @@ def build_chat_tools(state: ChatControlState) -> list:
 
     @tool
     def select_blueprint(blueprint_id: str = "") -> str:
-        """选用蓝本：用户点「选用」或口头明确指定且 agent_may_select 为真时调用。"""
+        """选用蓝本：用户点「选用」或口语明确给出 blueprint_id 时调用。禁止无 id 代选。"""
         from report_writing.chat_orchestrator import _action_select_blueprint
 
-        action = (state.user_action or "").strip()
-        if action != "select_blueprint" and not state.agent_may_select_blueprint:
-            return _obs_fail(
-                error="need_user_confirm",
-                reply_hint=(
-                    "我还不能擅自定蓝本。你可以说清楚要用哪一份，或看下方面板点「选用」；"
-                    "没有合适的也可以说「依据模版编写」或「无蓝本 · 自动大纲」。"
-                ),
-                observation=(
-                    "select_blueprint 需要用户明确点名或点「选用」。"
-                    "可 match_blueprints 出列表，或等用户确认后再带 blueprint_id 调用。"
-                ),
-                missing_slots=["blueprint_id"],
-            )
         bid = (blueprint_id or "").strip()
         if not bid:
             return _obs_fail(
@@ -769,11 +909,18 @@ def build_chat_tools(state: ChatControlState) -> list:
         )
 
     @tool
-    def skip_blueprint() -> str:
-        """跳过蓝本，走无蓝本大纲路径。"""
+    def skip_blueprint(
+        path_setup_only: bool = False,
+        message: str = "",
+        title_hint: str = "",
+    ) -> str:
+        """跳过蓝本，只锁无蓝本路径。定名走 set_session_meta；生成目录走 submit_outline。"""
         from report_writing.chat_orchestrator import _action_skip_blueprint
 
-        from report_writing.chat.session_documents import is_writing_document_named
+        from report_writing.chat.session_documents import (
+            focus_has_display_title,
+            is_writing_document_named,
+        )
 
         from report_writing.chat.write_path_after_match import skip_blueprint_should_reask_path
 
@@ -789,7 +936,7 @@ def build_chat_tools(state: ChatControlState) -> list:
                 state.home,
                 state.session,
                 state.last_user_message or "",
-                invoke=state.intent_invoke or state.invoke,
+                invoke=_state_intent_llm(state) or state.invoke,
             )
             _set_cards(state, cards)
             return _dump(
@@ -801,27 +948,56 @@ def build_chat_tools(state: ChatControlState) -> list:
                 }
             )
 
-        named = is_writing_document_named(state.session)
+        extra = (message or state.last_user_message or "").strip()
+        tip = (title_hint or "").strip()
         _tool_begin(state, "skip_blueprint")
         reply, cards = _action_skip_blueprint(
             state.session,
             home=state.home,
             invoke=state.invoke,
             emit=state.emit,
+            extra_message=extra,
+            title_hint=tip,
+            path_setup_only=bool(path_setup_only),
         )
         _set_cards(state, cards)
-        obs = (
-            "已跳过蓝本。下一步：题目未清则 set_session_meta；"
-            "有目录意图再 submit_outline；可写则 start_writing。"
+        from report_writing.chat.freeform_intent import utterance_mentions_generate_outline
+        from report_writing.chat.session_documents import focus_onboarding
+
+        named = is_writing_document_named(state.session) or focus_has_display_title(
+            state.session
         )
+        ob = focus_onboarding(state.session)
+        want_outline = (
+            str(ob.get("freeform_mode") or "").strip() == "auto_outline"
+            or utterance_mentions_generate_outline(extra)
+        )
+        nxt = ""
+        nxt_args: dict = {}
+        missing: list[str] = []
+        if named and want_outline:
+            nxt = "submit_outline"
+            nxt_args = {"regenerate": True, "message": extra[:500]}
+        elif not named:
+            nxt = "set_session_meta"
+            nxt_args = {"message": extra[:500], "title": tip}
+            missing = ["title"]
+        obs = "已跳过蓝本（未定名、未生成目录）。"
+        if nxt:
+            obs += f" suggested_next_tool={nxt}，同轮接着调用。"
         if not named:
-            obs += " 文档尚未定名，开写前须 set_session_meta(title=…)。"
+            obs += " 缺标题：set_session_meta(title=短文档名, message=原话)。"
+        elif want_outline:
+            obs += " 已有标题且要自动大纲：submit_outline(regenerate=true)。"
         return _dump(
             {
                 "ok": True,
                 "reply_hint": reply,
                 "observation": obs,
                 "needs_doc_name": not named,
+                "missing_slots": missing or None,
+                "suggested_next_tool": nxt or None,
+                "suggested_args": nxt_args or None,
             }
         )
 
@@ -861,7 +1037,7 @@ def build_chat_tools(state: ChatControlState) -> list:
                 "confirmed_create": bool(confirmed_create),
                 "from_entry_path": bool(from_entry_path),
             },
-            invoke=state.intent_invoke or state.invoke,
+            invoke=_state_intent_llm(state) or state.invoke,
             emit=state.emit,
         )
         _set_cards(state, cards)
@@ -971,6 +1147,7 @@ def build_chat_tools(state: ChatControlState) -> list:
             writing_pace=pace,
             chapter_keys=keys,
             invoke=state.invoke,
+            model=state.chat_model,
         )
         state.events.extend(events or [])
         _set_cards(state, cards)
@@ -1023,7 +1200,7 @@ def build_chat_tools(state: ChatControlState) -> list:
 
         miss = missing_for_tool(state.session, "prepare_export_word", home=state.home)
         if "doc_name" in miss:
-            from report_writing.chat.intent_clarify import build_document_name_clarify
+            from report_writing.chat.clarify_flow import build_document_name_clarify
 
             reply, cards = build_document_name_clarify(
                 state.session,
@@ -1094,7 +1271,7 @@ def build_chat_tools(state: ChatControlState) -> list:
             "user_message": msg,
         }
         reply, cards, events = _action_confirm_chapter(
-            state.home, state.session, payload, emit=state.emit
+            state.home, state.session, payload, emit=state.emit, model=state.chat_model
         )
         state.events.extend(events or [])
         _set_cards(state, cards)
@@ -1142,12 +1319,7 @@ def build_chat_tools(state: ChatControlState) -> list:
         """保存单章配置。payload_json：task_id、chapter_key、points_text、keywords_text、describes、aux_prompt、reference_text 等（由你从用户话提取）。"""
         from report_writing.chat_orchestrator import _action_configure_chapter
 
-        try:
-            payload = json.loads(payload_json or "{}")
-        except json.JSONDecodeError:
-            payload = {}
-        if not isinstance(payload, dict):
-            payload = {}
+        payload = ChatActionPayload.parse(payload_json).as_dict()
         ck = str(payload.get("chapter_key") or payload.get("chapter_key_hint") or "").strip()
         ui = (state.user_action or "").strip() == "configure_chapter"
         if not ck and not ui:
@@ -1159,7 +1331,9 @@ def build_chat_tools(state: ChatControlState) -> list:
                     "请从用户原话或 turn_context 填入章节 key 后再次调用。"
                 ),
             )
-        reply, cards = _action_configure_chapter(state.home, state.session, payload)
+        reply, cards = _action_configure_chapter(
+            state.home, state.session, payload, model=state.chat_model
+        )
         _set_cards(state, cards)
         return _dump(
             {
@@ -1174,13 +1348,11 @@ def build_chat_tools(state: ChatControlState) -> list:
         """为本章生成要素草稿（用户卡片确认后写入）。须从用户原话填全：task_id、chapter_key、kind、name、category、tags、purpose；kv 填 kv_pairs 或 key+value/content；file 填 query；file_slot 填槽位；fixed 填 value；llm_generate 填 prompt；node_ref 填 ref_element_name。用户只需在卡片里确认，不要留空让用户手填。"""
         from report_writing.chat_orchestrator import _action_add_chapter_element
 
-        try:
-            payload = json.loads(payload_json or "{}")
-        except json.JSONDecodeError:
-            payload = {}
-        if not isinstance(payload, dict):
-            payload = {}
+        payload = ChatActionPayload.parse(payload_json).as_dict()
         hint = str(state.last_user_message or payload.get("hint") or payload.get("user_note") or "").strip()
+        hop = _hop_if_other_writing_control(state, "add_chapter_element", hint)
+        if hop:
+            return hop
         if hint and (
             not str(payload.get("chapter_key") or "").strip()
             or not str(payload.get("name") or "").strip()
@@ -1194,11 +1366,7 @@ def build_chat_tools(state: ChatControlState) -> list:
             from report_writing.chat.intent_llm import infer_element_payload_llm
             from report_writing.chat.helpers import _load_task
 
-            intent_llm = state.intent_invoke
-            if intent_llm is None:
-                from report_writing.chat.intent_invoke import intent_invoke_fn
-
-                intent_llm = intent_invoke_fn(state.invoke)
+            intent_llm = _state_intent_llm(state)
             inferred = infer_element_payload_llm(
                 hint,
                 dialogue_tail=format_full_dialogue(state.session, max_turns=8),
@@ -1237,10 +1405,7 @@ def build_chat_tools(state: ChatControlState) -> list:
             {
                 "ok": True,
                 "reply_hint": reply,
-                "observation": (
-                    "已生成要素草稿卡片，等用户确认。"
-                    "若用户其实要「收入要素库」，应改调 collect_to_element_library。"
-                ),
+                "observation": "已生成要素草稿卡片，等用户确认。",
             }
         )
 
@@ -1249,13 +1414,11 @@ def build_chat_tools(state: ChatControlState) -> list:
         """打开「关联要素」会话操作：把已有要素勾到某章。payload 含 task_id、chapter_key。"""
         from report_writing.chat.writing_control_route import apply_writing_control_classification
 
-        try:
-            payload = json.loads(payload_json or "{}")
-        except json.JSONDecodeError:
-            payload = {}
-        if not isinstance(payload, dict):
-            payload = {}
+        payload = ChatActionPayload.parse(payload_json).as_dict()
         hint = str(state.last_user_message or payload.get("hint") or "").strip()
+        hop = _hop_if_other_writing_control(state, "associate_elements", hint)
+        if hop:
+            return hop
         if not str(payload.get("chapter_key") or payload.get("chapter_key_hint") or "").strip():
             # 允许分类器/动作层从 hint 解析；完全空则缺参
             if not hint and not (state.session.task_id or "").strip():
@@ -1273,24 +1436,15 @@ def build_chat_tools(state: ChatControlState) -> list:
             hint,
             {"tool": "associate_elements", "payload": payload},
             emit=state.emit,
+            expected_tool="associate_elements",
         )
-        if not result:
-            return _obs_fail(
-                missing_slots=["chapter_key"],
-                reply_hint="无法打开关联要素，请先选定章节。",
-                observation=(
-                    "associate_elements 失败：无可用章节上下文。"
-                    "请先绑定写作任务并传入 chapter_key，或改调 open_element_library。"
-                ),
-            )
-        reply, cards, _ = result
-        _set_cards(state, cards)
-        return _dump(
-            {
-                "ok": True,
-                "reply_hint": reply,
-                "observation": "已打开关联要素面板。用户勾选确认后即完成关联。",
-            }
+        return _dump_writing_control_result(
+            state,
+            result,
+            expected_tool="associate_elements",
+            ok_observation="已打开关联要素面板。用户勾选确认后即完成关联。",
+            fail_hint="无法打开关联要素，请先选定章节。",
+            fail_slots=["chapter_key"],
         )
 
     @tool
@@ -1298,66 +1452,88 @@ def build_chat_tools(state: ChatControlState) -> list:
         """取消某章与要素的关联（不删要素节点、不删要素库）。payload 可含 chapter_key、element_id、element_name。"""
         from report_writing.chat.writing_control_route import apply_writing_control_classification
 
-        try:
-            payload = json.loads(payload_json or "{}")
-        except json.JSONDecodeError:
-            payload = {}
-        if not isinstance(payload, dict):
-            payload = {}
+        payload = ChatActionPayload.parse(payload_json).as_dict()
         hint = str(state.last_user_message or payload.get("hint") or "").strip()
+        hop = _hop_if_other_writing_control(state, "dissociate_chapter_element", hint)
+        if hop:
+            return hop
         result = apply_writing_control_classification(
             state.home,
             state.session,
             hint,
             {"tool": "dissociate_chapter_element", "payload": payload},
             emit=state.emit,
+            expected_tool="dissociate_chapter_element",
         )
-        if not result:
-            return _obs_fail(
-                reply_hint="请说明要取消哪一章、哪个要素的关联。",
-                observation="dissociate_chapter_element 需要 task 上下文与要素名/章节。",
-            )
-        reply, cards, _ = result
-        _set_cards(state, cards)
-        obs = (
+        ok_obs = (
             "已挂起要素/章节选项，等用户点选。"
-            if cards
+            if result and result[1]
             else "已取消关联；要素仍保留在本文档。"
         )
-        return _dump({"ok": True, "reply_hint": reply, "observation": obs})
+        return _dump_writing_control_result(
+            state,
+            result,
+            expected_tool="dissociate_chapter_element",
+            ok_observation=ok_obs,
+            fail_hint="请说明要取消哪一章、哪个要素的关联。",
+        )
 
     @tool
     def remove_document_element(payload_json: str = "") -> str:
         """从当前写作文档删除要素（去掉各章关联与节点）；绝不删除个人要素库条目。"""
         from report_writing.chat.writing_control_route import apply_writing_control_classification
 
-        try:
-            payload = json.loads(payload_json or "{}")
-        except json.JSONDecodeError:
-            payload = {}
-        if not isinstance(payload, dict):
-            payload = {}
+        payload = ChatActionPayload.parse(payload_json).as_dict()
         hint = str(state.last_user_message or payload.get("hint") or "").strip()
+        hop = _hop_if_other_writing_control(state, "remove_document_element", hint)
+        if hop:
+            return hop
         result = apply_writing_control_classification(
             state.home,
             state.session,
             hint,
             {"tool": "remove_document_element", "payload": payload},
             emit=state.emit,
+            expected_tool="remove_document_element",
         )
-        if not result:
-            return _obs_fail(
-                reply_hint="请说明要删哪个要素。",
-                observation="remove_document_element 需要写作任务与要素名；同名多个时会挂澄清卡。",
-            )
-        reply, cards, _ = result
-        _set_cards(state, cards)
-        obs = (
+        ok_obs = (
             "同名要素有多个，已挂选项请用户确认。"
-            if cards
+            if result and result[1]
             else "已从本文档删除要素；要素库未动。"
         )
-        return _dump({"ok": True, "reply_hint": reply, "observation": obs})
+        return _dump_writing_control_result(
+            state,
+            result,
+            expected_tool="remove_document_element",
+            ok_observation=ok_obs,
+            fail_hint="请说明要删哪个要素。",
+        )
+
+    @tool
+    def collect_to_element_library(payload_json: str = "") -> str:
+        """把本文档已有要素收入个人要素库（不是新建章节要素，也不是打开要素库浏览）。"""
+        from report_writing.chat.writing_control_route import apply_writing_control_classification
+
+        payload = ChatActionPayload.parse(payload_json).as_dict()
+        hint = str(state.last_user_message or payload.get("hint") or "").strip()
+        hop = _hop_if_other_writing_control(state, "collect_to_element_library", hint)
+        if hop:
+            return hop
+        result = apply_writing_control_classification(
+            state.home,
+            state.session,
+            hint,
+            {"tool": "collect_to_element_library", "payload": payload},
+            emit=state.emit,
+            expected_tool="collect_to_element_library",
+        )
+        return _dump_writing_control_result(
+            state,
+            result,
+            expected_tool="collect_to_element_library",
+            ok_observation="已处理收入要素库。",
+            fail_hint="无法收入要素库，请说明要收入哪个要素。",
+        )
 
     @tool
     def associate_element_knowledge(payload_json: str = "") -> str:
@@ -1380,12 +1556,15 @@ def build_chat_tools(state: ChatControlState) -> list:
             "查看要素",
             {"tool": "open_element_library", "payload": {}},
             emit=state.emit,
+            expected_tool="open_element_library",
         )
-        if not result:
-            return _dump({"ok": False, "reply_hint": "无法打开要素库。"})
-        reply, cards, _ = result
-        _set_cards(state, cards)
-        return _dump({"ok": True, "reply_hint": reply})
+        return _dump_writing_control_result(
+            state,
+            result,
+            expected_tool="open_element_library",
+            ok_observation="已打开要素库。",
+            fail_hint="无法打开要素库。",
+        )
 
     @tool
     def open_blueprint_library() -> str:
@@ -1398,12 +1577,15 @@ def build_chat_tools(state: ChatControlState) -> list:
             "查看蓝本库",
             {"tool": "open_blueprint_library", "payload": {}},
             emit=state.emit,
+            expected_tool="open_blueprint_library",
         )
-        if not result:
-            return _dump({"ok": False, "reply_hint": "无法打开蓝本库。"})
-        reply, cards, _ = result
-        _set_cards(state, cards)
-        return _dump({"ok": True, "reply_hint": reply})
+        return _dump_writing_control_result(
+            state,
+            result,
+            expected_tool="open_blueprint_library",
+            ok_observation="已打开蓝本库。",
+            fail_hint="无法打开蓝本库。",
+        )
 
     @tool
     def open_knowledge() -> str:
@@ -1416,17 +1598,15 @@ def build_chat_tools(state: ChatControlState) -> list:
             "查看资料库",
             {"tool": "open_knowledge", "payload": {}},
             emit=state.emit,
+            expected_tool="open_knowledge",
         )
-        if not result:
-            return _dump(
-                {
-                    "ok": False,
-                    "reply_hint": "资料库是放资料包的地方。请打开侧栏「资料库」管理资料包；要素「文件」可上传并手动解析。",
-                }
-            )
-        reply, cards, _ = result
-        _set_cards(state, cards)
-        return _dump({"ok": True, "reply_hint": reply})
+        return _dump_writing_control_result(
+            state,
+            result,
+            expected_tool="open_knowledge",
+            ok_observation="已打开资料库。",
+            fail_hint="资料库是放资料包的地方。请打开侧栏「资料库」管理资料包；要素「文件」可上传并手动解析。",
+        )
 
     @tool
     def retry_chapter(payload_json: str) -> str:
@@ -1444,39 +1624,27 @@ def build_chat_tools(state: ChatControlState) -> list:
         # UI 点选重试可带 user_action；口语触发时若仍缺入口则硬拦
         oral_retry = not (state.user_action or "").strip()
         if oral_retry and focus_needs_entry_path(state.session):
-            from report_writing.chat.intent_clarify import build_entry_path_clarify
-
-            reply, cards = build_entry_path_clarify(
-                state.session,
-                message=state.last_user_message or "",
-                invoke=state.invoke,
-                home=state.home,
-                emit=state.emit,
-                after_doc_name_confirm=True,
-                apply_plan=False,
-            )
-            _set_cards(state, cards)
             return _obs_fail(
                 missing_slots=["writing_path"],
-                reply_hint=reply or "请先选择写作方式（有蓝本 / 无蓝本），再重试章节。",
+                reply_hint="请先选择写作方式（有蓝本 / 无蓝本），再重试章节。",
                 observation=(
                     "retry_chapter 被拦：焦点仍缺文档入口 writing_path。"
-                    "先 ask_entry_path，再 retry_chapter。"
+                    "请先 ask_entry_path，不要在 retry_chapter 里挂入口卡或开写。"
+                ),
+                suggested_next_tool="ask_entry_path",
+                suggested_args=_suggested_args_for_tool(
+                    "ask_entry_path", {}, state.last_user_message or ""
                 ),
                 task_id=state.session.task_id or "",
             )
-        try:
-            payload = json.loads(payload_json or "{}")
-        except json.JSONDecodeError:
-            payload = {}
-        if not isinstance(payload, dict):
-            payload = {}
+        payload = ChatActionPayload.parse(payload_json).as_dict()
         reply, cards, events = _action_retry_chapter(
             state.home,
             state.session,
             payload,
             emit=state.emit,
             invoke=state.invoke,
+            model=state.chat_model,
         )
         state.events.extend(events or [])
         _set_cards(state, cards)
@@ -1494,14 +1662,9 @@ def build_chat_tools(state: ChatControlState) -> list:
                     "reply_hint": "仅检索需点「仅重试检索」按钮，不要与「保存并重试本章」混用。",
                 }
             )
-        try:
-            payload = json.loads(payload_json or "{}")
-        except json.JSONDecodeError:
-            payload = {}
-        if not isinstance(payload, dict):
-            payload = {}
+        payload = ChatActionPayload.parse(payload_json).as_dict()
         reply, cards, events = _action_retry_search_chapter(
-            state.home, state.session, payload, emit=state.emit
+            state.home, state.session, payload, emit=state.emit, model=state.chat_model
         )
         state.events.extend(events or [])
         _set_cards(state, cards)
@@ -1548,6 +1711,20 @@ def build_chat_tools(state: ChatControlState) -> list:
         cat = (category or "").strip()
         tip = (title or "").strip()
         has_pipe = bool(msg) and ("｜" in msg or "|" in msg)
+        from report_writing.chat.session_documents import message_requires_structured_rename_title
+
+        if not (title or "").strip() and msg and message_requires_structured_rename_title(msg):
+            return _dump(
+                {
+                    "ok": False,
+                    "missing_slots": ["title"],
+                    "reply_hint": "改名的话跟我说新名字就行，例如：改名叫 2026个人述职报告。",
+                    "observation": (
+                        "set_session_meta 改名须结构化参数 title=新名，message=原话可选。"
+                        "禁止仅传 message 让后端从话里猜标题；请再次调用并传入 title。"
+                    ),
+                }
+            )
         from report_writing.chat.session_documents import (
             sanitize_candidate_document_title,
             title_contains_action_clause,
@@ -1577,7 +1754,7 @@ def build_chat_tools(state: ChatControlState) -> list:
                 state.session, msg, title_hint=tip or msg, invoke=state.invoke
             )
         ):
-            from report_writing.chat.intent_clarify import (
+            from report_writing.chat.clarify_flow import (
                 build_document_scope_clarify,
                 pending_document_scope_reply,
             )
@@ -1655,8 +1832,9 @@ def build_chat_tools(state: ChatControlState) -> list:
             state.session,
             "set_session_meta",
             {"message": msg, "category": cat, "title": tip},
-            invoke=state.invoke,
+            invoke=_state_intent_llm(state) or state.invoke,
             emit=state.emit,
+            model=state.intent_model,
         )
         _set_cards(state, cards)
         brief = tip or cat or msg
@@ -1669,7 +1847,7 @@ def build_chat_tools(state: ChatControlState) -> list:
         needs_entry = False
         # 定名成功且缺入口：必挂选路卡（不单靠 write_like 关键字）
         if tip:
-            from report_writing.chat.intent_clarify import (
+            from report_writing.chat.clarify_flow import (
                 clear_pending,
                 get_pending,
             )
@@ -1764,6 +1942,35 @@ def build_chat_tools(state: ChatControlState) -> list:
             next_hop = "若用户还有开写/目录等诉求，继续调下一 Tool；纯改名可收尾。"
             gaps = dict((state.session.freeform or {}).get("onboarding_gaps_snapshot") or {})
             suggested = list((state.session.freeform or {}).get("suggested_next_tools") or [])
+        from report_writing.chat.freeform_intent import utterance_mentions_generate_outline
+        from report_writing.chat.intent_router import user_chose_skip_blueprint
+        from report_writing.chat.session_documents import focus_onboarding as _focus_ob
+
+        ob_meta = _focus_ob(state.session)
+        auto_outline = (
+            str(ob_meta.get("freeform_mode") or "").strip() == "auto_outline"
+            or utterance_mentions_generate_outline(user_msg)
+        )
+        if (
+            tip
+            and user_chose_skip_blueprint(state.session)
+            and auto_outline
+            and not awaiting_path
+        ):
+            if not any(
+                isinstance(t, dict) and str(t.get("tool") or "") == "submit_outline"
+                for t in suggested
+            ):
+                suggested = list(suggested) + [
+                    {
+                        "tool": "submit_outline",
+                        "args": {"regenerate": True, "message": user_msg[:500]},
+                    }
+                ]
+            next_hop = (
+                f"{next_hop} suggested_next_tools={suggested}，"
+                "无蓝本自动大纲：同轮 submit_outline(regenerate=true)。"
+            )
         return _dump(
             {
                 "ok": True,
@@ -1777,6 +1984,14 @@ def build_chat_tools(state: ChatControlState) -> list:
                 "brief": brief[:80],
                 "onboarding": gaps,
                 "suggested_next_tools": suggested,
+                "suggested_next_tool": (
+                    "submit_outline"
+                    if tip
+                    and user_chose_skip_blueprint(state.session)
+                    and auto_outline
+                    and not awaiting_path
+                    else None
+                ),
                 "needs_entry_path": bool(needs_entry or write_like and awaiting_path),
                 "awaiting_path_choice": awaiting_path,
             }
@@ -1839,8 +2054,21 @@ def build_chat_tools(state: ChatControlState) -> list:
 
         regenerate 时务必把用户修改要求写入 revision_instructions（如「每章下三个小节」）。
         确认时若传 chapter_keys_json，仅给勾选章自动生成要点。
+        口语确认/生成请传 confirm / regenerate，不要把话术当 outline_text 猜意图。
         """
         from report_writing.chat.actions import _action_submit_outline
+        from report_writing.chat.freeform_intent import resolve_outline_mode_flags
+        from report_writing.chat.freeform_outline import looks_like_outline_directory
+
+        oral_probe = (revision_instructions or state.last_user_message or outline_text or "").strip()
+        if not looks_like_outline_directory(oral_probe):
+            confirm, regenerate = resolve_outline_mode_flags(
+                oral_probe,
+                confirm=confirm,
+                regenerate=regenerate,
+                session=state.session,
+                invoke=_state_intent_llm(state) or state.invoke,
+            )
 
         if regenerate:
             from report_writing.chat.session_documents import (
@@ -1935,31 +2163,63 @@ def build_chat_tools(state: ChatControlState) -> list:
     @tool
     def submit_points(message: str = "") -> str:
         """无蓝本路径：补充要点或直接开写。"""
-        from report_writing.chat.writing_control_route import reroute_submit_points_if_needed
+        from report_writing.chat.writing_control_route import suggest_tool_instead_of_submit_points
         from report_writing.chat_orchestrator import _collect_freeform_points
 
         msg = message or state.last_user_message or ""
-        intent_llm = state.intent_invoke
-        if intent_llm is None:
-            from report_writing.chat.intent_invoke import intent_invoke_fn
-
-            intent_llm = intent_invoke_fn(state.invoke)
-        rerouted = reroute_submit_points_if_needed(
+        intent_llm = _state_intent_llm(state)
+        suggestion = suggest_tool_instead_of_submit_points(
             state.home,
             state.session,
             msg,
             invoke=state.invoke,
             intent_invoke=intent_llm,
         )
-        if rerouted is not None:
-            reply, cards = rerouted
-            _set_cards(state, cards)
-            return _dump(
-                {
-                    "ok": True,
-                    "reply_hint": reply,
-                    "observation": "submit_points 已改调其它写作动作，见 reply_hint。",
-                }
+        if suggestion is not None:
+            nxt = str(suggestion.get("tool") or "").strip()
+            payload = dict(suggestion.get("payload") or {})
+            return _obs_fail(
+                missing_slots=["points_text"],
+                reply_hint="这句不像在补写作要点，我按更合适的动作来。",
+                observation=(
+                    f"submit_points 不适合本句。下一步 Tool：{nxt}。"
+                    "请改调该 Tool，不要把加要素/关联/记目标写进要点。"
+                ),
+                suggested_next_tool=nxt,
+                suggested_args=_suggested_args_for_tool(nxt, payload, msg),
+            )
+        from report_writing.chat.freeform_intent import suggest_tool_instead_of_submit_points_freeform
+
+        freeform_hit = suggest_tool_instead_of_submit_points_freeform(
+            msg, session=state.session, invoke=intent_llm
+        )
+        if freeform_hit is not None:
+            nxt = str(freeform_hit.get("tool") or "").strip()
+            args = dict(freeform_hit.get("args") or {})
+            return _obs_fail(
+                missing_slots=["points_text"],
+                reply_hint="这句更像目录/要点操作，我按对应动作继续。",
+                observation=(
+                    f"submit_points 不适合本句。下一步 Tool：{nxt}。"
+                    "跳过要点用 skip_freeform_points，生成要点用 generate_freeform_points。"
+                ),
+                suggested_next_tool=nxt,
+                suggested_args=args,
+            )
+        if not str(state.session.task_id or "").strip():
+            return _obs_fail(
+                missing_slots=["outline"],
+                reply_hint="还没有目录，先生成或确认大纲再补要点。",
+                observation=(
+                    "submit_points 需要已有大纲任务。"
+                    "下一步 submit_outline(regenerate=true)，或 skip_blueprint 后再生成目录。"
+                ),
+                suggested_next_tool="submit_outline",
+                suggested_args={
+                    "regenerate": True,
+                    "outline_text": msg,
+                    "revision_instructions": msg,
+                },
             )
         reply, cards = _collect_freeform_points(
             state.home,
@@ -2015,6 +2275,7 @@ def build_chat_tools(state: ChatControlState) -> list:
             payload,
             invoke=state.invoke,
             emit=state.emit,
+            model=state.chat_model,
         )
         _tool_done(state, "generate_freeform_points")
         _set_cards(state, cards)
@@ -2085,12 +2346,7 @@ def build_chat_tools(state: ChatControlState) -> list:
         from report_writing.chat.wizard_loop_guard import normalized_wizard_step
         from report_writing.chat.wizard_state import wizard_step_index
 
-        try:
-            payload = json.loads(payload_json or "{}")
-        except json.JSONDecodeError:
-            payload = {}
-        if not isinstance(payload, dict):
-            payload = {}
+        payload = ChatActionPayload.parse(payload_json).as_dict()
         step_in = str(payload.get("step") or "").strip()
         title_in = str(payload.get("title") or "").strip()
         wizard_cmd = str(payload.get("wizard_command") or "").strip()
@@ -2141,12 +2397,7 @@ def build_chat_tools(state: ChatControlState) -> list:
         """渲染模版 / Word 样式配置向导。"""
         from report_writing.chat.resource_actions import _action_template_wizard
 
-        try:
-            payload = json.loads(payload_json or "{}")
-        except json.JSONDecodeError:
-            payload = {}
-        if not isinstance(payload, dict):
-            payload = {}
+        payload = ChatActionPayload.parse(payload_json).as_dict()
         _tool_begin(state, "template_wizard")
         reply, cards = _action_template_wizard(state.session, payload)
         _set_cards(state, cards)
@@ -2168,7 +2419,7 @@ def build_chat_tools(state: ChatControlState) -> list:
             state.session, "save_freeform_as_blueprint", home=state.home
         )
         if "doc_name" in miss and not (title or "").strip():
-            from report_writing.chat.intent_clarify import build_document_name_clarify
+            from report_writing.chat.clarify_flow import build_document_name_clarify
 
             reply, cards = build_document_name_clarify(
                 state.session,
@@ -2293,8 +2544,9 @@ def build_chat_tools(state: ChatControlState) -> list:
             state.session,
             "remember_writing_goal",
             {"notes": body},
-            invoke=state.invoke,
+            invoke=_state_intent_llm(state) or state.invoke,
             emit=state.emit,
+            model=state.intent_model,
         )
         write_like = any(
             k in body
@@ -2353,6 +2605,70 @@ def build_chat_tools(state: ChatControlState) -> list:
             }
         )
 
+    @tool
+    def resolve_intent_clarify(
+        option_id: str = "",
+        option_label: str = "",
+        clarify_id: str = "",
+        message: str = "",
+    ) -> str:
+        """用户点选了澄清卡片，或用原话回答当前 pending 选项。按 option_id 执行已选槽位。"""
+        del clarify_id
+        _tool_begin(state, "resolve_intent_clarify")
+        payload = {
+            "option_id": (option_id or "").strip(),
+            "option_label": (option_label or "").strip(),
+        }
+        reply, cards, events = apply_resolve_intent_clarify(
+            home=state.home,
+            session=state.session,
+            invoke=_state_intent_llm(state) or state.invoke,
+            emit=state.emit,
+            payload=payload,
+            message=(message or option_label or state.last_user_message or "").strip(),
+        )
+        state.cards.extend(cards or [])
+        state.events.extend(events or [])
+        pending_src = str(
+            ((state.session.freeform or {}).get("intent_clarify") or {}).get("source") or ""
+        )
+        suggested = list((state.session.freeform or {}).get("suggested_next_tools") or [])
+        obs_parts = [
+            "已按澄清点选落槽（未在 clarify 内链式 skip/大纲/match/wizard）。",
+            f"pending_clarify={pending_src or 'none'}",
+        ]
+        if suggested:
+            obs_parts.append(
+                f"suggested_next_tools={suggested}；同轮按序调用这些 Tool 并读 observation。"
+            )
+        else:
+            obs_parts.append("读 cards / reply_hint；有下一张澄清卡则等用户点选。")
+        return _dump(
+            {
+                "ok": True,
+                "reply_hint": reply,
+                "observation": " ".join(obs_parts),
+                "pending_clarify": pending_src or None,
+                "suggested_next_tools": suggested,
+                "awaiting_path_choice": pending_src
+                in {
+                    "doc_name",
+                    "entry",
+                    "entry_branch",
+                    "entry_freeform_mode",
+                },
+            }
+        )
+
+    @tool
+    def usage_guide() -> str:
+        """用户要使用说明 / 怎么用本产品。"""
+        from report_writing.chat.product_guide import build_usage_guide_reply
+
+        _tool_begin(state, "usage_guide")
+        reply = build_usage_guide_reply(state.invoke)
+        return _dump({"ok": True, "reply_hint": reply, "observation": "已给出使用说明。"})
+
     tools = [
         list_blueprints,
         ask_entry_path,
@@ -2382,6 +2698,7 @@ def build_chat_tools(state: ChatControlState) -> list:
         associate_elements,
         dissociate_chapter_element,
         remove_document_element,
+        collect_to_element_library,
         associate_element_knowledge,
         open_element_library,
         open_blueprint_library,
@@ -2399,15 +2716,27 @@ def build_chat_tools(state: ChatControlState) -> list:
         save_freeform_as_blueprint,
         sync_document_to_blueprint_library,
         remember_writing_goal,
+        resolve_intent_clarify,
+        usage_guide,
     ]
     from report_writing.agents.resource_tools import build_export_resource_tools
 
     tools.extend(build_export_resource_tools(state))
+    from report_writing.chat.materials_pack_gate import MATERIALS_PACK_ACTIONS
+
+    tools.extend(
+        _bind_payload_json_tools(
+            state,
+            sorted(MATERIALS_PACK_ACTIONS | _PAYLOAD_JSON_ACTIONS),
+        )
+    )
     from report_writing.chat.intent_router import user_chose_skip_blueprint
 
     if user_chose_skip_blueprint(state.session):
         tools = [t for t in tools if getattr(t, "name", None) != "match_blueprints"]
-    return tools
+    from report_writing.chat.tool_registry import apply_chat_control_tool_descriptions
+
+    return apply_chat_control_tool_descriptions(tools)
 
 
 def build_system_prompt(
@@ -2475,6 +2804,7 @@ _UI_SHORTCUT_ACTIONS = frozenset(
         "configure_chapter",
         "add_chapter_element",
         "associate_elements",
+        "collect_to_element_library",
         "associate_element_knowledge",
         "open_element_library",
         "open_blueprint_library",
@@ -2509,23 +2839,23 @@ def _ui_action_tool_name(action: str) -> str:
     return _UI_ACTION_TOOL_ALIASES.get(key, key)
 
 
-def _parse_agent_body(user_text: str) -> tuple[str, dict[str, Any], str]:
+def _parse_agent_body(user_text: str) -> tuple[str, ChatActionPayload, str]:
     try:
         body = json.loads(user_text or "{}")
     except json.JSONDecodeError:
-        return "", {}, (user_text or "").strip()
+        return "", ChatActionPayload(), (user_text or "").strip()
     if not isinstance(body, dict):
-        return "", {}, (user_text or "").strip()
-    payload = body.get("payload") if isinstance(body.get("payload"), dict) else {}
+        return "", ChatActionPayload(), (user_text or "").strip()
+    payload = ChatActionPayload.parse(body.get("payload"))
     return (
         str(body.get("action") or "").strip(),
-        dict(payload or {}),
+        payload,
         str(body.get("message") or "").strip(),
     )
 
 
-def _tool_args_for_ui_action(action: str, payload: dict[str, Any]) -> dict[str, Any]:
-    payload = dict(payload or {})
+def _tool_args_for_ui_action(action: str, payload: ChatPayload) -> dict[str, Any]:
+    payload = ChatActionPayload.parse(payload).as_dict()
     if action == "select_blueprint":
         return {"blueprint_id": str(payload.get("blueprint_id") or "").strip()}
     if action == "skip_blueprint":
@@ -2629,6 +2959,7 @@ def _tool_args_for_ui_action(action: str, payload: dict[str, Any]) -> dict[str, 
         "configure_chapter",
         "add_chapter_element",
         "associate_elements",
+        "collect_to_element_library",
         "associate_element_knowledge",
         "retry_chapter",
         "retry_search_chapter",
@@ -2652,13 +2983,17 @@ def _tool_args_for_ui_action(action: str, payload: dict[str, Any]) -> dict[str, 
             "option_label": str(payload.get("option_label") or "").strip(),
             "clarify_id": str(payload.get("clarify_id") or "").strip(),
         }
+    from report_writing.chat.materials_pack_gate import MATERIALS_PACK_ACTIONS
+
+    if action in MATERIALS_PACK_ACTIONS or action in _PAYLOAD_JSON_ACTIONS:
+        return {"payload_json": json.dumps(payload or {}, ensure_ascii=False)}
     return {}
 
 
 def _try_ui_action_shortcut(state: ChatControlState, user_text: str) -> str | None:
     """界面按钮：只调对应工具一次，避免 LLM 同轮再调 handoff 盖掉选用结果。"""
     action = (state.user_action or "").strip()
-    payload: dict[str, Any] = {}
+    payload = ChatActionPayload()
     if action:
         _, payload, _ = _parse_agent_body(user_text)
     else:
@@ -2678,6 +3013,53 @@ def _try_ui_action_shortcut(state: ChatControlState, user_text: str) -> str | No
     return None
 
 
+def apply_resolve_intent_clarify(
+    *,
+    home: Path,
+    session: ChatSession,
+    invoke: InvokeFn | None,
+    emit: EmitFn | None,
+    payload: ChatPayload,
+    message: str,
+) -> tuple[str, list[Any], list[dict]]:
+    """执行澄清点选（卡片按钮或 Agent Tool）。"""
+    from report_writing.chat.clarify_flow import (
+        execute_clarify_spec,
+        resolve_clarify,
+        try_handle_pending_message,
+    )
+
+    payload = ChatActionPayload.parse(payload)
+    option_id = str(payload.get("option_id") or "").strip()
+    option_label = str(payload.get("option_label") or "").strip()
+    hit = None
+    if option_id:
+        hit = resolve_clarify(session, option_id)
+    if hit is None:
+        from report_writing.chat.clarify_flow import restore_pending_from_last_clarify
+
+        if restore_pending_from_last_clarify(session) is not None and option_id:
+            hit = resolve_clarify(session, option_id)
+    if hit is None:
+        choice = option_label or option_id or str(message or "").strip()
+        hit = try_handle_pending_message(session, choice, invoke=invoke, home=home)
+    else:
+        choice = option_label or option_id
+    if isinstance(hit, str):
+        return hit, [], []
+    if isinstance(hit, Mapping):
+        reply, cards, events = execute_clarify_spec(
+            home, session, hit, message=choice, emit=emit, invoke=invoke
+        )
+        return reply, cards, events
+    from report_writing.chat.clarify_flow import rehang_last_clarify
+
+    rehang = rehang_last_clarify(session)
+    if rehang is not None:
+        return rehang[0], list(rehang[1] or []), []
+    return "这轮确认好像过期了，你再说一下想做什么就行。", [], []
+
+
 def run_ui_action_shortcut(
     *,
     home: Path,
@@ -2686,52 +3068,22 @@ def run_ui_action_shortcut(
     invoke: InvokeFn,
     emit: EmitFn | None,
     action: str,
-    payload: dict[str, Any],
+    payload: ChatPayload,
     message: str,
 ) -> tuple[str, list[Any], list[dict]] | None:
-    """已知 UI action：不调 LLM，只执行同名工具一次。"""
+    """已知 UI action：执行同名工具（Agent 未调 Tool 时的兜底，以及资料包等未绑定 Tool）。"""
     key = (action or "").strip()
     if key not in UI_SHORTCUT_ACTIONS:
         return None
     if key == "resolve_intent_clarify":
-        from report_writing.chat.intent_clarify import (
-            execute_clarify_spec,
-            resolve_clarify,
-            try_handle_pending_message,
+        return apply_resolve_intent_clarify(
+            home=home,
+            session=session,
+            invoke=invoke,
+            emit=emit,
+            payload=payload,
+            message=message,
         )
-
-        option_id = str((payload or {}).get("option_id") or "").strip()
-        option_label = str((payload or {}).get("option_label") or "").strip()
-        # 按钮点选优先按 option_id 消歧，避免只靠文案、槽位丢失
-        hit = None
-        if option_id:
-            hit = resolve_clarify(session, option_id)
-        if hit is None:
-            # pending 被误清：先从 last 快照恢复再消歧，勿直接报过期逼用户再点一次
-            from report_writing.chat.intent_clarify import restore_pending_from_last_clarify
-
-            if restore_pending_from_last_clarify(session) is not None and option_id:
-                hit = resolve_clarify(session, option_id)
-        if hit is None:
-            choice = option_label or option_id or str(message or "").strip()
-            # 文案复述 / 口语别名：用活模型结合 pending 上下文，勿强制离线短语
-            hit = try_handle_pending_message(session, choice, invoke=invoke, home=home)
-        else:
-            choice = option_label or option_id
-        if isinstance(hit, str):
-            return hit, [], []
-        if isinstance(hit, dict):
-            # 保留选项文案供 entry_path 文案启发式；执行时仍优先用 candidate.payload.message
-            reply, cards, events = execute_clarify_spec(
-                home, session, hit, message=choice, emit=emit, invoke=invoke
-            )
-            return reply, cards, events
-        from report_writing.chat.intent_clarify import rehang_last_clarify
-
-        rehang = rehang_last_clarify(session)
-        if rehang is not None:
-            return rehang[0], list(rehang[1] or []), []
-        return "这轮确认好像过期了，你再说一下想做什么就行。", [], []
     from report_writing.chat.materials_pack_gate import MATERIALS_PACK_ACTIONS
 
     if key in MATERIALS_PACK_ACTIONS:
@@ -2739,7 +3091,7 @@ def run_ui_action_shortcut(
 
         try:
             reply, cards = apply_materials_pack_choice(
-                home, session, key, dict(payload or {}), emit=emit
+                home, session, key, payload, emit=emit
             )
         except ValueError as error:
             return str(error), [], []
@@ -2749,7 +3101,7 @@ def run_ui_action_shortcut(
         "skip_writing_supplement_check",
         "dismiss_writing_supplement",
     }:
-        from report_writing.chat.intent_dispatch import execute_dispatch_tool
+        from report_writing.chat.tool_dispatch import execute_dispatch_tool
 
         hit = execute_dispatch_tool(
             home,
@@ -2811,7 +3163,7 @@ def run_ui_action_shortcut(
 def build_agent_user_text(
     *,
     action: str,
-    payload: dict[str, Any],
+    payload: ChatActionPayload | dict[str, Any] | Any,
     message: str,
     session: ChatSession,
     home: Path | None = None,
@@ -2824,7 +3176,11 @@ def build_agent_user_text(
 
     body: dict[str, Any] = {
         "action": action,
-        "payload": payload or {},
+        "payload": (
+            payload.as_dict()
+            if hasattr(payload, "as_dict")
+            else (payload or {})
+        ),
         "message": message or ("你好" if not action else ""),
         "session": {
             **session_turn_snapshot(session, message),
@@ -2845,7 +3201,7 @@ def build_agent_user_text(
         body["dialogue_full"] = dialogue_full
     goal = get_session_goal(session)
     if any(str(goal.get(k) or "").strip() for k in ("summary", "doc_category", "doc_title", "project")):
-        body["session_goal"] = goal
+        body["session_goal"] = goal.to_dict()
     from report_writing.chat.session_documents import (
         focus_document_brief,
         focus_document_meta,
@@ -2861,7 +3217,7 @@ def build_agent_user_text(
         body["recent_dialogue"] = summary
     if action:
         body["hint"] = (
-            f"用户点击了界面操作「{action}」：优先调用同名工具一次完成；"
+            f"用户点击了界面操作「{action}」：本轮必须调用同名 Tool 一次完成（payload 原样传入）；"
             "勿改用其它工具替代（例如保存蓝本勿用 blueprint_subagent）。"
         )
         if action == "save_freeform_as_blueprint" and home is not None:
@@ -2877,7 +3233,6 @@ def build_agent_user_text(
             "勿把一句操作指令 submit_points 或只回复书写节奏。"
         )
         from report_writing.chat.helpers import is_vague_freeform_meta
-        from report_writing.chat.intent_router import is_save_freeform_blueprint_intent
         from report_writing.chat.session_documents import (
             focus_needs_entry_path,
             is_writing_document_named,
@@ -2893,11 +3248,22 @@ def build_agent_user_text(
                 "已定名但缺写作入口：下一步唯一 Tool 是 ask_entry_path（或等用户点选入口卡）；"
                 "禁止再调 remember_writing_goal / set_session_meta 只回「记下了」。"
             )
-        elif message and is_save_freeform_blueprint_intent(message):
-            body["routing_hint"] = (
-                "用户很可能要保存当前无蓝本任务为蓝本：优先 save_freeform_as_blueprint；"
-                "不要 blueprint_subagent / 创建蓝本向导（上传样板建全新蓝本）。"
-            )
+    from report_writing.chat.clarify_flow import get_pending
+
+    pending = get_pending(session)
+    if isinstance(pending, dict) and pending:
+        body["pending_clarify"] = {
+            "id": pending.get("id") or "",
+            "source": pending.get("source") or "",
+            "question": pending.get("question") or "",
+            "options": list(pending.get("options") or [])[:6],
+        }
+        extra = (
+            "有 pending 澄清卡：用户点选或口语对应选项时调用 resolve_intent_clarify"
+            "（option_id / option_label）；不要另开一套意图分类。"
+        )
+        prev = str(body.get("routing_hint") or "").strip()
+        body["routing_hint"] = f"{prev} {extra}".strip() if prev else extra
     from report_writing.chat.turn_context import build_writing_turn_context, merge_turn_context_into_agent_body
     from report_writing.chat.writing_brief import brief_to_dict_for_body
 
@@ -2907,6 +3273,20 @@ def build_agent_user_text(
     from report_writing.chat.next_step import infer_suggested_next_step
 
     body["suggested_next_step"] = infer_suggested_next_step(session, home=home, message=message or "")
+    snap = (session.freeform or {}).get("session_gaps_snapshot")
+    if isinstance(snap, dict) and snap.get("context_line"):
+        body["session_gaps"] = snap
+    suggested = list((session.freeform or {}).get("suggested_next_tools") or [])
+    if not suggested and isinstance(snap, dict):
+        suggested = list(snap.get("suggested_tools") or [])
+    if suggested:
+        body["suggested_next_tools"] = suggested
+        extra = (
+            "session 上有 suggested_next_tools：本轮按序调用这些 Tool 并读 observation；"
+            "不要只口头复述队列，也不要另起一套计划。"
+        )
+        prev = str(body.get("routing_hint") or "").strip()
+        body["routing_hint"] = f"{prev} {extra}".strip() if prev else extra
     return json.dumps(body, ensure_ascii=False)
 
 
@@ -3001,7 +3381,7 @@ def _agent_user_text_for_message(state: ChatControlState, message: str) -> str:
 
     goal = get_session_goal(state.session)
     if any(str(goal.get(k) or "").strip() for k in ("summary", "doc_category", "doc_title", "project")):
-        body["session_goal"] = goal
+        body["session_goal"] = goal.to_dict()
     snap = session_turn_snapshot(state.session, message)
     if snap.get("skip_blueprint_path") or snap.get("dialogue_skipped_blueprint"):
         body["hint"] = (
@@ -3045,161 +3425,37 @@ def _parse_user_message_from_agent_text(user_text: str) -> tuple[str, str, str]:
 
 
 
-def run_chat_control(
+def _record_oral_route(state: ChatControlState, route: str, **extra: Any) -> None:
+    from report_writing.chat.agent_chain_log import log_oral_route
+
+    payload = {"route": route, **{k: v for k, v in extra.items() if v is not None and v != ""}}
+    log_oral_route(state.session, state.emit, route=route, detail=payload)
+    state.events.append({"type": "oral_route", **payload})
+
+
+def run_langchain_chat_control(
     *,
     model: BaseChatModel,
     state: ChatControlState,
     user_text: str,
     system_prompt: str,
+    message: str,
+    action: str,
 ) -> str:
-    """运行一轮对话总控，副作用写入 state.session / cards / events。"""
-    action, message, _phase = _parse_user_message_from_agent_text(user_text)
-    state.last_user_message = message
-    state.user_action = state.user_action or (action or "")
-    state.control_model = model
-    from report_writing.chat.turn_context import ensure_control_state_context
+    """LangChain create_agent 口语主路径（见 chat/AGENT_ARCHITECTURE.md）。"""
+    _record_oral_route(state, "langchain_agent", message=message[:120] if message else "")
+    if not (action or state.user_action) and message:
+        from report_writing.chat.session_gaps import refresh_session_gaps
 
-    ensure_control_state_context(state, message)
-
-    intent_llm = state.intent_invoke
-    if intent_llm is None and state.invoke is not None:
-        from report_writing.chat.intent_invoke import intent_invoke_fn
-
-        intent_llm = intent_invoke_fn(state.invoke)
-
-    from report_writing.chat.intent_router import allows_agent_blueprint_select
-
-    state.agent_may_select_blueprint = allows_agent_blueprint_select(
-        message=message,
-        user_action=state.user_action or action,
-        invoke=intent_llm if intent_llm is not None else state.invoke,
-        session=state.session,
-    )
-
-    shortcut = _try_ui_action_shortcut(state, user_text)
-    if shortcut is not None:
-        return shortcut
-
-    # 全局意图澄清：有 pending 时优先消歧，再走各路由
-    if not (state.user_action or action) and message:
-        from report_writing.chat.intent_clarify import (
-            execute_clarify_spec,
-            try_handle_pending_message,
-        )
-
-        clarify_hit = try_handle_pending_message(
-            state.session, message, invoke=intent_llm, home=state.home
-        )
-        if isinstance(clarify_hit, str):
-            from report_writing.chat.intent_clarify import get_pending
-            from report_writing.domain.models import ChatCard
-
-            pending = get_pending(state.session) or {}
-            opts = list(pending.get("options") or [])
-            if opts:
-                state.cards.append(
-                    ChatCard(
-                        type="intent_clarify",
-                        title="请帮我确认一下",
-                        payload={
-                            "clarify_id": pending.get("id") or "",
-                            "question": clarify_hit,
-                            "options": opts,
-                            "source": pending.get("source") or "",
-                        },
-                    )
-                )
-            return clarify_hit
-        if isinstance(clarify_hit, dict):
-            from report_writing.chat.helpers import _emit_process
-
-            _emit_process(state.emit, "正在按你确认的意图继续…")
-            reply, cards, events = execute_clarify_spec(
-                state.home,
-                state.session,
-                clarify_hit,
-                message=message,
-                emit=state.emit,
-                invoke=state.invoke,
-            )
-            state.cards.extend(cards)
-            state.events.extend(events)
-            return (reply or "").strip() or "好的。"
-
-    if not (state.user_action or action) and message:
-        from report_writing.chat.intent_clarify import (
-            dispatch_suggested_onboarding_tools,
-        )
-        from report_writing.chat.session_documents import (
-            ensure_write_onboarding_started,
-            focus_has_active_writing_context,
-            message_is_chitchat_only,
-            message_requests_list_blueprints,
-        )
-
-        if message_is_chitchat_only(message) and not focus_has_active_writing_context(
-            state.session
-        ):
-            t = message.strip()
-            if t.startswith(("谢", "感谢")):
-                return "不客气～有需要写文档随时叫我。"
-            return (
-                "你好呀～想写什么直接说就行；有蓝本可以说用哪个，"
-                "没有也可以说不用蓝本，咱们边聊边做，不必按固定步骤一项项填。"
-            )
-
-        if message_requests_list_blueprints(message):
-            from report_writing.chat_orchestrator import _action_list_blueprints
-
-            _tool_begin(state, "list_blueprints")
-            reply, cards = _action_list_blueprints(
-                state.home, state.session, {"q": ""}
-            )
-            state.cards.extend(cards or [])
-            return (reply or "").strip() or "好的。"
-
-        ensure_write_onboarding_started(
-            state.session,
-            state.home,
-            message,
-            invoke=intent_llm,
-            emit=state.emit,
-        )
-        dispatch_hit = dispatch_suggested_onboarding_tools(
-            state.home,
+        intent_llm = _state_intent_llm(state) or state.invoke
+        refresh_session_gaps(
             state.session,
             message=message,
+            home=state.home,
             invoke=intent_llm,
-            emit=state.emit,
         )
-        if dispatch_hit is not None:
-            reply, cards, events = dispatch_hit
-            state.cards.extend(cards or [])
-            state.events.extend(events)
-            return (reply or "").strip() or "好的。"
 
-    # 整段会话统一大脑：JSON slots/tools/missing → 确定执行 / 缺项引导 / 不确定追问。
-    # 开场、向导、写作中途同一入口；未命中再交 ReAct 观察闭环。
-    if not (state.user_action or action) and message and intent_llm is not None:
-        from report_writing.chat.intent_multi_plan import try_run_oral_multi_intent
-
-        multi_hit = try_run_oral_multi_intent(
-            state.home,
-            state.session,
-            message,
-            invoke=intent_llm,
-            emit=state.emit,
-        )
-        if multi_hit is not None:
-            reply, cards, events = multi_hit
-            state.cards.extend(cards)
-            state.events.extend(events)
-            return (reply or "").strip() or "好的。"
-
-    # 口语主路径：pending clarify / UI / 多意图短路之后直接 ReAct 观察闭环。
-    # 不再走 dispatch / 域路由 / plan_route「认领即串行执行后 return」。
     tools = build_chat_tools(state)
-
     from report_writing.chat.react_speed import control_react_rounds
 
     result = run_react(
@@ -3212,7 +3468,86 @@ def run_chat_control(
         session=state.session,
         emit=state.emit,
     )
-    return _final_text(result.get("messages") or [], state)
+    messages = result.get("messages") or []
+    if any(isinstance(m, ToolMessage) for m in messages):
+        state.did_invoke_tool = True
+    return _final_text(messages, state)
+
+
+def run_chat_control(
+    *,
+    model: BaseChatModel,
+    state: ChatControlState,
+    user_text: str,
+    system_prompt: str,
+) -> str:
+    """运行一轮对话总控：卡片/按钮作为对话交给 LangChain Agent。
+
+    点选结果与原先同名 Tool 执行一致；Agent 未调 Tool 时才走 UI 兜底。
+    """
+    action, message, _phase = _parse_user_message_from_agent_text(user_text)
+    state.last_user_message = message
+    state.user_action = state.user_action or (action or "")
+    state.control_model = model
+    from report_writing.chat.turn_context import ensure_control_state_context
+
+    ensure_control_state_context(state, message)
+
+    intent_llm = _state_intent_llm(state)
+
+    state.agent_may_select_blueprint = (state.user_action or action or "").strip() == (
+        "select_blueprint"
+    )
+
+    if not (state.user_action or action) and message:
+        from report_writing.chat.session_documents import ensure_write_onboarding_started
+
+        ensure_write_onboarding_started(
+            state.session,
+            state.home,
+            message,
+            invoke=intent_llm,
+            emit=state.emit,
+        )
+
+    act = (state.user_action or action or "").strip()
+    reply = ""
+    can_agent = hasattr(model, "bind_tools")
+    if can_agent:
+        try:
+            reply = run_langchain_chat_control(
+                model=model,
+                state=state,
+                user_text=user_text,
+                system_prompt=system_prompt,
+                message=message,
+                action=action or state.user_action or "",
+            )
+        except Exception:
+            _log.exception("control agent failed; UI action will fall back if present")
+            state.did_invoke_tool = False
+            reply = ""
+    if act in UI_SHORTCUT_ACTIONS and not state.did_invoke_tool:
+        payload = ChatActionPayload()
+        if user_text:
+            _, payload, _ = _parse_agent_body(user_text)
+        hit = run_ui_action_shortcut(
+            home=state.home,
+            session=state.session,
+            robot=state.robot,
+            invoke=intent_llm or state.invoke,
+            emit=state.emit,
+            action=act,
+            payload=payload,
+            message=message,
+        )
+        if hit is not None:
+            text, cards, events = hit
+            state.cards.extend(cards or [])
+            state.events.extend(events or [])
+            _record_oral_route(state, "ui_action_fallback", action=act)
+            return (text or "").strip() or "好的。"
+    return reply
 
 
 def _script_user_message(text: str) -> str:
@@ -3228,9 +3563,26 @@ def _script_user_message(text: str) -> str:
 
 
 class ChatControlScriptModel(ScriptedChatModel):
-    """离线/单测：按 UI action 或 session phase 调用总控 Tool（不解析口语）。"""
+    """离线/单测：按 UI action、suggested_next_tools 与 Tool observation hop。不读 leftover JSON plan。"""
 
     role: str = "chat_control_script"
+
+    def _hop_suggested_next_tools(
+        self, messages: list[BaseMessage], phase: str
+    ) -> AIMessage | None:
+        """新一轮无点选时只跟 suggested_next_tools，不读 leftover JSON plan。"""
+        if str(phase or "").strip() not in _SCRIPT_FOLLOW_SUGGESTED_PHASES:
+            return None
+        rows = _suggested_next_tools_from_human(messages)
+        if not rows:
+            return None
+        nxt = str(rows[0].get("tool") or "").strip()
+        if not nxt:
+            return None
+        args = rows[0].get("args")
+        if not isinstance(args, dict):
+            args = {}
+        return self.call(nxt, dict(args))
 
     def decide(self, messages: list[BaseMessage]) -> AIMessage:
         action, payload, text, phase, sess_snap = _parse_human(messages)
@@ -3260,6 +3612,49 @@ class ChatControlScriptModel(ScriptedChatModel):
                     ).strip():
                         return self.finish(str(data.get("reply_hint") or "").strip())
                     return self.call("ask_entry_path", {"message": msg})
+                if (
+                    tool_name == "match_blueprints"
+                    and data.get("ok") is True
+                    and data.get("awaiting_user_choice")
+                ):
+                    ids = [
+                        str(x).strip()
+                        for x in (data.get("ids") or data.get("candidate_ids") or [])
+                        if str(x).strip()
+                    ]
+                    if len(ids) == 1 and any(
+                        k in msg for k in ("就用", "选用这份", "用这份", "用这个蓝本")
+                    ):
+                        return self.call("select_blueprint", {"blueprint_id": ids[0]})
+                    if not ids and any(
+                        k in msg
+                        for k in ("模版", "模板", "样板", "上传样板", "创建蓝本", "依据模版")
+                    ):
+                        return self.call(
+                            "begin_blueprint_wizard",
+                            {
+                                "force_new": True,
+                                "explicit_create": True,
+                                "title_hint": "",
+                            },
+                        )
+                nxt = str(data.get("suggested_next_tool") or "").strip()
+                args: dict = {}
+                if nxt:
+                    raw_args = data.get("suggested_args")
+                    if isinstance(raw_args, dict):
+                        args = raw_args
+                elif isinstance(data.get("suggested_next_tools"), list):
+                    steps = [
+                        s
+                        for s in data.get("suggested_next_tools") or []
+                        if isinstance(s, dict) and str(s.get("tool") or "").strip()
+                    ]
+                    if steps:
+                        nxt = str(steps[0].get("tool") or "").strip()
+                        args = dict(steps[0].get("args") or {})
+                if nxt and nxt != tool_name:
+                    return self.call(nxt, args)
                 if data.get("ok") is False and "doc_name" in (data.get("missing_slots") or []):
                     from report_writing.chat.session_documents import quick_title_from_write_message
 
@@ -3273,156 +3668,30 @@ class ChatControlScriptModel(ScriptedChatModel):
             if isinstance(message, HumanMessage):
                 break
 
-        if action == "select_blueprint":
-            return self.call("select_blueprint", {"blueprint_id": str(payload.get("blueprint_id") or "")})
-        if action == "list_blueprints":
-            return self.call("list_blueprints", {"q": str(payload.get("q") or "")})
-        if action == "skip_blueprint":
-            return self.call("skip_blueprint")
-        if action == "begin_blueprint_wizard":
+        if action:
             return self.call(
-                "begin_blueprint_wizard",
-                {
-                    "force_new": bool(payload.get("force_new", True)),
-                    "title_hint": str(payload.get("title_hint") or payload.get("title") or "").strip(),
-                },
+                _ui_action_tool_name(action),
+                _tool_args_for_ui_action(action, payload) or {},
             )
-        if action == "resume":
-            return self.call(
-                "resume_from_blueprint",
-                {
-                    "blueprint_id": str(payload.get("blueprint_id") or ""),
-                    "task_id": str(payload.get("task_id") or ""),
-                },
-            )
-        if action == "start_writing":
-            return self.call(
-                "start_writing",
-                {
-                    "writing_pace": str(payload.get("writing_pace") or ""),
-                    "chapter_keys_json": json.dumps(
-                        payload.get("chapter_keys")
-                        or payload.get("write_chapter_keys")
-                        or [],
-                        ensure_ascii=False,
-                    ),
-                },
-            )
-        if action == "select_write_chapters":
-            return self.call(
-                "select_write_chapters",
-                {
-                    "blueprint_id": str(payload.get("blueprint_id") or ""),
-                    "chapter_keys_json": json.dumps(
-                        payload.get("chapter_keys") or payload.get("write_chapter_keys") or [],
-                        ensure_ascii=False,
-                    ),
-                },
-            )
-        if action == "write_analyzed_only":
-            return self.call(
-                "write_analyzed_only",
-                {
-                    "blueprint_id": str(payload.get("blueprint_id") or ""),
-                    "chapter_keys_json": json.dumps(
-                        payload.get("chapter_keys") or payload.get("write_chapter_keys") or [],
-                        ensure_ascii=False,
-                    ),
-                },
-            )
-        if action == "confirm_all_chapters":
-            return self.call(
-                "confirm_all_chapters",
-                {
-                    "chapters_json": json.dumps(payload.get("chapters") or [], ensure_ascii=False),
-                    "skip_empty": bool(payload.get("skip_empty", True)),
-                    "task_id": str(payload.get("task_id") or ""),
-                },
-            )
-        if action == "configure_chapter":
-            return self.call("configure_chapter", {"payload_json": json.dumps(payload, ensure_ascii=False)})
-        if action == "add_chapter_element":
-            return self.call("add_chapter_element", {"payload_json": json.dumps(payload, ensure_ascii=False)})
-        if action == "retry_chapter":
-            return self.call("retry_chapter", {"payload_json": json.dumps(payload, ensure_ascii=False)})
-        if action == "retry_search_chapter":
-            return self.call("retry_search_chapter", {"payload_json": json.dumps(payload, ensure_ascii=False)})
-        if action == "confirm_chapter":
-            return self.call(
-                "confirm_chapter",
-                {
-                    "task_id": str(payload.get("task_id") or ""),
-                    "chapter_key": str(payload.get("chapter_key") or ""),
-                    "text": str(payload.get("text") or ""),
-                    "decision": str(payload.get("decision") or "approve"),
-                    "comment": str(payload.get("comment") or ""),
-                },
-            )
-        if action == "submit_outline":
-            return self.call(
-                "submit_outline",
-                {
-                    "outline_text": str(payload.get("outline_text") or text or ""),
-                    "confirm": bool(payload.get("confirm")),
-                    "regenerate": bool(payload.get("regenerate")),
-                    "reopen_edit": bool(payload.get("reopen_edit")),
-                },
-            )
-        if action == "generate_freeform_points":
-            keys = payload.get("chapter_keys") or payload.get("write_chapter_keys") or []
-            if not isinstance(keys, list):
-                keys = []
-            return self.call(
-                "generate_freeform_points",
-                {
-                    "task_id": str(payload.get("task_id") or ""),
-                    "chapter_keys_json": json.dumps(keys, ensure_ascii=False),
-                    "focus_chapter_key": str(
-                        payload.get("focus_chapter_key") or payload.get("chapter_key") or ""
-                    ).strip(),
-                },
-            )
-        if action == "skip_freeform_points":
-            return self.call(
-                "skip_freeform_points",
-                {"task_id": str(payload.get("task_id") or "")},
-            )
-        if action == "resource_check":
-            return self.call("resource_check", {})
-        if action == "save_freeform_as_blueprint":
-            return self.call(
-                "save_freeform_as_blueprint",
-                {
-                    "task_id": str(payload.get("task_id") or ""),
-                    "dismiss": bool(payload.get("dismiss")),
-                    "title": str(payload.get("title") or ""),
-                    "category": str(payload.get("category") or ""),
-                },
-            )
-        if action == "pause_writing":
-            return self.call("pause_writing", {})
-        if action == "resource_choice":
-            return self.call(
-                "resource_choice",
-                {
-                    "resource": str(payload.get("resource") or ""),
-                    "accept": bool(payload.get("accept")),
-                },
-            )
-        if action == "blueprint_wizard":
-            return self.call(
-                "blueprint_wizard",
-                {"payload_json": json.dumps(payload, ensure_ascii=False)},
-            )
-        if action == "template_wizard":
-            return self.call(
-                "template_wizard",
-                {"payload_json": json.dumps(payload, ensure_ascii=False)},
-            )
-        if action == "submit_points":
-            return self.call("submit_points", {"message": text or json.dumps(payload, ensure_ascii=False)})
-        if action == "confirm_freeform_meta":
-            return self.call("submit_freeform_meta", {"message": text or str(payload.get("message") or "")})
+
+        if not action and msg:
+            for message in reversed(messages):
+                if isinstance(message, HumanMessage):
+                    raw = (
+                        message.content
+                        if isinstance(message.content, str)
+                        else json.dumps(message.content, ensure_ascii=False)
+                    )
+                    try:
+                        body = json.loads(raw) if str(raw).lstrip().startswith("{") else {}
+                    except json.JSONDecodeError:
+                        body = {}
+                    if isinstance(body, dict) and body.get("pending_clarify"):
+                        return self.call(
+                            "resolve_intent_clarify",
+                            {"message": msg, "option_label": msg},
+                        )
+                    break
 
         phase = phase or str(sess_snap.get("phase") or "")
 
@@ -3438,6 +3707,12 @@ class ChatControlScriptModel(ScriptedChatModel):
             tip = tip.strip("「」《》\"'“”")[:160]
             if tip:
                 return self.call("set_session_meta", {"title": tip, "message": msg})
+
+        hop = self._hop_suggested_next_tools(
+            messages, phase or str(sess_snap.get("phase") or "")
+        )
+        if hop is not None:
+            return hop
 
         if phase == ChatPhase.CREATE_HANDOFF.value and msg:
             # 向导口语 → blueprint_wizard / begin（等同 ReAct 选 Tool，不经认领即 return 路由）
@@ -3554,6 +3829,11 @@ class ChatControlScriptModel(ScriptedChatModel):
                         "title_hint": tip,
                     },
                 )
+            from report_writing.chat.session_documents import message_requests_list_blueprints
+
+            if message_requests_list_blueprints(msg):
+                return self.call("list_blueprints", {"q": ""})
+
             from report_writing.chat.intent_router import message_requests_blueprint_match
 
             wants_write = message_requests_blueprint_match(msg) or any(
@@ -3574,6 +3854,40 @@ class ChatControlScriptModel(ScriptedChatModel):
             if not msg
             else f"收到：{msg[:80]}。（离线脚本模式请用按钮或明确 phase）"
         )
+
+
+_SCRIPT_FOLLOW_SUGGESTED_PHASES = frozenset(
+    {
+        "",
+        ChatPhase.INTENT.value,
+        ChatPhase.BLUEPRINT_SELECT.value,
+        ChatPhase.FREEFORM_ASK.value,
+        ChatPhase.FREEFORM_OUTLINE.value,
+        ChatPhase.FREEFORM_POINTS.value,
+    }
+)
+
+
+def _suggested_next_tools_from_human(messages: list[BaseMessage]) -> list[dict[str, Any]]:
+    for message in reversed(messages):
+        if not isinstance(message, HumanMessage):
+            continue
+        raw = (
+            message.content
+            if isinstance(message.content, str)
+            else json.dumps(message.content, ensure_ascii=False)
+        )
+        try:
+            data = json.loads(raw) if str(raw or "").lstrip().startswith("{") else {}
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(data, dict):
+            return []
+        rows = data.get("suggested_next_tools")
+        if not isinstance(rows, list):
+            return []
+        return [row for row in rows if isinstance(row, dict) and str(row.get("tool") or "").strip()]
+    return []
 
 
 def _parse_human(messages: list[BaseMessage]) -> tuple[str, dict[str, Any], str, str, dict[str, Any]]:

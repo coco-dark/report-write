@@ -109,4 +109,16 @@ def run_domain_subagent(
         emit=state.emit,
     )
     hint = subagent_final_text(result.get("messages") or [], default=default_reply)
-    return _dump({"ok": True, "reply_hint": hint, "subagent": agent_name})
+    suggested = list((state.session.freeform or {}).get("suggested_next_tools") or [])
+    body: dict[str, Any] = {
+        "ok": True,
+        "reply_hint": hint,
+        "subagent": agent_name,
+    }
+    if suggested:
+        body["suggested_next_tools"] = suggested
+        body["observation"] = (
+            f"子Agent观察：suggested_next_tools={suggested}；"
+            "由总控同轮调用，子Agent不代跑 begin。"
+        )
+    return _dump(body)

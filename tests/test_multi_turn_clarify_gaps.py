@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from report_writing.chat.action_slots import ACTION_SLOT_SOURCE
-from report_writing.chat.intent_clarify import get_pending
-from report_writing.chat.intent_dispatch import execute_dispatch_tool
+from report_writing.chat.clarify_flow import get_pending
+from report_writing.chat.tool_dispatch import execute_dispatch_tool
 from report_writing.chat.resource_actions import _prompt_confirm_outline_before_study
 from report_writing.chat.session_goal_actions import run_session_goal_action
 from report_writing.chat.write_chapter_intent import try_write_chapters_from_message

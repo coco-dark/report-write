@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
-from report_writing.domain.models import ChatPhase, ChatSession
+from report_writing.domain.models import ChatActionPayload, ChatPayload, ChatPhase, ChatSession
 
 EmitFn = Callable[[dict[str, Any]], None]
 InvokeFn = Callable[[str, str], str]
@@ -21,22 +21,27 @@ def run_session_goal_action(
     home: Path,
     session: ChatSession,
     action: str,
-    payload: dict[str, Any] | None = None,
+    payload: ChatPayload = None,
     *,
     invoke: InvokeFn | None = None,
     emit: EmitFn | None = None,
+    model=None,
 ) -> tuple[str, list[Any]]:
     key = (action or "").strip()
     if key not in SESSION_GOAL_ACTION_NAMES:
         raise ValueError(f"unknown session_goal action: {key}")
-    body = dict(payload or {})
+    body = ChatActionPayload.parse(payload)
 
     if key == "remember_writing_goal":
-        return _remember_writing_goal(home, session, body, invoke=invoke)
+        return _remember_writing_goal(home, session, body, invoke=invoke, model=model)
 
-    return _set_session_meta(home, session, body, invoke=invoke, emit=emit)
+    return _set_session_meta(home, session, body, invoke=invoke, emit=emit, model=model)
 
-def _intent_invoke(invoke: InvokeFn | None) -> InvokeFn | None:
+def _intent_invoke(invoke: InvokeFn | None, *, model=None) -> InvokeFn | None:
+    if model is not None:
+        from report_writing.chat.intent_invoke import intent_invoke_fn
+
+        return intent_invoke_fn(invoke, model=model)
     if invoke is None:
         return None
     from report_writing.chat.intent_invoke import intent_invoke_fn
@@ -46,15 +51,17 @@ def _intent_invoke(invoke: InvokeFn | None) -> InvokeFn | None:
 def _remember_writing_goal(
     home: Path,
     session: ChatSession,
-    payload: dict[str, Any],
+    payload: ChatPayload,
     *,
     invoke: InvokeFn | None,
+    model=None,
 ) -> tuple[str, list[Any]]:
     from report_writing.chat.session_goal import apply_session_goal_to_task, remember_from_user_message
     from report_writing.services.store import TaskStore
 
+    payload = ChatActionPayload.parse(payload)
     notes = str(payload.get("notes") or payload.get("message") or "").strip()
-    llm = _intent_invoke(invoke)
+    llm = _intent_invoke(invoke, model=model)
     reply = remember_from_user_message(session, notes, invoke=llm)
     tid = (session.task_id or "").strip()
     if tid and home:
@@ -80,7 +87,7 @@ def _freeform_outline_chapter_count(home: Path | None, session: ChatSession) -> 
     return len(list(task.outline.chapters or []))
 
 def _seed_meta_patch_from_payload(
-    payload: dict[str, Any],
+    payload: ChatPayload,
     message: str,
     *,
     invoke: InvokeFn | None,
@@ -90,6 +97,7 @@ def _seed_meta_patch_from_payload(
     from report_writing.chat.helpers import is_vague_freeform_meta
     from report_writing.chat.session_goal import parse_goal_patch_from_message
 
+    payload = ChatActionPayload.parse(payload)
     category = str(payload.get("category") or "").strip()
     title = str(payload.get("title") or "").strip()
     patch: dict[str, str] = {}
@@ -114,8 +122,12 @@ def _seed_meta_patch_from_payload(
     # 只发干净题目、无「类型｜标题」——整句当标题（含改名指令词的句子不当标题）
     if not patch.get("doc_title"):
         text = (message or "").strip()
+        from report_writing.chat.session_documents import message_requires_structured_rename_title
+
         if text and "｜" not in text and "|" not in text:
-            if not is_vague_freeform_meta(text, field=True):
+            if message_requires_structured_rename_title(text) and not title:
+                pass
+            elif not is_vague_freeform_meta(text, field=True):
                 patch["doc_title"] = text[:160]
     if patch.get("doc_category") or patch.get("doc_title"):
         cat = patch.get("doc_category") or ""
@@ -126,14 +138,16 @@ def _seed_meta_patch_from_payload(
 def _set_session_meta(
     home: Path,
     session: ChatSession,
-    payload: dict[str, Any],
+    payload: ChatPayload,
     *,
     invoke: InvokeFn | None,
     emit: EmitFn | None,
+    model=None,
 ) -> tuple[str, list[Any]]:
     from report_writing.chat.helpers import _emit_process
     from report_writing.chat.session_goal import merge_session_goal, sync_goal_into_freeform
 
+    payload = ChatActionPayload.parse(payload)
     category = str(payload.get("category") or "").strip()
     title = str(payload.get("title") or "").strip()
     message = str(payload.get("message") or "").strip()
@@ -144,7 +158,7 @@ def _set_session_meta(
     if message_repeats_assistant_reply(session, message):
         if is_writing_document_named(session):
             return "刚才那句是我的回复，不会拿来当文档名。要改名直接说「名字叫…」。", []
-        from report_writing.chat.intent_clarify import build_document_name_clarify
+        from report_writing.chat.clarify_flow import build_document_name_clarify
 
         return build_document_name_clarify(
             session,
@@ -161,7 +175,7 @@ def _set_session_meta(
     if not message:
         return "跟我说一下文档叫什么、写哪一类就行（口语或「类型｜标题」都可以）。", []
 
-    llm = _intent_invoke(invoke)
+    llm = _intent_invoke(invoke, model=model)
 
     from report_writing.chat.session_documents import (
         focus_has_active_writing_context,
@@ -175,6 +189,16 @@ def _set_session_meta(
 
     raw_message = str(payload.get("message") or "").strip()
     gate_msg = raw_message or message
+    from report_writing.chat.session_documents import message_requires_structured_rename_title
+
+    if message_requires_structured_rename_title(gate_msg) and not str(
+        payload.get("title") or ""
+    ).strip():
+        return (
+            "改名的话跟我说新名字就行，例如：改名叫 2026个人述职报告。",
+            [],
+        )
+
     topic_hint = (title or "").strip() or quick_title_from_write_message(gate_msg)
 
     from report_writing.chat.session_documents import (
@@ -198,7 +222,7 @@ def _set_session_meta(
             need_scope_clarify = True
             scope_topic = blocked or topic_hint
     if need_scope_clarify:
-        from report_writing.chat.intent_clarify import build_document_scope_clarify
+        from report_writing.chat.clarify_flow import build_document_scope_clarify
 
         return build_document_scope_clarify(
             session,
@@ -245,14 +269,21 @@ def _set_session_meta(
                 session, title, home=home, message=raw_message or title
             )
             declared = title
-        # 改名句未带结构化 title：确定性抽出新名后直接定名，勿挂「起个名字」
+        # 改名句：无结构化 title 时不从话里剥标题；显式 title 或非改名句仍可走 explicit 提取
         if not declared:
-            extracted = explicit_doc_title_from_message(raw_message or message)
-            if extracted:
-                confirm_writing_document_name(
-                    session, extracted, home=home, message=(raw_message or message) or extracted
-                )
-                declared = extracted
+            needs_title_arg = message_requires_structured_rename_title(
+                raw_message or message
+            ) and not str(payload.get("title") or "").strip()
+            if not needs_title_arg:
+                extracted = explicit_doc_title_from_message(raw_message or message)
+                if extracted:
+                    confirm_writing_document_name(
+                        session,
+                        extracted,
+                        home=home,
+                        message=(raw_message or message) or extracted,
+                    )
+                    declared = extracted
         if not declared:
             from report_writing.chat.session_snapshot import looks_like_freeform_meta_line
 
@@ -293,7 +324,7 @@ def _set_session_meta(
                     f"先按「{subject}」来写，正式名字之后还能改。",
                     [],
                 )
-            from report_writing.chat.intent_clarify import build_document_name_clarify
+            from report_writing.chat.clarify_flow import build_document_name_clarify
 
             tip = title or str((session.freeform or {}).get("title") or "").strip()
             gate_msg = raw_message or message
@@ -341,7 +372,7 @@ def _set_session_meta(
         from report_writing.chat.session_goal import get_session_goal, session_goal_brief
 
         if not (patch.get("doc_category") or patch.get("doc_title")):
-            from report_writing.chat.intent_clarify import build_session_meta_clarify
+            from report_writing.chat.clarify_flow import build_session_meta_clarify
             from report_writing.chat.session_goal import get_session_goal
 
             goal = get_session_goal(session)
@@ -354,8 +385,12 @@ def _set_session_meta(
                 message=message,
             )
         goal = get_session_goal(session)
-        doc_title = str(goal.get("doc_title") or title or "").strip()
-        doc_cat = str(goal.get("doc_category") or category or "").strip()
+        doc_title = str(
+            goal.get("doc_title") or title or patch.get("doc_title") or ""
+        ).strip()
+        doc_cat = str(
+            goal.get("doc_category") or category or patch.get("doc_category") or ""
+        ).strip()
         from report_writing.chat.session_documents import (
             explicit_doc_title_from_message,
             title_is_write_subject_not_doc_name,
@@ -368,7 +403,7 @@ def _set_session_meta(
             and not explicit_doc_title_from_message(message)
             and title_is_write_subject_not_doc_name(message, doc_title)
         ):
-            from report_writing.chat.intent_clarify import build_document_scope_clarify
+            from report_writing.chat.clarify_flow import build_document_scope_clarify
 
             return build_document_scope_clarify(
                 session,
@@ -377,6 +412,15 @@ def _set_session_meta(
             )
         if doc_title:
             apply_focused_document_title(session, doc_title, home=home, category=doc_cat)
+            merge_session_goal(
+                session,
+                {
+                    **({"doc_category": doc_cat} if doc_cat else {}),
+                    **({"doc_title": doc_title}),
+                    "summary": f"{doc_cat}｜{doc_title}".strip("｜"),
+                },
+            )
+            sync_goal_into_freeform(session)
         # 必须叠在改名之后的 freeform 上。ff 是改名前的快照，整份写回会把
         # 登记表标题冲回旧名，文档窗下拉就一直显示改名前的名字。
         ff_now = dict(session.freeform or {})
@@ -452,7 +496,7 @@ def _set_session_meta(
             session_documents_map,
             should_mint_new_document_slot,
         )
-        from report_writing.chat.intent_clarify import build_document_name_clarify
+        from report_writing.chat.clarify_flow import build_document_name_clarify
         from report_writing.chat.session_documents import try_confirm_document_name_from_message
 
         if focus_needs_doc_name(session):
@@ -516,7 +560,7 @@ def _set_session_meta(
     brief = session_goal_brief(session)
     tip = doc_title or (brief.split("：")[-1].strip() if brief else "")
     if focus_needs_entry_path(session) and not session_blueprint_already_selected(session):
-        from report_writing.chat.intent_clarify import build_entry_path_clarify
+        from report_writing.chat.clarify_flow import build_entry_path_clarify
 
         reply2, cards2 = build_entry_path_clarify(
             session,

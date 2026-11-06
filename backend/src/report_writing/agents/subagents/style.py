@@ -13,9 +13,8 @@ from report_writing.agents.scripted import ScriptedChatModel
 from report_writing.agents.state import ChatControlState
 from report_writing.agents.subagents.runner import run_domain_subagent
 
-INSTRUCTIONS = """你是「Word 导出样式」领域子助手。只通过工具操作。
-导出前用户要配 Word 样式 → list_word_styles 或 begin_word_style_wizard。
-未配置时导出仍可用默认样式。完成后口语总结。"""
+INSTRUCTIONS = """你是「Word 导出样式」领域子助手。只通过已绑定 Tool 操作；何时调用见各 Tool description。
+导出前用户要配 Word 样式；未配置时导出仍可用默认样式。完成后口语总结。"""
 
 
 def _dump(data: dict[str, Any]) -> str:

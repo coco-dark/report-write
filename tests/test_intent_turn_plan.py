@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from report_writing.chat.intent_clarify import get_pending
+from report_writing.chat.clarify_flow import get_pending
 from report_writing.chat.intent_turn_plan import apply_turn_plan, parse_turn_plan
 from report_writing.chat.session_documents import (
     focus_has_display_title,
@@ -88,7 +88,7 @@ def test_name_and_existing_blueprint_dispatches_match(tmp_path: Path, monkeypatc
         return "找到几份可用蓝本。", [], []
 
     monkeypatch.setattr(
-        "report_writing.chat.intent_dispatch.execute_intent_plan",
+        "report_writing.chat.tool_dispatch.execute_intent_plan",
         fake_execute,
     )
     hit = apply_turn_plan(
@@ -153,7 +153,7 @@ def test_uncertain_does_not_execute_hard_tools(tmp_path: Path, monkeypatch):
         raise AssertionError("uncertain must not dispatch hard tools")
 
     monkeypatch.setattr(
-        "report_writing.chat.intent_dispatch.execute_intent_plan",
+        "report_writing.chat.tool_dispatch.execute_intent_plan",
         boom,
     )
     hit = apply_turn_plan(tmp_path, session, "那就随便写吧", invoke=invoke)
@@ -263,7 +263,7 @@ def test_mid_session_rename_and_write_executes(tmp_path: Path, monkeypatch):
         return "已改名并开始写。", [], []
 
     monkeypatch.setattr(
-        "report_writing.chat.intent_dispatch.execute_intent_plan",
+        "report_writing.chat.tool_dispatch.execute_intent_plan",
         fake_execute,
     )
     hit = apply_turn_plan(tmp_path, session, "改名叫年度总结然后开始写", invoke=invoke)
@@ -309,7 +309,7 @@ def test_mid_session_missing_chapter_asks(tmp_path: Path, monkeypatch):
         return "请选章。", [], []
 
     monkeypatch.setattr(
-        "report_writing.chat.intent_dispatch.execute_intent_plan",
+        "report_writing.chat.tool_dispatch.execute_intent_plan",
         fake_execute,
     )
     monkeypatch.setattr(

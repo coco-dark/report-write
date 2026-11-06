@@ -10,7 +10,7 @@ from pathlib import Path
 
 from report_writing.agents.supervisor import run_supervisor
 from report_writing.services.corpus import load_template, normalize_biz_type
-from report_writing.infra.llm import live_model
+from report_writing.infra.llm import or_live_model
 from report_writing.domain.models import (
     ChapterRequirement,
     ChapterState,
@@ -43,6 +43,7 @@ def analyze_template(
     biz_type: str,
     force_study: bool = False,
     on_event=None,
+    model=None,
 ) -> WritingTask:
     """兼容旧接口：先生成目录并自动确认，再学习章节。"""
     from report_writing.controller.outline_flow import confirm_outline, generate_outline, study_from_outline
@@ -55,7 +56,7 @@ def analyze_template(
             phase="study",
             template=template,
             cache=BriefCache(cache_dir),
-            model=live_model(),
+            model=or_live_model(model),
             force_study=force_study,
             on_event=on_event,
         )
@@ -79,9 +80,11 @@ def analyze_template(
         task.refresh_status()
         TaskStore(task_dir).save(task)
         return task
-    task = generate_outline(source, task_dir, biz_type, on_event=on_event)
+    task = generate_outline(source, task_dir, biz_type, on_event=on_event, model=model)
     task = confirm_outline(task_dir)
-    return study_from_outline(task_dir, cache_dir, force_study=force_study, on_event=on_event)
+    return study_from_outline(
+        task_dir, cache_dir, force_study=force_study, on_event=on_event, model=model
+    )
 
 
 def _lock_brief_to_outline(brief, tree: OutlineTree) -> None:
@@ -467,6 +470,7 @@ def _discover_descendants_with_llm(
     existing_sequences: set[str],
     *,
     parent_titles: dict[str, str] | None = None,
+    model=None,
 ) -> list:
     from report_writing.domain.outline_refine import llm_discover_descendants
 
@@ -475,6 +479,7 @@ def _discover_descendants_with_llm(
         parent_sequences,
         existing_sequences,
         parent_titles=parent_titles,
+        model=model,
     )
 
 
@@ -732,6 +737,7 @@ def auto_study_selected_chapters(
     template_path: Path | None = None,
     source_text: str = "",
     on_event=None,
+    model=None,
 ) -> WritingTask:
     """Tool 2：仅对已有章节提炼写作要点（不再发现/插入新目录）。"""
     from report_writing.controller.excerpt import _best_chapter_excerpt, _break_inline_headings, _excerpt_foreign_sequence
@@ -848,7 +854,7 @@ def auto_study_selected_chapters(
             # 大纲未标仅目录：始终生成要点；启发式/模型不得把 structure_only 改回 True
             # （用户在文档副本取消「仅目录」后，分析不得再盖成目录节点）
             points, keywords, describes, raw_blocks, _reference_text, _parsed_so, project_slots = parse_points_and_keywords(
-                excerpt, title=node.title, sequence=node.sequence or ""
+                excerpt, title=node.title, sequence=node.sequence or "", model=model
             )
             from report_writing.domain.point_items_sync import merge_project_slots_into_points
 

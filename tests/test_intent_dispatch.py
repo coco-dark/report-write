@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import json
 from pathlib import Path
 
-from report_writing.chat.intent_clarify import execute_clarify_spec, try_handle_pending_message
-from report_writing.chat.intent_dispatch import execute_intent_plan
+from report_writing.chat.clarify_flow import execute_clarify_spec, try_handle_pending_message
+from report_writing.chat.tool_dispatch import execute_intent_plan
 from report_writing.chat.intent_llm import resolve_wizard_action
 from report_writing.controller import ensure_task
 from report_writing.domain.models import ChatPhase, ChatSession, OutlineNode, OutlineTree
@@ -282,7 +284,7 @@ def test_dispatch_unclear_starts_multiturn(tmp_path: Path):
     assert pending.get("source") == "control"
 
     hit = try_handle_pending_message(session, "不用蓝本自己定大纲")
-    assert isinstance(hit, dict)
+    assert isinstance(hit, Mapping)
     assert hit["slots"].get("tool") == "skip_blueprint"
     follow_reply, follow_cards, _ = execute_clarify_spec(
         tmp_path, session, hit, message="不用蓝本自己定大纲"

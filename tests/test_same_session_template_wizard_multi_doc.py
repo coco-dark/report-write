@@ -338,7 +338,7 @@ def test_begin_wizard_force_new_leaves_old_bp_focus(tmp_path: Path):
 
 def test_unnamed_new_doc_template_returns_wizard_not_doc_name(tmp_path: Path):
     """同会话已有文档后再说「用我的模版」：必须带 blueprint_wizard，不能只回定名澄清。"""
-    from report_writing.chat.intent_clarify import build_entry_path_clarify, get_pending
+    from report_writing.chat.clarify_flow import build_entry_path_clarify, get_pending
 
     home = tmp_path
     (home / "tasks").mkdir(parents=True)
@@ -359,8 +359,12 @@ def test_unnamed_new_doc_template_returns_wizard_not_doc_name(tmp_path: Path):
         invoke=lambda _s, _u: "{}",
     )
     wiz = [c for c in (cards or []) if getattr(c, "type", "") == "blueprint_wizard"]
-    assert wiz, reply
-    assert str(wiz[0].payload.get("step") or "") == "meta"
+    suggested = [
+        str(t.get("tool") or "")
+        for t in (session.freeform or {}).get("suggested_next_tools") or []
+    ]
+    assert not wiz
+    assert "begin_blueprint_wizard" in suggested, reply
     pending = get_pending(session) or {}
     assert pending.get("source") != "doc_name"
     assert focus_document_key(session) != "task:w_doc1"

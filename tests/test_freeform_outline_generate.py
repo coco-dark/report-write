@@ -44,6 +44,7 @@ def test_generate_outline_returns_editable_preview(tmp_path: Path):
         session,
         "你帮我生成目录大纲",
         invoke=invoke,
+        regenerate=True,
     )
     assert (
         "草案" in reply
@@ -196,7 +197,7 @@ def test_first_outline_reuses_named_shell_and_prunes_duplicate(tmp_path: Path):
         session,
         "帮我生成目录",
         invoke=invoke,
-        regenerate=False,
+        regenerate=True,
     )
     assert session.task_id == tid
     docs = session_documents_map(session)
@@ -292,3 +293,44 @@ def test_collect_freeform_meta_strips_multi_action_sentence(tmp_path: Path):
     constraints = str((session.freeform or {}).get("outline_constraints") or "")
     assert outline_top_chapter_count(constraints) == 3
     assert _freeform_outline_doc_title(session, None) == "lzb述职报告"
+
+
+def test_collect_outline_does_not_infer_generate_without_flag(tmp_path: Path):
+    session = ChatSession(
+        id="s_no_infer",
+        phase=ChatPhase.FREEFORM_OUTLINE.value,
+        freeform={
+            "meta_confirmed": True,
+            "category": "工作说明",
+            "title": "某某项目工作说明",
+        },
+    )
+
+    def invoke(_s: str, _u: str) -> str:
+        return json.dumps({"intent": "generate_outline", "confidence": 0.95}, ensure_ascii=False)
+
+    reply, cards = _collect_freeform_outline(
+        tmp_path,
+        session,
+        "帮我生成目录大纲",
+        invoke=invoke,
+    )
+    assert not any(c.type == "outline_preview" for c in cards)
+    assert session.freeform.get("outline_pending_edit") is not True
+    assert "目录" in (reply or "") or "粘贴" in (reply or "")
+
+
+def test_resolve_outline_mode_flags_fills_confirm_and_generate():
+    from report_writing.chat.freeform_intent import resolve_outline_mode_flags
+
+    session = ChatSession(
+        id="s_flags",
+        phase=ChatPhase.FREEFORM_OUTLINE.value,
+        freeform={"outline_pending_edit": True, "outline_text": "1 总则\n2 正文"},
+    )
+    assert resolve_outline_mode_flags("帮我生成目录", invoke=None) == (False, True)
+    assert resolve_outline_mode_flags("确认大纲", invoke=None) == (True, False)
+    assert resolve_outline_mode_flags("继续", session=session, invoke=None) == (True, False)
+    assert resolve_outline_mode_flags(
+        "帮我生成目录", confirm=True, regenerate=True, invoke=None
+    ) == (True, False)

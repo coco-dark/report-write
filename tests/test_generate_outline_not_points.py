@@ -6,7 +6,12 @@ import json
 from pathlib import Path
 
 from report_writing.chat.actions import _collect_freeform_points
-from report_writing.chat.freeform_intent import lexical_freeform_intent, wants_generate_outline, wants_generate_points
+from report_writing.chat.freeform_intent import (
+    lexical_freeform_intent,
+    utterance_mentions_generate_outline,
+    wants_generate_outline,
+    wants_generate_points,
+)
 from report_writing.domain.models import ChatPhase, ChatSession
 
 
@@ -15,6 +20,8 @@ def test_lexical_generate_outline_beats_points():
     assert lexical_freeform_intent("帮我生成目录大纲") == "generate_outline"
     assert wants_generate_outline("生成目录", invoke=None) is True
     assert wants_generate_points("生成目录", invoke=None) is False
+    assert utterance_mentions_generate_outline("帮我生成目录") is True
+    assert utterance_mentions_generate_outline("帮我写一份安全报告") is False
 
 
 def test_generate_points_without_outline_drafts_outline(tmp_path: Path):
@@ -50,3 +57,19 @@ def test_generate_points_without_outline_drafts_outline(tmp_path: Path):
         or "草案" in reply
         or any(getattr(c, "type", "") == "outline_preview" for c in cards)
     )
+
+
+def test_collect_points_without_task_does_not_skip_blueprint(tmp_path: Path):
+    session = ChatSession(
+        id="s-pts-notask",
+        phase=ChatPhase.FREEFORM_POINTS.value,
+        task_id="",
+        freeform={"meta_confirmed": True, "title": "述职"},
+    )
+    reply, cards = _collect_freeform_points(
+        tmp_path, session, "先随便写点", invoke=None
+    )
+    assert "任务大纲不存在" not in reply
+    assert "还没有目录" in reply or "大纲" in reply
+    assert not cards
+    assert not (session.freeform or {}).get("skip_blueprint")

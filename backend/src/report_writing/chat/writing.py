@@ -21,6 +21,8 @@ from report_writing.controller import (
 )
 from report_writing.domain.models import (
     ChapterStatus,
+    ChatActionPayload,
+    ChatPayload,
     ChatCard,
     ChatMessage,
     ChatPhase,
@@ -90,7 +92,7 @@ def maybe_offer_writing_pace_clarify(
     task_id_hint: str = "",
 ) -> tuple[str, list[ChatCard]] | None:
     """多章且本轮未选定节奏时返回澄清卡片。"""
-    from report_writing.chat.intent_clarify import build_writing_pace_clarify
+    from report_writing.chat.clarify_flow import build_writing_pace_clarify
 
     keys = [str(k).strip() for k in (chapter_keys or []) if str(k).strip()]
     if len(keys) < 2:
@@ -144,6 +146,7 @@ def _run_writing_keys(
     keys: list[str],
     *,
     emit: EmitFn | None = None,
+    model=None,
 ) -> tuple[WritingTask, list[dict]]:
     from report_writing.chat.cards import _chapter_progress_row, _progress_and_confirm_cards
     from report_writing.chat.helpers import WRITING_PACE_STEP, _STEP_LABEL, _emit, _emit_process
@@ -238,6 +241,7 @@ def _run_writing_keys(
                 chapter_keys=[key],
                 robot_id=session.robot_id or "",
                 on_event=on_event,
+                model=model,
             )
             # 兜底：写完仍停在待确认/待人工时，有正文则直接落库为已确认
             try:
@@ -384,6 +388,7 @@ def _maybe_continue_step_writing(
     *,
     emit: EmitFn | None = None,
     prefix: str = "",
+    model=None,
 ) -> tuple[str, list[ChatCard], list[dict]]:
     """逐步模式下，确认当前章后自动写下一章。"""
     from report_writing.chat.cards import _progress_and_confirm_cards
@@ -410,7 +415,9 @@ def _maybe_continue_step_writing(
 
     session.phase = ChatPhase.WRITING.value
     _emit_process(emit, f"你已确认上一章，开始写下一章「{_chapter_write_label(task, pending[0])}」…")
-    writing, events = _run_writing_keys(home, session, task, pending[:1], emit=emit)
+    writing, events = _run_writing_keys(
+        home, session, task, pending[:1], emit=emit, model=model
+    )
     reply, cards, events = _finish_writing_round(home, session, writing, events, pace=WRITING_PACE_STEP)
     if prefix:
         reply = f"{prefix}{reply}"
@@ -456,7 +463,10 @@ def _writing_chapter_keys(task: WritingTask) -> list[str]:
     return [k for k in base if k in scope_set]
 
 
-def _apply_chapter_config(task: WritingTask, chapter_key: str, payload: dict) -> None:
+def _apply_chapter_config(task: WritingTask, chapter_key: str, payload: ChatPayload, *, model=None) -> None:
+    from report_writing.domain.models import ChatActionPayload
+
+    payload = ChatActionPayload.parse(payload)
     from report_writing.chat.helpers import _split_lines
     if task.outline is None:
         raise ValueError("任务没有大纲，无法配置章节")
@@ -532,6 +542,8 @@ def _apply_chapter_config(task: WritingTask, chapter_key: str, payload: dict) ->
 
     after_points = list(getattr(node, "points", None) or [])
     points_changed = before_points != after_points
+    keep_describes = payload.get("describes") if "describes" in payload else None
+    keep_aux = payload.get("aux_prompt") if "aux_prompt" in payload else None
     if (
         points_changed
         and not bool(getattr(node, "structure_only", False))
@@ -546,7 +558,13 @@ def _apply_chapter_config(task: WritingTask, chapter_key: str, payload: dict) ->
         from report_writing.domain.chapter_meta_from_points import apply_meta_from_points_to_node
 
         category = str(getattr(task, "category", "") or "报告").strip() or "报告"
-        apply_meta_from_points_to_node(node, category=category, parent_title=parent_title)
+        apply_meta_from_points_to_node(
+            node, category=category, parent_title=parent_title, model=model
+        )
+        if keep_describes is not None:
+            node.describes = str(keep_describes or "").strip()
+        if keep_aux is not None:
+            node.aux_prompt = str(keep_aux or "").strip()
 
     for ch in task.chapters or []:
         if ch.key == chapter_key:
@@ -589,8 +607,11 @@ def _apply_chapter_config(task: WritingTask, chapter_key: str, payload: dict) ->
     sync_structure_only_chapter_status(task)
 
 
-def _apply_add_chapter_element(task: WritingTask, chapter_key: str, payload: dict):
+def _apply_add_chapter_element(task: WritingTask, chapter_key: str, payload: ChatPayload):
     """为本章新增要素节点并建立关联（不落库，由调用方 save）。"""
+    from report_writing.domain.models import ChatActionPayload
+
+    payload = ChatActionPayload.parse(payload)
     from report_writing.domain.elements import new_element_id, save_elements, sync_brief_from_outline
     from report_writing.domain.models import ElementNode
 
@@ -703,9 +724,12 @@ def _link_new_element_to_chapter_points(
     task: WritingTask,
     node: Any,
     element: Any,
-    payload: dict,
+    payload: ChatPayload,
 ) -> None:
     """新增要素后：写入章 element_ids 并回写 point_items 行关联。"""
+    from report_writing.domain.models import ChatActionPayload
+
+    payload = ChatActionPayload.parse(payload)
     from report_writing.domain.point_items_sync import (
         human_label,
         is_element_id_token,

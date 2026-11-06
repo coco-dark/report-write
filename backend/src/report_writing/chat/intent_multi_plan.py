@@ -1,6 +1,6 @@
-"""会话全程意图编排：JSON slots/tools/missing → 确定执行 / 缺项引导 / 不确定追问。
+"""遗留 JSON 计划编排。口语主路径不调用。
 
-开场与写作中途同一入口（改名并开写、新建资料包再继续写、选章确认等）。
+`try_run_oral_multi_intent` 仅单测使用；产品对话走 `create_agent`。
 """
 
 from __future__ import annotations
@@ -197,7 +197,7 @@ def _upgrade_ask_entry_to_concrete_path(
     ):
         return steps
     try:
-        from report_writing.chat.intent_clarify import _clear_entry_tool_from_message
+        from report_writing.chat.clarify_flow import _clear_entry_tool_from_message
 
         tool = _clear_entry_tool_from_message(message, session=session, invoke=invoke)
     except Exception:
@@ -234,7 +234,7 @@ def _hang_low_confidence_clarify(
     steps: list[dict[str, Any]],
     confidence: float,
 ) -> tuple[str, list[Any], list[dict[str, Any]]]:
-    from report_writing.chat.intent_clarify import begin_clarify
+    from report_writing.chat.clarify_flow import begin_clarify
 
     chain = _tool_chain_label(steps)
     question = f"我理解你想依次做：{chain}。是这样吗？"
@@ -273,10 +273,14 @@ def try_run_oral_multi_intent(
     emit: EmitFn | None = None,
     min_tools: int = 1,
 ) -> tuple[str, list[Any], list[dict[str, Any]]] | None:
-    """会话全程意图入口：JSON slots/tools/missing → 执行或引导。
+    """遗留 JSON 计划入口。`run_chat_control` 不再调用。
 
-    高置信（含单 Tool）执行；缺槽挂卡；不确定多轮确认；否则 None 交 ReAct。
+    高置信执行；缺槽挂卡；不确定多轮确认；否则 None。
     """
+    from report_writing.infra.config_settings import intent_plan_enabled
+
+    if not intent_plan_enabled():
+        return None
     del min_tools
     from report_writing.chat.intent_turn_plan import apply_turn_plan
 

@@ -2,6 +2,7 @@
 
 `apply_writing_control_classification` / `classify_writing_message` 供 Tool 与单测复用；
 勿再以认领路由挂回 `run_chat_control`。
+绑定 `expected_tool` 时若分类结果是另一个 Tool，只返回 `suggested_next_tool` 事件，不执行。
 """
 
 from __future__ import annotations
@@ -9,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
-from report_writing.domain.models import ChatSession
+from report_writing.domain.models import ChatActionPayload, ChatPayload, ChatSession
 
 def _browse_element_items(
     home: Path, session: ChatSession
@@ -247,32 +248,37 @@ def _resolve_associate_chapter_key(
     home: Path,
     session: ChatSession,
     message: str,
-    payload: dict[str, Any],
+    payload: ChatPayload,
     task: Any,
 ) -> str:
     from report_writing.chat.intent_chapter import _chapter_key_on_task
 
+    payload = ChatActionPayload.parse(payload)
     raw = str(payload.get("chapter_key") or "").strip()
     if task is not None and raw and _chapter_key_on_task(task, raw):
         return raw
-    return _resolve_chapter_key(home, session, message, payload)
+    # 未点名章节时不要落到大纲第一章，缺槽挂 intent_clarify（与加要素一致）
+    return _resolve_chapter_key(
+        home, session, message, payload, allow_outline_default=False
+    )
 
 def _action_associate_elements(
     home: Path,
     session: ChatSession,
     message: str,
-    payload: dict[str, Any],
+    payload: ChatPayload,
 ) -> tuple[str, list[Any]]:
     from report_writing.chat.action_slots import build_action_slot_clarify, missing_action_slots
     from report_writing.chat.cards import _associate_elements_card
     from report_writing.chat.helpers import _load_task
 
+    payload = ChatActionPayload.parse(payload)
     task_id = _session_writing_task_id(session, payload)
     task = _load_task(home, task_id) if task_id else None
     chapter_key = _resolve_associate_chapter_key(home, session, message, payload, task)
     if not task_id:
         return "还没有写作任务，先选定蓝本或确认大纲后再关联要素。", []
-    body = {**dict(payload or {}), "task_id": task_id}
+    body = payload.with_updates(task_id=task_id).as_dict()
     if chapter_key:
         body["chapter_key"] = chapter_key
     if not chapter_key:
@@ -308,7 +314,7 @@ def _structural_chapter_hint(message: str) -> dict[str, Any]:
 
 def _session_writing_task_id(
     session: ChatSession,
-    payload: dict[str, Any] | None = None,
+    payload: ChatPayload = None,
 ) -> str:
     """优先 payload 绑定的任务；无 payload 时才用会话焦点。"""
     from report_writing.chat.session_documents import resolve_task_id
@@ -373,11 +379,12 @@ def _resolve_chapter_key(
     home: Path,
     session: ChatSession,
     message: str,
-    payload: dict[str, Any],
+    payload: ChatPayload,
     *,
     allow_outline_default: bool = True,
 ) -> str:
     """原话序号优先于模型 hint / 上一焦点，避免「2.2」被错绑到「1.5.6」。"""
+    payload = ChatActionPayload.parse(payload)
     from report_writing.chat.helpers import _load_task
     from report_writing.chat.intent_chapter import (
         _chapter_key_on_task,
@@ -438,8 +445,29 @@ def apply_writing_control_classification(
     data: dict[str, Any],
     *,
     emit: EmitFn | None = None,
+    expected_tool: str | None = None,
 ) -> tuple[str, list[Any], list[dict[str, Any]]] | None:
-    tool = str(data.get("tool") or "").strip()
+    requested = str(data.get("tool") or "").strip()
+    bound = (expected_tool or requested).strip()
+    if expected_tool:
+        expected = expected_tool.strip()
+        if requested and requested != expected:
+            payload = dict(data.get("payload") or {})
+            return (
+                f"本轮绑定的是 {expected}，分类结果是 {requested}。"
+                f"请改调 {requested}；本函数不执行其它总控 Tool。",
+                [],
+                [
+                    {
+                        "type": "suggested_next_tool",
+                        "tool": requested,
+                        "args": payload,
+                    }
+                ],
+            )
+        tool = bound
+    else:
+        tool = requested
     payload = dict(data.get("payload") or {})
     from report_writing.chat.session_documents import enrich_payload_with_message_document
 
@@ -532,7 +560,7 @@ def apply_writing_control_classification(
         from report_writing.chat.actions import _action_add_chapter_element
         from report_writing.chat.helpers import _emit_process
 
-        # 收录 vs 加要素：由分类器选 collect_to_element_library，不再用口语正则改道
+        # 收录 vs 加要素：分类器另选 collect 时由调用方 hop，本分支只执行加要素
         merged = dict(_structural_chapter_hint(message))
         for key, value in payload.items():
             if value not in (None, "", [], {}):
@@ -610,6 +638,57 @@ def apply_writing_control_classification(
 
     return None
 
+def suggest_other_writing_control_tool(
+    home: Path,
+    session: ChatSession,
+    message: str,
+    *,
+    expected_tool: str,
+    invoke: Callable[[str, str], str] | None = None,
+    intent_invoke: Callable[[str, str], str] | None = None,
+) -> dict[str, Any] | None:
+    """分类器点名其它写作控制 Tool 时只建议改调，不执行。"""
+    expected = (expected_tool or "").strip()
+    data = classify_writing_message(
+        home, session, message, invoke=invoke, intent_invoke=intent_invoke
+    )
+    if not data:
+        return None
+    tool = str(data.get("tool") or "").strip()
+    payload = data.get("payload")
+    if not isinstance(payload, dict):
+        payload = {}
+    if not tool:
+        steps = data.get("tools")
+        if isinstance(steps, list) and steps and isinstance(steps[0], dict):
+            tool = str(steps[0].get("tool") or "").strip()
+            pl = steps[0].get("payload")
+            if isinstance(pl, dict):
+                payload = pl
+    if not tool or tool in {expected, "none"}:
+        return None
+    return {"tool": tool, "payload": payload}
+
+
+def suggest_tool_instead_of_submit_points(
+    home: Path,
+    session: ChatSession,
+    message: str,
+    *,
+    invoke: Callable[[str, str], str] | None = None,
+    intent_invoke: Callable[[str, str], str] | None = None,
+) -> dict[str, Any] | None:
+    """submit_points 被误调时：只建议改调哪一个 Tool，不在本函数里执行。"""
+    return suggest_other_writing_control_tool(
+        home,
+        session,
+        message,
+        expected_tool="submit_points",
+        invoke=invoke,
+        intent_invoke=intent_invoke,
+    )
+
+
 def reroute_submit_points_if_needed(
     home: Path,
     session: ChatSession,
@@ -618,13 +697,6 @@ def reroute_submit_points_if_needed(
     invoke: Callable[[str, str], str] | None = None,
     intent_invoke: Callable[[str, str], str] | None = None,
 ) -> tuple[str, list[Any]] | None:
-    """submit_points 被误调时，用同一套模型分类改道。"""
-    data = classify_writing_message(
-        home, session, message, invoke=invoke, intent_invoke=intent_invoke
-    )
-    if not data or data.get("tool") == "submit_points":
-        return None
-    hit = apply_writing_control_classification(home, session, message, data)
-    if hit is None:
-        return None
-    return hit[0], hit[1]
+    """已废弃静默改道。请读 submit_points 的 suggested_next_tool。"""
+    del home, session, message, invoke, intent_invoke
+    return None

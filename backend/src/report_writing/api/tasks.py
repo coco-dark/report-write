@@ -26,6 +26,7 @@ from report_writing.api.deps import (
     sse_response,
     task_dir,
     task_root,
+    writing_model,
 )
 from report_writing.controller import (
     _best_chapter_excerpt,
@@ -109,6 +110,7 @@ def create_task(body: CreateTaskRequest) -> WritingTask:
         task_root() / "cache",
         material_type,
         body.force_study,
+        model=writing_model(),
     )
 
 
@@ -197,6 +199,7 @@ def stream_task(body: CreateTaskRequest) -> StreamingResponse:
             material_type,
             body.force_study,
             emit,
+            model=writing_model(),
         )
         emit({"type": "task", "task": task.to_dict()})
 
@@ -231,6 +234,7 @@ async def analyze_stream(
             material_type,
             learn_again,
             emit,
+            model=writing_model(),
         )
         emit({"type": "task", "task": task.to_dict()})
 
@@ -272,6 +276,7 @@ async def outline_generate_stream(
                     task_dir(task_id),
                     use_llm=bool(use_llm),
                     on_event=emit,
+                    model=writing_model(),
                 )
             else:
                 task = generate_outline(
@@ -281,6 +286,7 @@ async def outline_generate_stream(
                     version=version,
                     use_llm=bool(use_llm),
                     on_event=emit,
+                    model=writing_model(),
                 )
             emit({"type": "task", "task": task.to_dict()})
         except Exception as error:
@@ -412,7 +418,7 @@ def post_parse_points(task_id: str, body: ParsePointsRequest) -> dict:
             if matched and excerpt.strip():
                 source = excerpt
         points, keywords, describes, content_blocks, reference_text, structure_only, _slots = parse_points_and_keywords(
-            source, title=body.title, sequence=body.sequence
+            source, title=body.title, sequence=body.sequence, model=writing_model()
         )
         # 参考正文固定为切章结果（或原文），防止模型串到同名其它章
         if (body.sequence or "").strip():
@@ -465,6 +471,7 @@ def post_meta_from_points(task_id: str, body: MetaFromPointsRequest) -> dict:
         category=category,
         parent_title=parent_title,
         point_items=items,
+        model=writing_model(),
     )
     return {"describes": describes, "aux_prompt": aux_prompt}
 
@@ -497,6 +504,7 @@ def post_element_draft_from_point(task_id: str, body: ElementDraftFromPointReque
         point_text=str(body.point_text or "").strip(),
         slot=str(body.slot or "").strip(),
         task_elements=list(task.element_nodes or []),
+        model=writing_model(),
     )
     return {"draft": draft, "from_llm": from_llm}
 
@@ -533,6 +541,7 @@ def study_from_outline_stream(task_id: str, force_study: bool = False) -> Stream
                 task_root() / "cache",
                 force_study=force_study,
                 on_event=emit,
+                model=writing_model(),
             )
         except RuntimeError as error:
             emit({"type": "error", "detail": str(error)})
@@ -570,7 +579,9 @@ def stream_write(task_id: str) -> StreamingResponse:
 
     def worker(emit) -> None:
         try:
-            updated = write_from_study(task_dir(task_id), dataset, emit)
+            updated = write_from_study(
+                task_dir(task_id), dataset, emit, model=writing_model()
+            )
         except RuntimeError as error:
             emit({"type": "error", "detail": str(error)})
             return
@@ -946,6 +957,7 @@ async def stream_extract_outline(
                     task_dir(task_id),
                     use_llm=True,
                     on_event=emit,
+                    model=writing_model(),
                 )
             elif use_sample_flag:
                 updated = extract_outline_from_document(
@@ -1023,6 +1035,7 @@ def stream_extract_outline_text(task_id: str, body: AutoStudyTextRequest) -> Str
                     task_dir(task_id),
                     use_llm=bool(body.use_llm),
                     on_event=emit,
+                    model=writing_model(),
                 )
                 emit({"type": "task", "task": updated.to_dict()})
                 return
@@ -1107,6 +1120,7 @@ async def stream_study_points(
                 selected,
                 template_path=stored,
                 on_event=emit,
+                model=writing_model(),
             )
         except RuntimeError as error:
             emit({"type": "error", "detail": str(error)})
@@ -1135,6 +1149,7 @@ def stream_study_points_text(task_id: str, body: AutoStudyTextRequest) -> Stream
                 selected,
                 source_text=source,
                 on_event=emit,
+                model=writing_model(),
             )
         except RuntimeError as error:
             emit({"type": "error", "detail": str(error)})
@@ -1162,6 +1177,7 @@ async def post_auto_study(
             task_dir(task_id),
             selected,
             template_path=stored,
+            model=writing_model(),
         )
     except RuntimeError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -1204,6 +1220,7 @@ def post_run_chapters(task_id: str, body: RunChaptersRequest) -> WritingTask:
             include_children=body.include_children,
             chapter_keys=body.chapter_keys or None,
             robot_id=body.robot_id or "",
+            model=writing_model(),
         )
     except RuntimeError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -1223,6 +1240,7 @@ def stream_run_chapters(task_id: str, body: RunChaptersRequest) -> StreamingResp
                 chapter_keys=body.chapter_keys or None,
                 robot_id=body.robot_id or "",
                 on_event=emit,
+                model=writing_model(),
             )
         except RuntimeError as error:
             emit({"type": "error", "detail": str(error)})
@@ -1237,7 +1255,9 @@ def stream_run_chapters(task_id: str, body: RunChaptersRequest) -> StreamingResp
 def post_rerun(task_id: str) -> WritingTask:
     task = load_task(task_id)
     dataset = Path(task.dataset_dir) if task.dataset_dir else None
-    return rerun_chapter(task_dir(task_id), Path(task.template_path), dataset)
+    return rerun_chapter(
+        task_dir(task_id), Path(task.template_path), dataset, model=writing_model()
+    )
 
 
 
@@ -1247,7 +1267,9 @@ def stream_rerun(task_id: str) -> StreamingResponse:
     dataset = Path(task.dataset_dir) if task.dataset_dir else None
 
     def worker(emit) -> None:
-        updated = rerun_chapter(task_dir(task_id), Path(task.template_path), dataset, emit)
+        updated = rerun_chapter(
+            task_dir(task_id), Path(task.template_path), dataset, emit, model=writing_model()
+        )
         emit({"type": "task", "task": updated.to_dict()})
 
     return sse_response(worker)

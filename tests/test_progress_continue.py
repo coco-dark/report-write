@@ -11,7 +11,7 @@ from report_writing.chat.action_slots import (
     try_resolve_action_slot_message,
 )
 from report_writing.chat.blueprint_actions import finish_blueprint_match
-from report_writing.chat.intent_clarify import build_freeform_next_clarify, get_pending
+from report_writing.chat.clarify_flow import build_freeform_next_clarify, get_pending
 from report_writing.chat.progress_continue import is_progress_continue_message
 from report_writing.controller import ensure_task, save_outline, save_spec_meta
 from report_writing.domain.models import ChatPhase, ChatSession, OutlineNode

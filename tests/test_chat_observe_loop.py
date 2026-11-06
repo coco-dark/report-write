@@ -119,33 +119,25 @@ def test_react_rename_retries_after_missing_title_observation(tmp_path: Path):
 
 
 class _MultiHopWriteModel(ScriptedChatModel):
-    """开写多跳：定名 → skip_blueprint，每跳读 observation。"""
+    """开写多跳：先 skip_blueprint（用户说不用蓝本），再读 observation。"""
 
     role: str = "multi_hop_write"
 
     def decide(self, messages: list[BaseMessage]) -> AIMessage:
         tool_msgs = [m for m in messages if isinstance(m, ToolMessage)]
-        if len(tool_msgs) >= 2:
+        if tool_msgs:
             try:
                 data = json.loads(tool_msgs[-1].content or "{}")
             except json.JSONDecodeError:
                 data = {}
-            return self.finish(str(data.get("reply_hint") or "可以开始搭目录了。"))
-        if len(tool_msgs) == 1:
-            try:
-                data = json.loads(tool_msgs[0].content or "{}")
-            except json.JSONDecodeError:
-                data = {}
-            assert data.get("ok") is True
-            assert (data.get("observation") or "").strip()
-            return self.call("skip_blueprint", {})
-        return self.call(
-            "set_session_meta",
-            {"title": "调研报告", "category": "研究报告", "message": "写一份调研报告"},
-        )
+            assert (data.get("observation") or data.get("reply_hint") or "").strip()
+            return self.finish(str(data.get("reply_hint") or "好，按无蓝本继续。"))
+        return self.call("skip_blueprint", {"message": "不用蓝本"})
 
 
 def test_react_open_write_multi_hop_reads_observation(tmp_path: Path):
+    from report_writing.chat.intent_router import user_chose_skip_blueprint
+
     session = ChatSession(id="s-hop", phase=ChatPhase.INTENT.value)
     state = ChatControlState(home=tmp_path, session=session)
     user_text = json.dumps(
@@ -159,7 +151,7 @@ def test_react_open_write_multi_hop_reads_observation(tmp_path: Path):
         system_prompt="",
     )
     assert (reply or "").strip()
-    assert get_session_goal(session).get("doc_title") == "调研报告"
+    assert user_chose_skip_blueprint(session)
 
 
 class _FailThenClarifyModel(ScriptedChatModel):
@@ -210,6 +202,55 @@ def test_start_writing_requires_doc_name_observation(tmp_path: Path):
     miss = data.get("missing_slots") or []
     assert "outline" in miss or "doc_name" in miss
     assert str(data.get("observation") or "")
+
+
+def test_add_chapter_element_hops_when_classifier_picks_collect(tmp_path: Path):
+    session = _session_named(tmp_path)
+    session.phase = ChatPhase.WRITING.value
+
+    def invoke(_system: str, _user: str) -> str:
+        return json.dumps(
+            {
+                "tool": "collect_to_element_library",
+                "confidence": 0.95,
+                "payload": {"element_name": "知识库要素"},
+            }
+        )
+
+    state = ChatControlState(
+        home=tmp_path,
+        session=session,
+        intent_invoke=invoke,
+        last_user_message="将知识库要素添加到要素库",
+    )
+    tools = {t.name: t for t in build_chat_tools(state)}
+    raw = tools["add_chapter_element"].invoke(
+        {"payload_json": json.dumps({"name": "知识库要素", "chapter_key": "c1"})}
+    )
+    data = json.loads(raw)
+    assert data.get("ok") is False
+    assert data.get("suggested_next_tool") == "collect_to_element_library"
+    assert not state.cards
+
+
+def test_retry_chapter_missing_entry_suggests_ask_entry_path(tmp_path: Path):
+    session = ChatSession(
+        id="s-retry-path",
+        phase=ChatPhase.WRITING.value,
+        task_id="w20260101140000rty",
+    )
+    state = ChatControlState(
+        home=tmp_path,
+        session=session,
+        last_user_message="重写这一章",
+    )
+    tools = {t.name: t for t in build_chat_tools(state)}
+    raw = tools["retry_chapter"].invoke({"payload_json": json.dumps({"chapter_key": "c1"})})
+    data = json.loads(raw)
+    assert data.get("ok") is False
+    assert "writing_path" in (data.get("missing_slots") or [])
+    assert data.get("suggested_next_tool") == "ask_entry_path"
+    assert not any(getattr(c, "type", None) == "intent_clarify" for c in (state.cards or []))
 
 
 def test_add_chapter_element_missing_slots(tmp_path: Path):
@@ -274,7 +315,7 @@ def test_configure_chapter_missing_key(tmp_path: Path):
 
 def test_oral_entry_skips_domain_claim_modules():
     """口语主路径模块不得再导出 try_* 认领入口。"""
-    import report_writing.chat.intent_dispatch as intent_dispatch
+    import report_writing.chat.tool_dispatch as intent_dispatch
     import report_writing.chat.progress_continue as progress_continue
     import report_writing.chat.writing_control_route as writing_control_route
 
@@ -283,3 +324,274 @@ def test_oral_entry_skips_domain_claim_modules():
     assert not hasattr(writing_control_route, "try_writing_control_route")
     assert hasattr(intent_dispatch, "execute_intent_plan")
     assert hasattr(writing_control_route, "apply_writing_control_classification")
+
+
+class _FinishOnlyModel(ScriptedChatModel):
+    role: str = "finish_only"
+
+    def decide(self, messages: list[BaseMessage]) -> AIMessage:
+        del messages
+        return self.finish("好的，我继续。")
+
+
+def test_run_chat_control_ignores_intent_plan_flag(tmp_path: Path, monkeypatch):
+    """即使打开遗留开关，口语也不走 JSON 计划。"""
+    monkeypatch.setenv("REPORT_WRITING_INTENT_PLAN", "1")
+    from report_writing.infra import config_settings
+
+    config_settings._application.cache_clear()
+    assert config_settings.intent_plan_enabled() is True
+
+    def _boom(*_a, **_k):
+        raise AssertionError("run_chat_control must not call try_run_oral_multi_intent")
+
+    monkeypatch.setattr(
+        "report_writing.chat.intent_multi_plan.try_run_oral_multi_intent",
+        _boom,
+    )
+
+    session = _session_named(tmp_path)
+    state = ChatControlState(home=tmp_path, session=session)
+    user_text = json.dumps(
+        {
+            "action": "",
+            "message": "把第二章写一下",
+            "session": {"phase": session.phase, "task_id": session.task_id},
+        },
+        ensure_ascii=False,
+    )
+    reply = run_chat_control(
+        model=_FinishOnlyModel(),
+        state=state,
+        user_text=user_text,
+        system_prompt="",
+    )
+    assert "好的" in (reply or "")
+    config_settings._application.cache_clear()
+
+
+def test_click_action_is_in_agent_user_text(tmp_path: Path):
+    from report_writing.agents.chat_control import build_agent_user_text
+
+    session = ChatSession(id="s-click", phase=ChatPhase.INTENT.value)
+    body = json.loads(
+        build_agent_user_text(
+            action="skip_blueprint",
+            payload={},
+            message="",
+            session=session,
+            home=tmp_path,
+        )
+    )
+    assert body.get("action") == "skip_blueprint"
+    assert "同名" in str(body.get("hint") or "")
+
+
+def test_handle_chat_click_selects_blueprint_via_agent(tmp_path: Path):
+    from report_writing.chat_orchestrator import handle_chat
+    from report_writing.controller import ensure_task
+    from report_writing.domain.models import ChatRequest, OutlineNode, OutlineTree, WritingTask
+    from report_writing.services.robots import create_robot
+    from report_writing.services.store import TaskStore
+
+    create_robot(tmp_path, {"id": "r-click", "name": "bot"})
+    path = tmp_path / "tasks" / "bp_click"
+    ensure_task(path)
+    task = TaskStore(path).load()
+    task.title = "点击蓝本"
+    task.outline = OutlineTree(
+        chapters=[OutlineNode(key="c1", title="概况", points=["p"], sequence="1")]
+    )
+    task.outline_confirmed = True
+    TaskStore(path).save(task)
+    resp = handle_chat(
+        tmp_path,
+        ChatRequest(
+            message="",
+            action="select_blueprint",
+            action_payload={"blueprint_id": "bp_click"},
+            robot_id="r-click",
+        ),
+        invoke=lambda _s, _u: "{}",
+    )
+    from report_writing.services.chat_session import load_or_create
+
+    session = load_or_create(tmp_path, resp.session_id, robot_id="r-click")
+    assert session.blueprint_id == "bp_click" or "蓝本" in (resp.reply or "")
+
+
+def test_clarify_llm_reexports_narrow_classifiers():
+    from report_writing.chat import clarify_llm, intent_llm
+
+    assert clarify_llm.classify_clarify_reply_llm is intent_llm.classify_clarify_reply_llm
+    assert not hasattr(clarify_llm, "classify_turn_plan_llm")
+
+
+def test_clarify_flow_does_not_import_apply_turn_plan():
+    import inspect
+
+    from report_writing.chat import clarify_flow
+
+    source = inspect.getsource(clarify_flow)
+    assert "intent_turn_plan import apply_turn_plan" not in source
+
+
+def test_clarify_flow_and_tool_dispatch_have_no_legacy_shims():
+    import importlib.util
+
+    from report_writing.chat import clarify_flow, tool_dispatch
+
+    assert callable(clarify_flow.get_pending)
+    assert callable(tool_dispatch.execute_dispatch_tool)
+    assert importlib.util.find_spec("report_writing.chat.intent_clarify") is None
+    assert importlib.util.find_spec("report_writing.chat.intent_dispatch") is None
+
+
+def test_run_chat_control_does_not_auto_dispatch_onboarding(tmp_path: Path, monkeypatch):
+    def _boom(*_a, **_k):
+        raise AssertionError("oral path must not auto-dispatch suggested_next_tools")
+
+    monkeypatch.setattr(
+        "report_writing.chat.clarify_flow.dispatch_suggested_onboarding_tools",
+        _boom,
+    )
+    session = _session_named(tmp_path)
+    session.freeform = {
+        **dict(session.freeform or {}),
+        "suggested_next_tools": [{"tool": "match_blueprints", "args": {}}],
+    }
+    state = ChatControlState(home=tmp_path, session=session)
+    user_text = json.dumps(
+        {
+            "action": "",
+            "message": "继续准备",
+            "session": {"phase": session.phase, "task_id": session.task_id},
+        },
+        ensure_ascii=False,
+    )
+    reply = run_chat_control(
+        model=_FinishOnlyModel(),
+        state=state,
+        user_text=user_text,
+        system_prompt="",
+    )
+    assert "好的" in (reply or "")
+    assert (session.freeform or {}).get("suggested_next_tools")
+
+
+def test_agent_user_text_exposes_suggested_next_tools(tmp_path: Path):
+    from report_writing.agents.chat_control import build_agent_user_text
+
+    session = _session_named(tmp_path)
+    session.freeform = {
+        **dict(session.freeform or {}),
+        "suggested_next_tools": [{"tool": "match_blueprints", "args": {}}],
+    }
+    body = json.loads(
+        build_agent_user_text(
+            action="",
+            payload={},
+            message="帮我写一份安全报告",
+            session=session,
+            home=tmp_path,
+        )
+    )
+    assert body.get("suggested_next_tools")
+    assert "suggested_next_tools" in str(body.get("routing_hint") or "")
+
+
+def test_materials_pack_and_supplement_tools_are_bound(tmp_path: Path):
+    session = ChatSession(id="s-mp-bound")
+    state = ChatControlState(home=tmp_path, session=session)
+    names = {t.name for t in build_chat_tools(state)}
+    assert "materials_pack_skip" in names
+    assert "materials_pack_use" in names
+    assert "check_writing_supplements" in names
+    assert "skip_writing_supplement_check" in names
+
+
+def test_handle_chat_materials_pack_skip_via_agent(tmp_path: Path):
+    from report_writing.chat_orchestrator import handle_chat
+    from report_writing.domain.models import ChatRequest, WritingTask
+    from report_writing.services.chat_session import load_or_create
+    from report_writing.services.store import TaskStore
+
+    TaskStore(tmp_path / "tasks" / "w-mp").save(WritingTask(id="w-mp", title="资料"))
+    resp = handle_chat(
+        tmp_path,
+        ChatRequest(
+            action="materials_pack_skip",
+            action_payload={"task_id": "w-mp"},
+        ),
+        invoke=lambda _s, _u: "{}",
+    )
+    session = load_or_create(tmp_path, resp.session_id)
+    skipped = (session.freeform or {}).get("materials_pack_skipped_tasks") or {}
+    assert skipped.get("w-mp") or (session.freeform or {}).get("materials_pack_skipped")
+    assert "资料包" in (resp.reply or "") or "不用" in (resp.reply or "")
+
+
+def test_submit_points_suggests_other_tool_without_silent_reroute(tmp_path: Path):
+    session = _session_named(tmp_path)
+    session.phase = ChatPhase.FREEFORM_POINTS.value
+
+    def invoke(system: str, user: str) -> str:
+        if "写作对话总控" in system or "选工具" in system:
+            return json.dumps(
+                {
+                    "tool": "add_chapter_element",
+                    "confidence": 0.92,
+                    "payload": {"name": "气候", "kind": "kv"},
+                },
+                ensure_ascii=False,
+            )
+        return "{}"
+
+    state = ChatControlState(
+        home=tmp_path,
+        session=session,
+        invoke=invoke,
+        intent_invoke=invoke,
+    )
+    tools = {t.name: t for t in build_chat_tools(state)}
+    raw = tools["submit_points"].invoke({"message": "给这章加个气候要素"})
+    data = json.loads(raw)
+    assert data.get("ok") is False
+    assert data.get("suggested_next_tool") == "add_chapter_element"
+    assert "add_chapter_element" in str(data.get("observation") or "")
+    from report_writing.chat.writing_control_route import reroute_submit_points_if_needed
+
+    assert (
+        reroute_submit_points_if_needed(tmp_path, session, "给这章加个气候要素", invoke=invoke)
+        is None
+    )
+
+
+def test_submit_points_skip_phrase_suggests_skip_tool(tmp_path: Path):
+    session = _session_named(tmp_path)
+    session.phase = ChatPhase.FREEFORM_POINTS.value
+
+    def invoke(system: str, _user: str) -> str:
+        if "无蓝本写作流程" in system or "动作分类" in system:
+            return json.dumps({"intent": "skip_points", "confidence": 0.9})
+        return json.dumps({"tool": "none", "confidence": 0.1})
+
+    state = ChatControlState(
+        home=tmp_path, session=session, invoke=invoke, intent_invoke=invoke
+    )
+    tools = {t.name: t for t in build_chat_tools(state)}
+    raw = tools["submit_points"].invoke({"message": "先跳过要点直接开写"})
+    data = json.loads(raw)
+    assert data.get("ok") is False
+    assert data.get("suggested_next_tool") == "skip_freeform_points"
+
+
+def test_submit_points_without_outline_suggests_submit_outline(tmp_path: Path):
+    session = ChatSession(id="s-pts", phase=ChatPhase.FREEFORM_POINTS.value, freeform={})
+    state = ChatControlState(home=tmp_path, session=session, invoke=lambda _s, _u: "{}")
+    tools = {t.name: t for t in build_chat_tools(state)}
+    raw = tools["submit_points"].invoke({"message": "第一章写背景"})
+    data = json.loads(raw)
+    assert data.get("ok") is False
+    assert "outline" in (data.get("missing_slots") or [])
+    assert data.get("suggested_next_tool") == "submit_outline"

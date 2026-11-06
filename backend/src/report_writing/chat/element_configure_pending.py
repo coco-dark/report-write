@@ -5,16 +5,17 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from report_writing.domain.models import ChatCard, ChatSession
+from report_writing.domain.models import ChatActionPayload, ChatCard, ChatPayload, ChatSession
 
 
 def enrich_element_draft_from_dialogue(
     draft: dict[str, Any],
-    payload: dict[str, Any],
+    payload: ChatPayload,
     *,
     chapter_title: str = "",
 ) -> dict[str, Any]:
     """助手 payload 不全时，用对话字段补全分类/标签/作用说明与键值内容。"""
+    payload = ChatActionPayload.parse(payload)
     name = str(draft.get("name") or "").strip()
     kind = str(draft.get("kind") or "kv").strip()
     if kind == "kv":
@@ -75,10 +76,11 @@ def list_configure_pending(session: ChatSession) -> list[dict[str, Any]]:
 
 
 def payload_to_draft(
-    payload: dict[str, Any],
+    payload: ChatPayload,
     *,
     task_elements: list | None = None,
 ) -> dict[str, Any]:
+    payload = ChatActionPayload.parse(payload)
     kind = str(payload.get("kind") or "kv").strip()
     if kind == "rag_search":
         kind = "file"
@@ -143,7 +145,7 @@ def payload_to_draft(
 
 
 def payload_to_draft_enriched(
-    payload: dict[str, Any],
+    payload: ChatPayload,
     *,
     task_elements: list | None = None,
     chapter_title: str = "",

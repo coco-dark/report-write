@@ -106,23 +106,26 @@ def test_auto_outline_still_offers_collect_when_meta_flag_missing(tmp_path: Path
 
 
 def test_skip_tip_without_pipe_uses_provisional_title(tmp_path: Path):
-    """口语题名不必强制「类型｜标题」；可作临时标题，后续多轮由大脑补全。"""
+    """skip 只锁路径；口语题名留给 set_session_meta，不在 skip 内确认 meta。"""
+    from report_writing.chat.session_documents import peek_pending_entry
+
     home = tmp_path
     (home / "tasks").mkdir(parents=True)
     session = ChatSession(id="s_name_ask", blueprint_id="bpOld")
-    reply, _cards = _action_skip_blueprint(
+    reply, cards = _action_skip_blueprint(
         session,
         home=home,
         title_hint="述职报告",
         extra_message="",
         invoke=None,
     )
-    assert "述职报告" in reply or (session.freeform or {}).get("title") == "述职报告"
-    # 有 tip 时可直接进入大纲收集，不必卡死在固定句式
-    assert session.phase in {
-        ChatPhase.FREEFORM_ASK.value,
-        ChatPhase.FREEFORM_OUTLINE.value,
-    }
+    assert not (session.freeform or {}).get("meta_confirmed")
+    assert not any(getattr(c, "type", "") == "outline_preview" for c in cards)
+    pending = peek_pending_entry(session)
+    assert pending.get("title") == "述职报告" or "叫什么" in (reply or "") or "写什么" in (
+        reply or ""
+    )
+    assert session.phase == ChatPhase.FREEFORM_ASK.value
 
 
 def test_save_blueprint_collapses_task_registry_entry(tmp_path: Path):

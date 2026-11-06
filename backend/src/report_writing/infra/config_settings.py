@@ -175,5 +175,23 @@ def scripted_chat() -> bool:
     return setting("features", "scripted_chat", default=False, coerce=bool)
 
 
+def intent_plan_enabled() -> bool:
+    """遗留开关：仅 `try_run_oral_multi_intent`（单测）读取。
+
+    `run_chat_control` 口语主路径不再咨询本函数。
+    """
+    env = (os.environ.get("REPORT_WRITING_INTENT_PLAN", "") or "").strip().lower()
+    if env in {"0", "false", "off", "no"}:
+        return False
+    if env in {"1", "true", "on", "yes"}:
+        return True
+    return setting("features", "intent_plan", default=False, coerce=bool)
+
+
+def intent_tool_catalog_in_prompt() -> bool:
+    """已废弃：始终 False。Tool 语义只在 LangChain description。"""
+    return False
+
+
 def database_jdbc_url_override() -> str:
     return str(setting("database", "jdbc_url", default="", env="REPORT_WRITING_DATABASE_URL") or "").strip()

@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from report_writing.domain.models import ChatCard, ChatPhase, ChatSession
+from report_writing.domain.models import ChatActionPayload, ChatCard, ChatPayload, ChatPhase, ChatSession
 from report_writing.services.robots import get_robot, update_robot
 
 
@@ -26,12 +26,12 @@ def _bind_robot_id(home: Path, session: ChatSession, field: str, item_id: str) -
 
 
 def _wizard_working_task_id(
-    session: ChatSession, blueprint_id: str = "", payload: dict | None = None
+    session: ChatSession, blueprint_id: str = "", payload: ChatPayload = None
 ) -> str:
     """向导落盘目标：优先文档副本 w*（无蓝本·样本 / 选用即 clone）。学习/写作禁止回落到库蓝本章节。"""
     from report_writing.services.task_ids import is_writing_task_id
 
-    body = dict(payload or {})
+    body = ChatActionPayload.parse(payload).as_dict()
     for key in ("working_task_id", "writing_task_id", "writingTaskId"):
         cand = str(body.get(key) or "").strip()
         if cand and is_writing_task_id(cand):
@@ -375,7 +375,7 @@ def _prompt_confirm_outline_before_study(
         title=_wizard_card_title("outline_confirm", mode=mode),
         extra={"chapters": preview, **wizard},
     )
-    from report_writing.chat.intent_clarify import begin_clarify
+    from report_writing.chat.clarify_flow import begin_clarify
 
     question = (
         f"目录还没确认（共 {len(chapters)} 章），还不能{want}。"
@@ -661,7 +661,7 @@ def _begin_blueprint_wizard(
 def _action_resource_choice(
     home: Path,
     session: ChatSession,
-    payload: dict[str, Any],
+    payload: ChatPayload,
     *,
     invoke=None,
     emit=None,
@@ -669,6 +669,7 @@ def _action_resource_choice(
     from report_writing.chat.actions import _action_skip_blueprint
     from report_writing.chat.cards import _blueprint_wizard_card, _template_wizard_card
 
+    payload = ChatActionPayload.parse(payload)
     resource = str(payload.get("resource") or "").strip()
     accept = bool(payload.get("accept"))
     if not accept:
@@ -774,12 +775,13 @@ def _resolve_meta_existing_blueprint(
     home: Path,
     session: ChatSession,
     wizard: dict[str, Any],
-    payload: dict[str, Any],
+    payload: ChatPayload,
 ) -> str:
     """meta 步是否沿用已有 task id；新文档/标题冲突时返回空以触发新建。"""
     from report_writing.chat.helpers import _load_task
     from report_writing.chat.session_documents import _titles_conflict, focus_document_meta
 
+    payload = ChatActionPayload.parse(payload)
     requested = str(payload.get("title") or wizard.get("title") or "").strip()
     wizard_bid = str(wizard.get("blueprint_id") or "").strip()
     session_bid = str(session.blueprint_id or "").strip()
@@ -810,7 +812,7 @@ def _resolve_meta_existing_blueprint(
 def _action_blueprint_wizard(
     home: Path,
     session: ChatSession,
-    payload: dict[str, Any],
+    payload: ChatPayload,
 ) -> tuple[str, list[ChatCard]]:
     from report_writing.chat.cards import _blueprint_wizard_card, _handoff_card
     from report_writing.chat.gates import is_blueprint_valid
@@ -829,6 +831,7 @@ def _action_blueprint_wizard(
     from report_writing.chat.wizard_state import WIZARD_MODE_FREEFORM_SAMPLE
     from report_writing.services.task_ids import is_writing_task_id
 
+    payload = ChatActionPayload.parse(payload)
     wizard = dict((session.freeform or {}).get("blueprint_wizard") or {})
     step = str(payload.get("step") or wizard.get("step") or "meta").strip()
     payload_bid = str(payload.get("blueprint_id") or "").strip()
@@ -1011,19 +1014,14 @@ def _action_blueprint_wizard(
                     )
                 ],
             )
-        # 主动回退到确认目录：若已确认则解开，便于再核对（不重提目录）
+        # 目录已确认：勿解开再拽回确认步，交给分析
         if task and bool(getattr(task, "outline_confirmed", False)):
-            try:
-                from report_writing.services.store import TaskStore
-
-                store = TaskStore(home / "tasks" / blueprint_id)
-                if store.path.is_dir():
-                    t2 = store.load()
-                    t2.outline_confirmed = False
-                    store.save(t2)
-                    task = t2
-            except Exception:
-                pass
+            return execute_wizard_command(
+                home,
+                session,
+                "go_study",
+                invoke=payload.get("_intent_invoke"),
+            )
         wizard["step"] = "outline_confirm"
         wizard["outline_confirmed"] = False
         wizard["chapters"] = chapters
@@ -1146,7 +1144,7 @@ def _action_blueprint_wizard(
         seqs = list(payload.get("chapter_sequences") or [])
         resolved_scope = str(payload.get("study_scope") or "").strip()
         if not keys:
-            from report_writing.chat.intent_clarify import (
+            from report_writing.chat.clarify_flow import (
                 build_study_scope_clarify,
                 study_scope_needs_clarify,
             )
@@ -1175,7 +1173,7 @@ def _action_blueprint_wizard(
                 if judged in STUDY_SCOPES:
                     resolved_scope = judged
             if resolved_scope in STUDY_SCOPES:
-                from report_writing.chat.intent_clarify import merge_study_message_with_scope
+                from report_writing.chat.clarify_flow import merge_study_message_with_scope
 
                 msg = merge_study_message_with_scope(msg, resolved_scope)
             elif tops and study_scope_needs_clarify(
@@ -1228,7 +1226,7 @@ def _action_blueprint_wizard(
         elif keys:
             chapter_label = f"已选 {len(keys)} 章"
         if method not in {"source", "sample", "auto"}:
-            from report_writing.chat.intent_clarify import build_study_method_clarify
+            from report_writing.chat.clarify_flow import build_study_method_clarify
 
             return build_study_method_clarify(
                 session,
@@ -1766,11 +1764,12 @@ def open_template_wizard_choose(
 
 def _action_template_wizard(
     session: ChatSession,
-    payload: dict[str, Any],
+    payload: ChatPayload,
 ) -> tuple[str, list[ChatCard]]:
     from report_writing.chat.cards import _template_wizard_card
     from report_writing.chat.session_runtime import workflow_touch_template
 
+    payload = ChatActionPayload.parse(payload)
     resource = str(payload.get("resource") or "").strip()
     step = str(payload.get("step") or "choose").strip()
     item_id = str(payload.get("item_id") or "").strip()

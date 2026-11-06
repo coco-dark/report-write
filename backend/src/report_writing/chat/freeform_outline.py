@@ -11,30 +11,6 @@ from report_writing.domain.models import ChatSession
 InvokeFn = Callable[[str, str], str]
 
 
-def wants_generate_outline(
-    message: str,
-    *,
-    invoke: InvokeFn | None = None,
-    phase: str = "",
-    session: ChatSession | None = None,
-) -> bool:
-    from report_writing.chat.freeform_intent import wants_generate_outline as _intent
-
-    return _intent(message, invoke=invoke, phase=phase, session=session)
-
-
-def wants_outline_confirm(
-    message: str,
-    *,
-    invoke: InvokeFn | None = None,
-    phase: str = "",
-    session: ChatSession | None = None,
-) -> bool:
-    from report_writing.chat.freeform_intent import wants_outline_confirm as _intent
-
-    return _intent(message, invoke=invoke, phase=phase, session=session)
-
-
 _CN_CHAPTER_COUNT = {
     "一": 1,
     "二": 2,

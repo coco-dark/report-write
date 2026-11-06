@@ -489,7 +489,7 @@ def _dense_heading_prefix(text: str, *, max_chars: int | None = None) -> str:
     return (text or "")[: min(end, limit)]
 
 
-def outline_from_payload(chapters: list[dict]) -> OutlineTree:
+def outline_from_payload(chapters: list[dict], *, model=None) -> OutlineTree:
     if not chapters:
         raise ValueError("目录不能为空")
     nodes = []
@@ -561,7 +561,7 @@ def outline_from_payload(chapters: list[dict]) -> OutlineTree:
             )
         )
     if not all(str(n.key or "").strip() for n in nodes):
-        nodes = assign_placeholder_keys(nodes)
+        nodes = assign_placeholder_keys(nodes, model=model)
     return finalize_outline(nodes, preserve_parents=True)
 
 
@@ -629,7 +629,7 @@ def slug_from_title(title: str, existing_keys: set[str] | None = None, *, transl
     return candidate
 
 
-def translate_titles_to_slugs(titles: list[str]) -> list[str]:
+def translate_titles_to_slugs(titles: list[str], *, model=None) -> list[str]:
     """一次模型调用把多个中文标题译成英文蛇形；失败则空串列表。"""
     cleaned = [str(item or "").strip() for item in titles]
     if not cleaned:
@@ -637,9 +637,9 @@ def translate_titles_to_slugs(titles: list[str]) -> list[str]:
     if not any(_HAS_CJK.search(item) for item in cleaned):
         return [normalize_slug(item) for item in cleaned]
     try:
-        from report_writing.infra.llm import live_model
+        from report_writing.infra.llm import or_live_model
 
-        model = live_model()
+        model = or_live_model(model)
     except Exception:
         model = None
     if model is None:
@@ -667,14 +667,16 @@ def translate_titles_to_slugs(titles: list[str]) -> list[str]:
         return [""] * len(cleaned)
 
 
-def assign_placeholder_keys(nodes: list[OutlineNode]) -> list[OutlineNode]:
+def assign_placeholder_keys(nodes: list[OutlineNode], *, model=None) -> list[OutlineNode]:
     """为空或自动 ch-* key 的节点按标题生成英文占位符，并重写 parent 引用。"""
     if not nodes:
         return []
     need_indexes = [index for index, node in enumerate(nodes) if is_auto_key(node.key)]
     translations = [""] * len(nodes)
     if need_indexes:
-        batch = translate_titles_to_slugs([nodes[index].title for index in need_indexes])
+        batch = translate_titles_to_slugs(
+            [nodes[index].title for index in need_indexes], model=model
+        )
         for offset, index in enumerate(need_indexes):
             translations[index] = batch[offset] if offset < len(batch) else ""
     used: set[str] = set()
@@ -728,13 +730,18 @@ def finalize_outline(
     nodes: list[OutlineNode],
     *,
     preserve_parents: bool = False,
+    model=None,
 ) -> OutlineTree:
     """整理目录树。
 
     preserve_parents=True：学要点落盘用——不改 key、不因 level 栈重算父子，
     已有合法 parent 原样保留，避免确认后的目录在分析时嵌套漂移。
     """
-    keyed = list(nodes) if preserve_parents else assign_placeholder_keys(list(nodes))
+    keyed = (
+        list(nodes)
+        if preserve_parents
+        else assign_placeholder_keys(list(nodes), model=model)
+    )
     ordered = []
     stack: list[tuple[int, str, str]] = []
     by_sequence: dict[str, str] = {}

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from report_writing.chat.intent_clarify import (
+from report_writing.chat.clarify_flow import (
     build_entry_path_clarify,
     execute_clarify_spec,
     get_pending,
@@ -55,7 +55,7 @@ def test_second_doc_in_session_requires_name_card_first():
 
 
 def test_force_new_then_name_then_entry_pending(tmp_path: Path):
-    from report_writing.chat.intent_clarify import build_document_name_clarify
+    from report_writing.chat.clarify_flow import build_document_name_clarify
 
     (tmp_path / "tasks").mkdir(parents=True)
     session = ChatSession(id="multi2", phase=ChatPhase.INTENT.value)
@@ -121,7 +121,7 @@ def test_template_phrase_stashes_preferred_path():
 
 
 def test_rename_keeps_entry_path_freeform_on_registry(tmp_path: Path):
-    from report_writing.chat.intent_clarify import build_entry_path_clarify
+    from report_writing.chat.clarify_flow import build_entry_path_clarify
     from report_writing.chat.session_documents import (
         focus_document_key,
         mark_focus_entry_branch,

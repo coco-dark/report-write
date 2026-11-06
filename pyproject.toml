@@ -32,3 +32,10 @@ where = ["backend/src"]
 [tool.pytest.ini_options]
 pythonpath = ["backend/src"]
 testpaths = ["tests"]
+markers = [
+    "legacy_plan: leftover JSON turn-plan path (not on oral create_agent loop)",
+]
+filterwarnings = [
+    "ignore:classify_turn_plan_llm is leftover:DeprecationWarning",
+    "ignore:classify_chat_control_plan_llm is leftover:DeprecationWarning",
+]

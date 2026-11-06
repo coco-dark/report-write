@@ -1,7 +1,7 @@
-"""意图计划执行层（口语主路径为 ReAct 观察闭环）。
+"""按 tool 名执行（按钮、澄清卡已选、单测）。不是「理解用户意图」。
 
-`execute_dispatch_tool` / `execute_intent_plan` / `classify_intent_plan` 供 UI·clarify·单测复用；
-勿再以认领路由挂回 `run_chat_control`。口语缺参与失败以 Tool `observation` / `missing_slots` 回流。
+`execute_dispatch_tool` / `execute_intent_plan` 在 tool+args **已经确定** 之后调用。
+口语主路径由 Agent 选 Tool；缺参走 observation / missing_slots。
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ import logging
 from pathlib import Path
 from typing import Any, Callable
 
-from report_writing.domain.models import ChatSession
+from report_writing.domain.models import ChatActionPayload, ChatSession
 
 _log = logging.getLogger(__name__)
 
@@ -179,7 +179,7 @@ def execute_dispatch_tool(
     invoke: InvokeFn | None = None,
 ) -> tuple[str, list[Any], list[dict[str, Any]]] | None:
     name = str(step.get("tool") or "").strip()
-    args = dict(step.get("args") or step.get("payload") or {})
+    args = ChatActionPayload.parse(step.get("args") or step.get("payload")).as_dict()
     text = (message or "").strip()
     # 口语点名会话内已有文档 → 注入 task/blueprint，并切换焦点（写 A 时说「帮我写 B 那章」）
     # focus_document 自己切焦点，勿先 enrich 否则会误判「已是当前焦点」
@@ -214,7 +214,7 @@ def execute_dispatch_tool(
                 or focus_needs_entry_path(session)
                 or not onboarding_lane_active(session)
             ):
-                from report_writing.chat.intent_clarify import build_entry_path_clarify
+                from report_writing.chat.clarify_flow import build_entry_path_clarify
 
                 tip = str(
                     args.get("title_hint")
@@ -301,6 +301,7 @@ def execute_dispatch_tool(
             text,
             {"tool": name, "payload": args},
             emit=emit,
+            expected_tool=name,
         )
 
     if name == "configure_chapter":
@@ -363,7 +364,7 @@ def execute_dispatch_tool(
             emit=emit,
             writing_pace=pace,
             chapter_keys=keys,
-            payload=dict(args or {}),
+            payload=ChatActionPayload.parse(args),
             invoke=invoke,
         )
         return reply, list(cards or []), list(events or [])
@@ -602,7 +603,7 @@ def execute_dispatch_tool(
                     [],
                     [focus_document_event(session, cur, title=title)],
                 )
-            from report_writing.chat.intent_clarify import build_ask_intent_clarify
+            from report_writing.chat.clarify_flow import build_ask_intent_clarify
 
             reply, cards = build_ask_intent_clarify(
                 session,
@@ -630,7 +631,7 @@ def execute_dispatch_tool(
                     [],
                     [],
                 )
-            from report_writing.chat.intent_clarify import build_ask_intent_clarify
+            from report_writing.chat.clarify_flow import build_ask_intent_clarify
 
             reply, cards = build_ask_intent_clarify(
                 session,
@@ -657,7 +658,7 @@ def execute_dispatch_tool(
         return reply, [], events
 
     if name in {"ask_intent", "ask_entry_path"}:
-        from report_writing.chat.intent_clarify import (
+        from report_writing.chat.clarify_flow import (
             build_ask_intent_clarify,
             build_entry_path_clarify,
         )
@@ -808,7 +809,7 @@ def execute_dispatch_tool(
                 or str(focus_onboarding(session).get("entry_path") or "") == "template"
             )
             if not confirmed:
-                from report_writing.chat.intent_clarify import build_entry_path_clarify
+                from report_writing.chat.clarify_flow import build_entry_path_clarify
 
                 reply, cards = build_entry_path_clarify(
                     session,
@@ -884,7 +885,7 @@ def execute_dispatch_tool(
         )
         from report_writing.chat.session_goal_actions import run_session_goal_action
 
-        body = dict(args or {})
+        body = ChatActionPayload.parse(args).as_dict()
         # 空 message 时带上原话便于日志；title 必须由分类器/ReAct 结构化传入，不用改名正则剥
         # submit_freeform_meta → 与 set_session_meta 同路径（无蓝本定题）
         action = "set_session_meta" if name == "submit_freeform_meta" else name
@@ -893,6 +894,14 @@ def execute_dispatch_tool(
                 body["message"] = text
             msg_for_gate = str(body.get("message") or text or "").strip()
             tip = str(body.get("title") or "").strip()
+            from report_writing.chat.session_documents import message_requires_structured_rename_title
+
+            if message_requires_structured_rename_title(msg_for_gate) and not tip:
+                return (
+                    "改名须带上新名字（例如：改名叫 2026个人述职报告）。",
+                    [],
+                    [],
+                )
             # 「安全报告 用我的模版」：题材 title 禁止带入定名
             if tip and title_is_write_subject_not_doc_name(msg_for_gate, tip):
                 body.pop("title", None)
@@ -901,7 +910,7 @@ def execute_dispatch_tool(
                 session, msg_for_gate, title=tip or str(body.get("title") or "")
             )
             if blocked and is_writing_document_named(session):
-                from report_writing.chat.intent_clarify import build_document_scope_clarify
+                from report_writing.chat.clarify_flow import build_document_scope_clarify
 
                 reply, cards = build_document_scope_clarify(
                     session, message=msg_for_gate, topic_hint=blocked
@@ -919,7 +928,7 @@ def execute_dispatch_tool(
     if name == "save_freeform_as_blueprint":
         from report_writing.chat.actions import _action_save_freeform_as_blueprint
 
-        body = dict(args or {})
+        body = ChatActionPayload.parse(args).as_dict()
         if not str(body.get("task_id") or "").strip():
             body["task_id"] = str(session.task_id or "").strip()
         reply, cards = _action_save_freeform_as_blueprint(home, session, body)
@@ -928,7 +937,7 @@ def execute_dispatch_tool(
     if name == "sync_document_to_blueprint_library":
         from report_writing.chat.actions import _action_sync_document_to_blueprint_library
 
-        body = dict(args or {})
+        body = ChatActionPayload.parse(args).as_dict()
         if not str(body.get("task_id") or "").strip():
             body["task_id"] = str(session.task_id or "").strip()
         reply, cards = _action_sync_document_to_blueprint_library(home, session, body)
@@ -937,7 +946,7 @@ def execute_dispatch_tool(
     if name == "confirm_chapter":
         from report_writing.chat.actions import _action_confirm_chapter
 
-        body = dict(args or {})
+        body = ChatActionPayload.parse(args).as_dict()
         if not str(body.get("task_id") or "").strip():
             body["task_id"] = str(session.task_id or "").strip()
         reply, cards, events = _action_confirm_chapter(home, session, body, emit=emit)
@@ -947,7 +956,7 @@ def execute_dispatch_tool(
 
 def _step_hung_user_gate(session: ChatSession, step_cards: list[Any] | None) -> bool:
     """本步是否已挂起需用户确认的澄清/槽位，后续步不应继续。"""
-    from report_writing.chat.intent_clarify import get_pending
+    from report_writing.chat.clarify_flow import get_pending
 
     if get_pending(session) is not None:
         return True

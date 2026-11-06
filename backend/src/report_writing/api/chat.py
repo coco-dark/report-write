@@ -15,41 +15,48 @@ from report_writing.domain.models import ChatRequest, ChatResponse, ChatSession,
 router = APIRouter(tags=["chat"])
 
 
-def _chat_stream_model(system: str, user: str):
+def _make_chat_stream_model(model):
     """逐块产出模型回复，供对话 SSE 打字机效果。"""
-    from report_writing.infra.llm import live_model
 
-    model = live_model()
-    if model is None:
-        text = (
-            "当前未配置大模型。已收到消息；接入模型后将按机器人对话提示词回复。"
-            f"\n（系统提示摘要：{(system or '')[:120]}）"
-        )
-        for ch in text:
-            yield ch
-        return
-    from langchain_core.messages import HumanMessage, SystemMessage
+    def _chat_stream_model(system: str, user: str):
+        if model is None:
+            text = (
+                "当前未配置大模型。已收到消息；接入模型后将按机器人对话提示词回复。"
+                f"\n（系统提示摘要：{(system or '')[:120]}）"
+            )
+            yield from text
+            return
+        from langchain_core.messages import HumanMessage, SystemMessage
 
-    messages = [SystemMessage(content=system), HumanMessage(content=user)]
-    stream = getattr(model, "stream", None)
-    if not callable(stream):
-        yield chat_invoke(system, user)
-        return
-    for chunk in stream(messages):
-        content = getattr(chunk, "content", None)
-        if content is None:
-            content = chunk
-        if isinstance(content, list):
-            parts = []
-            for item in content:
-                if isinstance(item, dict) and item.get("type") == "text":
-                    parts.append(str(item.get("text") or ""))
-                else:
-                    parts.append(str(getattr(item, "text", None) or item or ""))
-            content = "".join(parts)
-        text = str(content or "")
-        if text:
-            yield text
+        messages = [SystemMessage(content=system), HumanMessage(content=user)]
+        stream = getattr(model, "stream", None)
+        if not callable(stream):
+            yield chat_invoke(system, user, model=model)
+            return
+        for chunk in stream(messages):
+            content = getattr(chunk, "content", None)
+            if content is None:
+                content = chunk
+            if isinstance(content, list):
+                parts = []
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        parts.append(str(item.get("text") or ""))
+                    else:
+                        parts.append(str(getattr(item, "text", None) or item or ""))
+                content = "".join(parts)
+            text = str(content or "")
+            if text:
+                yield text
+
+    return _chat_stream_model
+
+
+def _chat_models():
+    from report_writing.infra.llm import live_control_model, live_intent_model, live_model
+
+    chat_model = live_model()
+    return chat_model, live_control_model(), live_intent_model()
 
 
 @router.post("/api/writing/chat", response_model=ChatResponse)
@@ -57,7 +64,15 @@ def post_chat(body: ChatRequest) -> ChatResponse:
     from report_writing.services.robots import chat as robot_chat
 
     try:
-        return robot_chat(task_root(), body, invoke=chat_invoke)
+        chat_model, control_model, intent_model = _chat_models()
+        return robot_chat(
+            task_root(),
+            body,
+            invoke=lambda system, user: chat_invoke(system, user, model=chat_model),
+            model=control_model,
+            chat_model=chat_model,
+            intent_model=intent_model,
+        )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except KeyError as error:
@@ -71,12 +86,16 @@ def post_chat_stream(body: ChatRequest) -> StreamingResponse:
 
     def worker(emit) -> None:
         try:
+            chat_model, control_model, intent_model = _chat_models()
             handle_chat(
                 task_root(),
                 body,
-                invoke=chat_invoke,
+                invoke=lambda system, user: chat_invoke(system, user, model=chat_model),
                 emit=emit,
-                stream_model=_chat_stream_model,
+                stream_model=_make_chat_stream_model(chat_model),
+                model=control_model,
+                chat_model=chat_model,
+                intent_model=intent_model,
             )
         except ValueError as error:
             emit({"type": "error", "detail": str(error)})

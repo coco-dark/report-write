@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
-from report_writing.domain.models import ChatPhase, ChatSession
+from report_writing.domain.models import ChatActionPayload, ChatPayload, ChatPhase, ChatSession
 
 EmitFn = Callable[[dict[str, Any]], None]
 InvokeFn = Callable[[str, str], str]
@@ -36,34 +36,7 @@ def finish_blueprint_match(
     emit: EmitFn | None = None,
 ) -> tuple[str, list[Any]]:
     from report_writing.chat.cards import _blueprint_list_card, _skip_blueprint_card
-    from report_writing.chat.helpers import _emit_process
-    from report_writing.chat.intent_router import allows_agent_blueprint_select, pick_auto_blueprint_id, touch_session_plan
-    from report_writing.chat_orchestrator import _action_select_blueprint
-
-    auto_id = ""
-    if allows_agent_blueprint_select(message=message, user_action="", invoke=invoke, session=session):
-        auto_id = pick_auto_blueprint_id(message, matches, invoke=invoke)
-    if auto_id:
-        _emit_process(emit, "已按你的描述选定蓝本，正在准备章节…")
-        reply, cards = _action_select_blueprint(home, session, {"blueprint_id": auto_id})
-        touch_session_plan(
-            session,
-            goal="write_with_blueprint",
-            blueprint_id=auto_id,
-            auto_selected=True,
-        )
-        title = next((getattr(m, "title", "") for m in matches if getattr(m, "id", "") == auto_id), auto_id)
-        hint = f"好，我已经帮你订上「{title or auto_id}」了。{reply.strip()}".strip()
-        from report_writing.chat.session_documents import append_doc_name_clarify_if_needed
-
-        hint, cards = append_doc_name_clarify_if_needed(
-            session,
-            message=message,
-            reply=hint,
-            cards=cards,
-            invoke=invoke,
-        )
-        return hint, cards
+    from report_writing.chat.intent_router import touch_session_plan
 
     if matches:
         session.phase = ChatPhase.BLUEPRINT_SELECT.value
@@ -103,35 +76,6 @@ def finish_blueprint_match(
             hint = hint.strip()
         return hint, cards
 
-    from report_writing.chat.entry_intent import extract_wizard_title_hint, is_create_blueprint_intent
-    from report_writing.chat.entry_sample import guess_report_title_from_message, user_brings_own_sample_document
-    from report_writing.chat.resource_actions import _action_blueprint_wizard, _begin_blueprint_wizard
-
-    if user_brings_own_sample_document(
-        message, invoke=invoke, session=session
-    ) or is_create_blueprint_intent(message, invoke=invoke, session=session):
-        title = extract_wizard_title_hint(
-            message, invoke=invoke, session=session
-        ) or guess_report_title_from_message(message, invoke=invoke)
-        _emit_process(emit, "你这边有样板，咱们走上传样本建蓝本…")
-        if title:
-            reply, cards = _action_blueprint_wizard(
-                home,
-                session,
-                {"step": "meta", "title": title, "blueprint_id": ""},
-            )
-            hint = (
-                f"库里没有完全对口的蓝本，我按你说的「{title}」开了蓝本向导。"
-                "请在卡片里上传 Word/PDF 样板，再提取目录、分析要点。"
-            )
-            return f"{hint}\n{reply}".strip(), cards
-        reply, cards = _begin_blueprint_wizard(session, title_hint="", home=home)
-        return (
-            "没找到库里的对口蓝本。你既然有样板，请在向导里上传样本，我会按样板提取目录再写。"
-            f"\n{reply}".strip(),
-            cards,
-        )
-
     from report_writing.chat.user_process import emit_user_process
     from report_writing.chat.write_path_after_match import reply_ask_write_path
 
@@ -143,13 +87,13 @@ def run_blueprint_action(
     home: Path,
     session: ChatSession,
     action: str,
-    payload: dict[str, Any] | None = None,
+    payload: ChatPayload = None,
     *,
     invoke: InvokeFn | None = None,
     emit: EmitFn | None = None,
 ) -> tuple[str, list[Any]]:
     key = (action or "").strip()
-    body = dict(payload or {})
+    body = ChatActionPayload.parse(payload)
     if key not in BLUEPRINT_ACTION_NAMES:
         raise ValueError(f"未知蓝本 action：{key}")
 
@@ -216,7 +160,7 @@ def run_blueprint_action(
             or body.get("explicit_create")
         )
         if not confirmed:
-            from report_writing.chat.intent_clarify import build_entry_path_clarify
+            from report_writing.chat.clarify_flow import build_entry_path_clarify
 
             return build_entry_path_clarify(
                 session,

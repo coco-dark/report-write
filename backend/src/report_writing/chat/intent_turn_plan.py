@@ -1,4 +1,8 @@
-"""整轮意图 JSON：slots + tools + missing + confidence → 确定执行 / 缺项引导 / 不确定追问。"""
+"""遗留：整轮 JSON 计划（slots/tools/missing）。
+
+口语主路径 `run_chat_control` 不再调用。仅 `try_run_oral_multi_intent`（单测打开
+`REPORT_WRITING_INTENT_PLAN=1`）与 `execute_intent_plan` 测试助手使用。
+"""
 
 from __future__ import annotations
 
@@ -305,7 +309,7 @@ def hang_missing_slots(
 ) -> tuple[str, list[ChatCard]]:
     """按 missing 挂澄清卡；起名与选路分轮（先名后路），避免 pending 错配。"""
     from report_writing.chat.cards import turn_has_blueprint_pick_cards
-    from report_writing.chat.intent_clarify import (
+    from report_writing.chat.clarify_flow import (
         _apply_auto_freeform_and_dispatch,
         _auto_freeform_outline_ready,
         begin_clarify,
@@ -609,7 +613,7 @@ def apply_turn_plan(
             }
         ]
         if scope.get("need_clarify") or scope_action == "ask":
-            from report_writing.chat.intent_clarify import (
+            from report_writing.chat.clarify_flow import (
                 build_document_scope_clarify,
                 pending_document_scope_reply,
             )
@@ -653,7 +657,7 @@ def apply_turn_plan(
             prefix = (
                 f"好，新开一份「{working}」。" if working else "好，新开一份文档。"
             )
-            from report_writing.chat.intent_clarify import (
+            from report_writing.chat.clarify_flow import (
                 continue_after_new_document,
             )
 
@@ -719,7 +723,7 @@ def apply_turn_plan(
                     ],
                 )
         if scope_action == "rewrite_current":
-            from report_writing.chat.intent_clarify import build_entry_path_clarify
+            from report_writing.chat.clarify_flow import build_entry_path_clarify
 
             ff = dict(session.freeform or {})
             ff["rewrite_current_pending"] = True
@@ -762,7 +766,7 @@ def apply_turn_plan(
             if blocked or (
                 scope_title and title_is_write_subject_not_doc_name(text, scope_title)
             ):
-                from report_writing.chat.intent_clarify import (
+                from report_writing.chat.clarify_flow import (
                     build_document_scope_clarify,
                     pending_document_scope_reply,
                 )
@@ -804,7 +808,7 @@ def apply_turn_plan(
     cards: list[Any] = []
 
     if plan.should_execute:
-        from report_writing.chat.intent_dispatch import execute_intent_plan
+        from report_writing.chat.tool_dispatch import execute_intent_plan
         from report_writing.chat.intent_multi_plan import expand_plan_auto_continue
 
         steps = [dict(s) for s in expand_plan_auto_continue(list(plan.tools), text, session)]
