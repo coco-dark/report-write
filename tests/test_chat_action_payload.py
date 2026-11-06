@@ -38,6 +38,21 @@ def test_chat_request_coerces_payload_dict():
     assert req.action_payload.blueprint_id == "bp9"
 
 
+def test_chat_card_payload_entity_roundtrip():
+    from report_writing.domain.models import ChatCard, ClarifyPending
+
+    card = ChatCard(type="blueprint_wizard", payload={"step": "meta", "items": [{"id": "bp1"}]})
+    assert card.payload.step == "meta"
+    dumped = card.to_dict()["payload"]
+    assert dumped == {"step": "meta", "items": [{"id": "bp1"}]}
+    pending = ClarifyPending.parse(
+        {"id": "ic_1", "source": "entry", "question": "选哪条？", "options": [{"id": "a", "label": "A"}]}
+    )
+    assert pending is not None
+    assert pending.source == "entry"
+    assert pending.get("options")[0]["id"] == "a"
+
+
 def test_parse_wizard_and_pack_fields():
     payload = ChatActionPayload.parse(
         {"wizard_command": "go_study", "step": "study", "pack_id": "p1", "slot_no": 2}

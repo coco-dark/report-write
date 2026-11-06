@@ -22,6 +22,7 @@ from report_writing.controller import (
 from report_writing.domain.models import (
     ChapterStatus,
     ChatActionPayload,
+    ChatPayload,
     ChatCard,
     ChatMessage,
     ChatPhase,
@@ -48,7 +49,7 @@ InvokeFn = Callable[[str, str], str]
 EmitFn = Callable[[dict[str, Any]], None]
 StreamModelFn = Callable[[str, str], Iterable[str]]
 
-def _action_list_blueprints(home: Path, session: ChatSession, payload: ChatActionPayload | dict | None) -> tuple[str, list[ChatCard]]:
+def _action_list_blueprints(home: Path, session: ChatSession, payload: ChatPayload) -> tuple[str, list[ChatCard]]:
     payload = ChatActionPayload.parse(payload)
     from report_writing.chat.cards import _blueprint_list_card, _skip_blueprint_card
 
@@ -83,7 +84,7 @@ def _clear_blueprint_wizard_state(session: ChatSession) -> None:
     workflow_set(session, WORKFLOW_BLUEPRINT, None)
 
 
-def _action_select_blueprint(home: Path, session: ChatSession, payload: ChatActionPayload | dict | None) -> tuple[str, list[ChatCard]]:
+def _action_select_blueprint(home: Path, session: ChatSession, payload: ChatPayload) -> tuple[str, list[ChatCard]]:
     payload = ChatActionPayload.parse(payload)
     from report_writing.chat.cards import _blueprint_wizard_card, _offer_chapter_picker_cards
     from report_writing.chat.gates import is_blueprint_valid, partition_blueprint_chapters
@@ -259,7 +260,7 @@ def _action_select_blueprint(home: Path, session: ChatSession, payload: ChatActi
 def _action_select_write_chapters(
     home: Path,
     session: ChatSession,
-    payload: ChatActionPayload | dict | None,
+    payload: ChatPayload,
     *,
     emit=None,
     invoke=None,
@@ -348,7 +349,7 @@ def _action_select_write_chapters(
 def _action_write_analyzed_only(
     home: Path,
     session: ChatSession,
-    payload: ChatActionPayload | dict | None,
+    payload: ChatPayload,
     *,
     emit: EmitFn | None = None,
     invoke=None,
@@ -553,7 +554,7 @@ def _action_skip_blueprint(
     )
 
 
-def _action_resume(home: Path, session: ChatSession, payload: ChatActionPayload | dict | None) -> tuple[str, list[ChatCard]]:
+def _action_resume(home: Path, session: ChatSession, payload: ChatPayload) -> tuple[str, list[ChatCard]]:
     payload = ChatActionPayload.parse(payload)
     from report_writing.chat.cards import _offer_chapter_picker_cards, _offer_start_writing
     from report_writing.chat.gates import _analysis_gate_if_needed, is_blueprint_valid, partition_blueprint_chapters
@@ -674,7 +675,7 @@ def _freeform_start_writing_gate(
     return None
 
 
-def _apply_project_folders_from_payload(session: ChatSession, payload: ChatActionPayload | dict | None) -> None:
+def _apply_project_folders_from_payload(session: ChatSession, payload: ChatPayload) -> None:
     """开写 payload 可带 project_folder_ids，写入会话供 clone 使用。"""
     payload = ChatActionPayload.parse(payload)
     body = payload.as_dict()
@@ -696,7 +697,7 @@ def _action_start_writing(
     emit: EmitFn | None = None,
     writing_pace: str = "",
     chapter_keys: list[str] | None = None,
-    payload: ChatActionPayload | dict | None = None,
+    payload: ChatPayload = None,
     invoke=None,
     model=None,
 ) -> tuple[str, list[ChatCard], list[dict]]:
@@ -1083,7 +1084,7 @@ def pause_writing_session(home: Path, session_id: str) -> tuple[ChatSession, lis
 def _action_confirm_chapter(
     home: Path,
     session: ChatSession,
-    payload: ChatActionPayload | dict | None,
+    payload: ChatPayload,
     *,
     emit: EmitFn | None = None,
     model=None,
@@ -1170,7 +1171,7 @@ def _action_confirm_chapter(
 def _action_confirm_all_chapters(
     home: Path,
     session: ChatSession,
-    payload: ChatActionPayload | dict | None,
+    payload: ChatPayload,
     *,
     emit: EmitFn | None = None,
 ) -> tuple[str, list[ChatCard], list[dict]]:
@@ -1252,7 +1253,7 @@ def _action_confirm_all_chapters(
 def _action_check_writing_supplements(
     home: Path,
     session: ChatSession,
-    payload: ChatActionPayload | dict | None,
+    payload: ChatPayload,
     *,
     invoke=None,
 ) -> tuple[str, list[ChatCard], list[dict]]:
@@ -1291,7 +1292,7 @@ def _action_check_writing_supplements(
 def _action_skip_writing_supplement_check(
     home: Path,
     session: ChatSession,
-    payload: ChatActionPayload | dict | None,
+    payload: ChatPayload,
     *,
     emit: EmitFn | None = None,
     invoke=None,
@@ -1313,7 +1314,7 @@ def _action_skip_writing_supplement_check(
 def _action_dismiss_writing_supplement(
     home: Path,
     session: ChatSession,
-    payload: ChatActionPayload | dict | None,
+    payload: ChatPayload,
 ) -> tuple[str, list[ChatCard]]:
     payload = ChatActionPayload.parse(payload)
     from report_writing.chat.session_documents import resolve_task_id
@@ -1340,7 +1341,7 @@ def _action_dismiss_writing_supplement(
 
 
 def _action_configure_chapter(
-    home: Path, session: ChatSession, payload: ChatActionPayload | dict | None, *, model=None
+    home: Path, session: ChatSession, payload: ChatPayload, *, model=None
 ) -> tuple[str, list[ChatCard]]:
     payload = ChatActionPayload.parse(payload)
     from report_writing.chat.cards import _progress_and_confirm_cards
@@ -1416,7 +1417,7 @@ def _action_configure_chapter(
     return reply, cards
 
 
-def _action_add_chapter_element(home: Path, session: ChatSession, payload: ChatActionPayload | dict | None) -> tuple[str, list[ChatCard]]:
+def _action_add_chapter_element(home: Path, session: ChatSession, payload: ChatPayload) -> tuple[str, list[ChatCard]]:
     payload = ChatActionPayload.parse(payload)
     from report_writing.chat.cards import _progress_and_confirm_cards
     from report_writing.chat.session_documents import bind_session_focus_to_task, resolve_task_id
@@ -1504,7 +1505,7 @@ def _looks_like_chapter_slug(text: str, key: str = "") -> bool:
     return bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", t))
 
 
-def _retry_chapter_display_title(task, chapter_key: str, payload: ChatActionPayload | dict | None = None) -> str:
+def _retry_chapter_display_title(task, chapter_key: str, payload: ChatPayload = None) -> str:
     """用户可见章名：优先大纲中文标题，勿回落英文 slug（下划线会被 Markdown 吃成斜体）。"""
     payload = ChatActionPayload.parse(payload)
     body = payload.as_dict()
@@ -1548,7 +1549,7 @@ def _ensure_outline_confirmed_for_retry(path: Path, session: ChatSession, task) 
 def _action_retry_chapter(
     home: Path,
     session: ChatSession,
-    payload: ChatActionPayload | dict | None,
+    payload: ChatPayload,
     *,
     emit: EmitFn | None = None,
     invoke=None,
@@ -1747,7 +1748,7 @@ def _action_retry_chapter(
 def _action_retry_search_chapter(
     home: Path,
     session: ChatSession,
-    payload: ChatActionPayload | dict | None,
+    payload: ChatPayload,
     *,
     emit: EmitFn | None = None,
     model=None,
@@ -1868,7 +1869,7 @@ def _action_retry_search_chapter(
 
 def _action_confirm_freeform_meta(
     session: ChatSession,
-    payload: ChatActionPayload | dict | None,
+    payload: ChatPayload,
     message: str,
     *,
     home: Path | None = None,
@@ -1915,7 +1916,7 @@ def _action_reopen_outline_edit(home: Path, session: ChatSession) -> tuple[str, 
 def _action_submit_outline(
     home: Path,
     session: ChatSession,
-    payload: ChatActionPayload | dict | None,
+    payload: ChatPayload,
     message: str,
     *,
     invoke=None,
@@ -1999,7 +2000,7 @@ def _action_submit_outline(
 def _action_submit_points(
     home: Path,
     session: ChatSession,
-    payload: ChatActionPayload | dict | None,
+    payload: ChatPayload,
     message: str,
     *,
     invoke=None,
@@ -2806,7 +2807,7 @@ def _collect_freeform_points(
     generate: bool = False,
     skip: bool = False,
     emit=None,
-    payload: ChatActionPayload | dict | None = None,
+    payload: ChatPayload = None,
     model=None,
 ) -> tuple[str, list[ChatCard]]:
     payload = ChatActionPayload.parse(payload)
@@ -2949,7 +2950,7 @@ def _collect_freeform_points(
 def _action_generate_freeform_points(
     home: Path,
     session: ChatSession,
-    payload: ChatActionPayload | dict | None,
+    payload: ChatPayload,
     *,
     invoke=None,
     emit=None,
@@ -2974,14 +2975,14 @@ def _action_generate_freeform_points(
 
 
 def _action_skip_freeform_points(
-    home: Path, session: ChatSession, payload: ChatActionPayload | dict | None
+    home: Path, session: ChatSession, payload: ChatPayload
 ) -> tuple[str, list[ChatCard]]:
     payload = ChatActionPayload.parse(payload)
     return _collect_freeform_points(home, session, "", skip=True)
 
 
 def _action_save_freeform_as_blueprint(
-    home: Path, session: ChatSession, payload: ChatActionPayload | dict | None
+    home: Path, session: ChatSession, payload: ChatPayload
 ) -> tuple[str, list[ChatCard]]:
     payload = ChatActionPayload.parse(payload)
     from report_writing.chat.cards import _progress_and_confirm_cards
@@ -3127,7 +3128,7 @@ def _action_save_freeform_as_blueprint(
 
 
 def _action_sync_document_to_blueprint_library(
-    home: Path, session: ChatSession, payload: ChatActionPayload | dict | None
+    home: Path, session: ChatSession, payload: ChatPayload
 ) -> tuple[str, list[ChatCard]]:
     """把文档副本配置显式回写源库蓝本（选用线 / 无蓝本收录后均可）。"""
     payload = ChatActionPayload.parse(payload)

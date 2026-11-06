@@ -11,7 +11,13 @@ import secrets
 from pathlib import Path
 from typing import Any
 
-from report_writing.domain.models import ChatCard, ChatPhase, ChatSession
+from report_writing.domain.models import (
+    ChatActionPayload,
+    ChatCard,
+    ChatPhase,
+    ChatSession,
+    ClarifyPending,
+)
 
 FREEFORM_KEY = "intent_clarify"
 
@@ -65,11 +71,9 @@ _OPTION_ALIASES: dict[str, tuple[str, ...]] = {
 }
 
 
-def get_pending(session: ChatSession) -> dict[str, Any] | None:
+def get_pending(session: ChatSession) -> ClarifyPending | None:
     raw = (session.freeform or {}).get(FREEFORM_KEY)
-    if not isinstance(raw, dict) or not raw.get("id"):
-        return None
-    return dict(raw)
+    return ClarifyPending.parse(raw)
 
 
 def clear_pending(session: ChatSession) -> None:
@@ -98,7 +102,7 @@ def _clear_stale_doc_name_pending_if_safe(
         clear_pending(session)
 
 
-def restore_pending_from_last_clarify(session: ChatSession) -> dict[str, Any] | None:
+def restore_pending_from_last_clarify(session: ChatSession) -> ClarifyPending | None:
     """pending 被误清时，用 last_intent_clarify 快照恢复，避免点选直接报过期。"""
     if get_pending(session):
         return get_pending(session)
@@ -118,7 +122,7 @@ def restore_pending_from_last_clarify(session: ChatSession) -> dict[str, Any] | 
         "ask_count": 0,
     }
     session.freeform = {**(session.freeform or {}), FREEFORM_KEY: pending}
-    return pending
+    return ClarifyPending.parse(pending)
 
 
 def message_skips_clarify(
@@ -195,39 +199,40 @@ def begin_clarify(
                 "slots": dict(item.get("slots") or {}),
             }
         )
-    pending = {
-        "id": f"ic_{secrets.token_hex(4)}",
-        "source": (source or "control").strip() or "control",
-        "question": (question or "").strip() or "我没太把握准，你帮我选一下？",
-        "options": clean_opts,
-        "candidate": dict(candidate or {}),
-        "slots": {},
-        "phase_hint": (phase_hint or "").strip(),
-        "ask_count": 0,
-    }
+    pending = ClarifyPending(
+        id=f"ic_{secrets.token_hex(4)}",
+        source=(source or "control").strip() or "control",
+        question=(question or "").strip() or "我没太把握准，你帮我选一下？",
+        options=clean_opts,
+        candidate=dict(candidate or {}),
+        slots={},
+        phase_hint=(phase_hint or "").strip(),
+        ask_count=0,
+    )
+    stored = pending.to_dict()
     # 快照供过期后重新挂起（点选旧 clarify_id 时）
     session.freeform = {
         **(session.freeform or {}),
-        FREEFORM_KEY: pending,
+        FREEFORM_KEY: stored,
         "last_intent_clarify": {
-            "source": pending["source"],
-            "question": pending["question"],
+            "source": pending.source,
+            "question": pending.question,
             "options": clean_opts,
             "candidate": dict(candidate or {}),
-            "phase_hint": pending["phase_hint"],
+            "phase_hint": pending.phase_hint,
         },
     }
     card = ChatCard(
         type="intent_clarify",
         title="请帮我确认一下",
         payload={
-            "clarify_id": pending["id"],
-            "question": pending["question"],
+            "clarify_id": pending.id,
+            "question": pending.question,
             "options": clean_opts,
-            "source": pending["source"],
+            "source": pending.source,
         },
     )
-    return pending["question"], [card]
+    return pending.question, [card]
 
 
 def rehang_last_clarify(session: ChatSession) -> tuple[str, list[ChatCard]] | None:
@@ -874,7 +879,7 @@ def _attach_residual(spec: dict[str, Any], residual: str) -> dict[str, Any]:
 
 
 def _apply_freeform_clarify_title(
-    pending: dict[str, Any],
+    pending: ClarifyPending | dict[str, Any],
     *,
     source: str,
     title: str,
@@ -897,16 +902,17 @@ def _apply_freeform_clarify_title(
 
 def _bump_clarify_ask(
     session: ChatSession,
-    pending: dict[str, Any],
+    pending: ClarifyPending | dict[str, Any],
     *,
     follow: str = "",
 ) -> str:
-    ask_count = int(pending.get("ask_count") or 0)
-    pending["ask_count"] = ask_count + 1
-    session.freeform = {**(session.freeform or {}), FREEFORM_KEY: pending}
+    data = pending.to_dict() if isinstance(pending, ClarifyPending) else dict(pending or {})
+    ask_count = int(data.get("ask_count") or 0)
+    data["ask_count"] = ask_count + 1
+    session.freeform = {**(session.freeform or {}), FREEFORM_KEY: data}
     if follow:
         return follow
-    options = list(pending.get("options") or [])
+    options = list(data.get("options") or [])
     labels = [str(o.get("label") or "") for o in options[:3] if str(o.get("label") or "")]
     if labels:
         return (
@@ -3310,7 +3316,7 @@ def execute_clarify_spec(
         or spec.get("source")
         or ""
     ).strip()
-    payload = dict(candidate.get("payload") or {})
+    payload = ChatActionPayload.parse(candidate.get("payload"))
 
     reply = ""
     cards: list[ChatCard] = []

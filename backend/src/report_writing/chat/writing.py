@@ -22,6 +22,7 @@ from report_writing.controller import (
 from report_writing.domain.models import (
     ChapterStatus,
     ChatActionPayload,
+    ChatPayload,
     ChatCard,
     ChatMessage,
     ChatPhase,
@@ -462,7 +463,7 @@ def _writing_chapter_keys(task: WritingTask) -> list[str]:
     return [k for k in base if k in scope_set]
 
 
-def _apply_chapter_config(task: WritingTask, chapter_key: str, payload: ChatActionPayload | dict | None, *, model=None) -> None:
+def _apply_chapter_config(task: WritingTask, chapter_key: str, payload: ChatPayload, *, model=None) -> None:
     from report_writing.domain.models import ChatActionPayload
 
     payload = ChatActionPayload.parse(payload)
@@ -606,7 +607,7 @@ def _apply_chapter_config(task: WritingTask, chapter_key: str, payload: ChatActi
     sync_structure_only_chapter_status(task)
 
 
-def _apply_add_chapter_element(task: WritingTask, chapter_key: str, payload: ChatActionPayload | dict | None):
+def _apply_add_chapter_element(task: WritingTask, chapter_key: str, payload: ChatPayload):
     """为本章新增要素节点并建立关联（不落库，由调用方 save）。"""
     from report_writing.domain.models import ChatActionPayload
 
@@ -723,7 +724,7 @@ def _link_new_element_to_chapter_points(
     task: WritingTask,
     node: Any,
     element: Any,
-    payload: ChatActionPayload | dict | None,
+    payload: ChatPayload,
 ) -> None:
     """新增要素后：写入章 element_ids 并回写 point_items 行关联。"""
     from report_writing.domain.models import ChatActionPayload

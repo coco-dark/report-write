@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from report_writing.chat.wizard_state import wizard_step_index
+from report_writing.domain.models import ChatActionPayload, ChatPayload
 
 _STEP_ALIASES: dict[str, str] = {
     "upload_done": "outline",
@@ -112,9 +113,10 @@ def idempotent_transition_reply(
 
 def should_skip_redundant_wizard_card(
     session_wizard: dict[str, Any],
-    card_payload: dict[str, Any],
+    card_payload: ChatPayload,
 ) -> bool:
     """新卡片不落后于会话真值且无一过性 trigger 时，不必再插一张向导卡。"""
+    card_payload = ChatActionPayload.parse(card_payload)
     if not card_payload:
         return False
     chapters = card_payload.get("chapters")

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from report_writing.domain.models import ChatActionPayload
+from report_writing.domain.models import ChatActionPayload, ChatPayload
 
 # tool 名 → 口语化过程说明（会出现在对话过程条）
 USER_TOOL_HINTS: dict[str, str] = {
@@ -88,7 +88,7 @@ def emit_tool_done(emit: Any, tool_name: str) -> None:
         emit_user_process(emit, hint)
 
 
-def emit_action_process(emit: Any, action: str, payload: ChatActionPayload | dict | None = None) -> None:
+def emit_action_process(emit: Any, action: str, payload: ChatPayload = None) -> None:
     """预路由 / UI action 过程条：禁止暴露 snake_case 工具名。"""
     key = (action or "").strip()
     from report_writing.domain.models import action_payload_dict

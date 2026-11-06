@@ -22,6 +22,7 @@ from report_writing.controller import (
 from report_writing.domain.models import (
     ChapterStatus,
     ChatActionPayload,
+    ChatPayload,
     ChatCard,
     ChatMessage,
     ChatPhase,
@@ -187,7 +188,7 @@ _WIZARD_COMMAND_USER_LABELS = {
 }
 
 
-def blueprint_wizard_user_label(payload: ChatActionPayload | dict | None) -> str:
+def blueprint_wizard_user_label(payload: ChatPayload) -> str:
     data = action_payload_dict(payload)
     command = str(data.get("wizard_command") or "").strip()
     if command and command in _WIZARD_COMMAND_USER_LABELS:
@@ -228,7 +229,7 @@ _TASK_STATUS_LABEL = {
 }
 
 
-def _user_action_label(action: str, payload: ChatActionPayload | dict | None = None) -> str:
+def _user_action_label(action: str, payload: ChatPayload = None) -> str:
     key = (action or "").strip()
     label = _ACTION_USER_LABELS.get(key, "继续")
     payload = ChatActionPayload.parse(payload)

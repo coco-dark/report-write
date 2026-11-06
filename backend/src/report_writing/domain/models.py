@@ -7,7 +7,7 @@ from collections.abc import Iterator, Mapping
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_serializer, field_validator
 
 
 class ChapterStatus(str, Enum):
@@ -856,6 +856,16 @@ class ChatActionPayload(Entity, Mapping[str, Any]):
     document_title: str = ""
     doc_title: str = ""
     target_document: str = ""
+    action: str = ""
+    target: str = ""
+    options: list[Any] = Field(default_factory=list)
+    question: str = ""
+    source: str = ""
+    mode: str = ""
+    count: int = 0
+    steps: list[Any] = Field(default_factory=list)
+    confirmed_create: bool = False
+    from_entry_path: bool = False
 
     @classmethod
     def parse(cls, raw: Any = None) -> ChatActionPayload:
@@ -967,6 +977,124 @@ def action_payload_dict(payload: Any = None) -> dict[str, Any]:
 ChatPayload = ChatActionPayload | dict[str, Any] | None
 
 
+class ClarifyOption(Entity):
+    """澄清卡上的一个选项。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str = ""
+    label: str = ""
+    slots: dict[str, Any] = Field(default_factory=dict)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        extra = self.model_extra or {}
+        if key in extra:
+            return extra[key]
+        if key in type(self).model_fields:
+            return getattr(self, key)
+        return default
+
+
+class ClarifyCandidate(Entity):
+    """澄清点选后要执行的候选 Tool。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    kind: str = ""
+    name: str = ""
+    command: str = ""
+    tool: str = ""
+    payload: ChatActionPayload = Field(default_factory=ChatActionPayload)
+
+    @field_validator("payload", mode="before")
+    @classmethod
+    def _coerce_payload(cls, value: Any) -> ChatActionPayload:
+        return ChatActionPayload.parse(value)
+
+    @field_serializer("payload")
+    def _dump_payload(self, value: ChatActionPayload) -> dict[str, Any]:
+        if isinstance(value, ChatActionPayload):
+            return value.as_dict()
+        return dict(value or {})
+
+    def get(self, key: str, default: Any = None) -> Any:
+        extra = self.model_extra or {}
+        if key in extra:
+            return extra[key]
+        if key in type(self).model_fields:
+            value = getattr(self, key)
+            if key == "payload" and isinstance(value, ChatActionPayload):
+                return value.as_dict()
+            return value
+        return default
+
+
+class ClarifyPending(Entity, Mapping[str, Any]):
+    """会话挂起的澄清卡（session.freeform.intent_clarify）。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str = ""
+    source: str = ""
+    question: str = ""
+    options: list[ClarifyOption] = Field(default_factory=list)
+    candidate: ClarifyCandidate = Field(default_factory=ClarifyCandidate)
+    slots: dict[str, Any] = Field(default_factory=dict)
+    phase_hint: str = ""
+    ask_count: int = 0
+
+    @field_validator("options", mode="before")
+    @classmethod
+    def _coerce_options(cls, value: Any) -> list:
+        if not value:
+            return []
+        rows = []
+        for item in value:
+            if isinstance(item, ClarifyOption):
+                rows.append(item)
+            elif isinstance(item, dict):
+                rows.append(ClarifyOption.model_validate(item))
+        return rows
+
+    @field_validator("candidate", mode="before")
+    @classmethod
+    def _coerce_candidate(cls, value: Any) -> ClarifyCandidate:
+        if isinstance(value, ClarifyCandidate):
+            return value
+        return ClarifyCandidate.model_validate(value or {})
+
+    @classmethod
+    def parse(cls, raw: Any = None) -> ClarifyPending | None:
+        if isinstance(raw, cls):
+            return raw
+        if not raw:
+            return None
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except json.JSONDecodeError:
+                return None
+        if not isinstance(raw, dict) or not str(raw.get("id") or "").strip():
+            return None
+        return cls.model_validate(raw)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        data = self.to_dict()
+        return data.get(key, default)
+
+    def __getitem__(self, key: str) -> Any:
+        data = self.to_dict()
+        if key in data:
+            return data[key]
+        raise KeyError(key)
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.to_dict())
+
+    def __len__(self) -> int:
+        return len(self.to_dict())
+
+
 class ChatPhase(str, Enum):
     INTENT = "intent"
     BLUEPRINT_SELECT = "blueprint_select"
@@ -986,7 +1114,18 @@ class ChatCard(Entity):
     used: bool = False
     type: str = ""
     title: str = ""
-    payload: dict[str, Any] = Field(default_factory=dict)
+    payload: ChatActionPayload = Field(default_factory=ChatActionPayload)
+
+    @field_validator("payload", mode="before")
+    @classmethod
+    def _coerce_payload(cls, value: Any) -> ChatActionPayload:
+        return ChatActionPayload.parse(value)
+
+    @field_serializer("payload")
+    def _dump_payload(self, value: ChatActionPayload) -> dict[str, Any]:
+        if isinstance(value, ChatActionPayload):
+            return value.as_dict()
+        return dict(value or {})
 
 
 class ChatMessage(Entity):

@@ -364,7 +364,7 @@ def execute_dispatch_tool(
             emit=emit,
             writing_pace=pace,
             chapter_keys=keys,
-            payload=dict(args or {}),
+            payload=ChatActionPayload.parse(args),
             invoke=invoke,
         )
         return reply, list(cards or []), list(events or [])
@@ -885,7 +885,7 @@ def execute_dispatch_tool(
         )
         from report_writing.chat.session_goal_actions import run_session_goal_action
 
-        body = dict(args or {})
+        body = ChatActionPayload.parse(args).as_dict()
         # 空 message 时带上原话便于日志；title 必须由分类器/ReAct 结构化传入，不用改名正则剥
         # submit_freeform_meta → 与 set_session_meta 同路径（无蓝本定题）
         action = "set_session_meta" if name == "submit_freeform_meta" else name
@@ -928,7 +928,7 @@ def execute_dispatch_tool(
     if name == "save_freeform_as_blueprint":
         from report_writing.chat.actions import _action_save_freeform_as_blueprint
 
-        body = dict(args or {})
+        body = ChatActionPayload.parse(args).as_dict()
         if not str(body.get("task_id") or "").strip():
             body["task_id"] = str(session.task_id or "").strip()
         reply, cards = _action_save_freeform_as_blueprint(home, session, body)
@@ -937,7 +937,7 @@ def execute_dispatch_tool(
     if name == "sync_document_to_blueprint_library":
         from report_writing.chat.actions import _action_sync_document_to_blueprint_library
 
-        body = dict(args or {})
+        body = ChatActionPayload.parse(args).as_dict()
         if not str(body.get("task_id") or "").strip():
             body["task_id"] = str(session.task_id or "").strip()
         reply, cards = _action_sync_document_to_blueprint_library(home, session, body)
@@ -946,7 +946,7 @@ def execute_dispatch_tool(
     if name == "confirm_chapter":
         from report_writing.chat.actions import _action_confirm_chapter
 
-        body = dict(args or {})
+        body = ChatActionPayload.parse(args).as_dict()
         if not str(body.get("task_id") or "").strip():
             body["task_id"] = str(session.task_id or "").strip()
         reply, cards, events = _action_confirm_chapter(home, session, body, emit=emit)
