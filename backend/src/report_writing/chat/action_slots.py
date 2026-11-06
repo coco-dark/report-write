@@ -401,7 +401,7 @@ def try_resolve_action_slot_message(
     base_payload = dict(candidate.get("payload") or {})
 
     if task is not None:
-        from report_writing.chat.intent_chapter import resolve_chapter_key_from_message
+        from report_writing.chat.chapter_resolve import resolve_chapter_key_from_message
 
         key = resolve_chapter_key_from_message(task, text)
         if key:

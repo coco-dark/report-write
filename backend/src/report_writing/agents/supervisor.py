@@ -6,11 +6,13 @@ import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Annotated
 
 from langchain.agents import create_agent
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage
-from langchain_core.tools import tool
+from langchain.tools import tool
+from pydantic import Field
 
 from report_writing.agents.check import run_check
 from report_writing.agents.scripted import ScriptedChatModel, human_payload, tool_payloads
@@ -35,16 +37,9 @@ from report_writing.services.store import BriefCache
 
 _log = logging.getLogger("uvicorn.error")
 
-INSTRUCTIONS = """你是报告书写总控。你不检索、不写正文、不检查，只通过工具管理四个专员。
-phase=study：只调用一次 call_study，然后用一句话结束，等待人工确认学习结果。
-phase=write：学习结果已经确认。按给出的章节顺序，对每一章调用 call_search。
-检索无采纳证据时仍调用 call_write（按要点由模型撰写一般性表述），再 call_check。
-仅当 call_search 返回 skipped=true（如纯目录节点）时跳过编写。
-检查结果为 revise 时再次 call_write 和 call_check。结果为 accept 或 needs_human 时进入下一章。
-phase=revise：不要检索。对指定章节调用 call_write，再调用 call_check。
-phase=search：只对给出的每一章调用 call_search，不要 call_write 或 call_check。
-phase=full：先 call_study，再按 phase=write 的方式处理学习到的每一章。
-全部章节处理完后用一句话结束，不要再调用工具。"""
+INSTRUCTIONS = """你是按章写作流水线总控。自己不检索、不写正文、不检查，只调度已绑定的专员。
+何时调用、当前 phase 禁忌见各 Tool description。
+按 user 消息里的 phase 与章节顺序推进；一章检索→写作→检查完成后再下一章。全部完成后用一句话结束，不要闲聊。"""
 
 
 class SupervisorScriptModel(ScriptedChatModel):
@@ -377,9 +372,14 @@ def run_supervisor(
                 return item
         raise KeyError(key)
 
-    @tool
+    @tool(
+        "call_study",
+        description=(
+            "何时：phase 为 study 或 full，且尚未确认学习结果。调用一次学习专员分析样板并保存书写要求，然后结束等待人工确认。"
+            "不要：用写作专员代替分析；学习已确认不要再调。full 时先本工具，再按章检索写作。"
+        ),
+    )
     def call_study() -> str:
-        """调用学习专员，分析模版并保存学习结果。"""
         if phase not in {"study", "full"}:
             return json.dumps({"error": "学习结果已确认，不要重新学习"}, ensure_ascii=False)
         emit("study", "running", title="分析样板")
@@ -411,9 +411,15 @@ def run_supervisor(
         emit("study", "done", title="分析样板", payload=payload)
         return json.dumps(payload, ensure_ascii=False)
 
-    @tool
-    def call_search(key: str) -> str:
-        """按该章学习要点检索资料，并评级采纳。"""
+    @tool(
+        "call_search",
+        description=(
+            "何时：学习已确认后、写作前，按章节顺序检索并评级采纳。phase=search 只调本工具。"
+            "缺了：用当前要检索的章节 key，不要猜。"
+            "不要：未学习时调用。skipped=true 时跳过本章编写；无采纳证据仍接着写。"
+        ),
+    )
+    def call_search(key: Annotated[str, Field(description="必填。章节 key。")]) -> str:
         if phase == "study" or result.brief is None:
             return json.dumps({"key": key, "error": "尚未确认学习结果"}, ensure_ascii=False)
         chapter = find(key)
@@ -429,9 +435,15 @@ def run_supervisor(
         )
         return json.dumps(payload, ensure_ascii=False)
 
-    @tool
-    def call_write(key: str) -> str:
-        """根据该章已采纳证据编写正文。"""
+    @tool(
+        "call_write",
+        description=(
+            "何时：phase 为 write/full/revise，且已有学习结果，根据该章已采纳证据写正文。"
+            "缺了：用当前要写的章节 key。"
+            "不要：仅检索阶段或未学习时调用。revise 不要检索，写完立刻检查。"
+        ),
+    )
+    def call_write(key: Annotated[str, Field(description="必填。章节 key。")]) -> str:
         if phase == "search":
             return json.dumps({"key": key, "error": "当前为仅检索阶段，不要写作"}, ensure_ascii=False)
         if result.brief is None:
@@ -480,9 +492,15 @@ def run_supervisor(
         chapter.status = ChapterStatus.CHECKING
         return json.dumps({"key": key, "paragraphs": paragraphs}, ensure_ascii=False)
 
-    @tool
-    def call_check(key: str) -> str:
-        """检查该章文字、引用和要点覆盖。"""
+    @tool(
+        "call_check",
+        description=(
+            "何时：该章已有草稿，检查引用、要点覆盖与边界。通过或缺人工后进入下一章。"
+            "缺了：用当前要检查的章节 key。"
+            "不要：仅检索阶段调用。"
+        ),
+    )
+    def call_check(key: Annotated[str, Field(description="必填。章节 key。")]) -> str:
         if phase == "search":
             return json.dumps({"key": key, "error": "当前为仅检索阶段，不要检查"}, ensure_ascii=False)
         if result.brief is None or find(key).draft is None:

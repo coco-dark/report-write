@@ -67,8 +67,8 @@ def _classify_hit(
     session: ChatSession | None = None,
     invoke: InvokeFn | None,
 ) -> dict:
-    from report_writing.chat.intent_context import pack_classifier_context
-    from report_writing.chat.intent_llm import classify_freeform_action_llm
+    from report_writing.chat.classifier_context import pack_classifier_context
+    from report_writing.chat.clarify_llm import classify_freeform_action_llm
 
     ctx = pack_classifier_context(session) if session is not None else {}
     return classify_freeform_action_llm(

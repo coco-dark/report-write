@@ -5,13 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from report_writing.chat.agent_chain_log import session_invoked_tools
-from report_writing.chat.intent_router import (
+from report_writing.chat.session_state import (
     WRITING_PATH_BLUEPRINT,
     WRITING_PATH_FREEFORM,
     get_writing_path,
     user_chose_skip_blueprint,
 )
-from report_writing.chat_orchestrator import handle_chat
+from report_writing.chat import handle_chat
 from report_writing.controller import ensure_task
 from report_writing.domain.models import ChatPhase, ChatRequest, OutlineNode, OutlineTree
 from report_writing.services.chat_session import load_or_create

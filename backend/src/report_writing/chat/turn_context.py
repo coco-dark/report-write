@@ -90,7 +90,7 @@ def build_writing_turn_context(
         return ctx
 
     from report_writing.chat.helpers import _load_task
-    from report_writing.chat.intent_chapter import pick_focus_chapter_key_extended
+    from report_writing.chat.chapter_resolve import pick_focus_chapter_key_extended
 
     task = _load_task(home, tid)
     if task is None:

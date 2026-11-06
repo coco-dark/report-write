@@ -10,7 +10,7 @@ from langchain_core.messages import HumanMessage
 from report_writing.agents.state import ChatControlState
 from report_writing.agents.subagents.blueprint_wizard_impl import _make_wizard_scripted_model
 from report_writing.domain.models import ChatPhase, ChatSession
-from report_writing.chat.intent_llm import resolve_wizard_action
+from report_writing.chat.clarify_llm import resolve_wizard_action
 
 
 def test_resolve_wizard_action_noop_without_active_wizard():

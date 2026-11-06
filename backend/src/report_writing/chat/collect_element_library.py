@@ -45,7 +45,7 @@ def resolve_collect_element_name(
         return ""
     if invoke is not None:
         try:
-            from report_writing.chat.intent_llm import extract_collect_element_name_llm
+            from report_writing.chat.clarify_llm import extract_collect_element_name_llm
 
             hit = extract_collect_element_name_llm(
                 text,

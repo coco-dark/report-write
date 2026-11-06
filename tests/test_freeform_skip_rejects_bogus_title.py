@@ -100,7 +100,7 @@ def test_skip_blueprint_tool_suggests_set_session_meta(tmp_path: Path):
     tools = {t.name: t for t in build_chat_tools(state)}
     data = json.loads(tools["skip_blueprint"].invoke({}))
     assert data.get("ok") is True
-    assert data.get("suggested_next_tool") == "set_session_meta"
+    assert "suggested_next_tool" not in data
     assert data.get("needs_doc_name") is True
     assert "目录我先帮你搭" not in str(data.get("reply_hint") or "")
 
@@ -127,5 +127,5 @@ def test_skip_blueprint_named_auto_outline_suggests_submit_outline(tmp_path: Pat
     )
     tools = {t.name: t for t in build_chat_tools(state)}
     data = json.loads(tools["skip_blueprint"].invoke({"path_setup_only": True}))
-    assert data.get("suggested_next_tool") == "submit_outline"
+    assert "suggested_next_tool" not in data
     assert data.get("needs_doc_name") is False

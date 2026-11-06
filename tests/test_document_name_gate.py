@@ -366,17 +366,16 @@ def test_write_subject_asks_name_without_asserting_done(tmp_path: Path):
 
 def test_hang_missing_name_does_not_also_hang_entry_path(tmp_path: Path):
     """写意图有工作名时不得再挂定名卡；选路可另轮，禁止同轮双挂。"""
-    from report_writing.chat.intent_turn_plan import hang_missing_slots
     from report_writing.chat.session_documents import focus_working_title
 
     (tmp_path / "tasks").mkdir(parents=True)
     session = ChatSession(id="s_hang_once", phase=ChatPhase.INTENT.value)
-    reply, cards = hang_missing_slots(
+    reply, cards = build_entry_path_clarify(
         session,
-        missing=["doc_name", "writing_path"],
         message="帮我写一份关于建设智能文档的必要性",
         title_hint="关于建设智能文档的必要性",
         home=tmp_path,
+        invoke=None,
     )
     assert "先给这份文档起个名字" not in (reply or "")
     sources = {

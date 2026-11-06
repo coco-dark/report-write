@@ -53,10 +53,10 @@ def _make_chat_stream_model(model):
 
 
 def _chat_models():
-    from report_writing.infra.llm import live_control_model, live_intent_model, live_model
+    from report_writing.infra.llm import live_control_model, live_clarify_model, live_model
 
     chat_model = live_model()
-    return chat_model, live_control_model(), live_intent_model()
+    return chat_model, live_control_model(), live_clarify_model()
 
 
 @router.post("/api/writing/chat", response_model=ChatResponse)
@@ -64,14 +64,14 @@ def post_chat(body: ChatRequest) -> ChatResponse:
     from report_writing.services.robots import chat as robot_chat
 
     try:
-        chat_model, control_model, intent_model = _chat_models()
+        chat_model, control_model, clarify_model = _chat_models()
         return robot_chat(
             task_root(),
             body,
             invoke=lambda system, user: chat_invoke(system, user, model=chat_model),
             model=control_model,
             chat_model=chat_model,
-            intent_model=intent_model,
+            clarify_model=clarify_model,
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -82,11 +82,11 @@ def post_chat(body: ChatRequest) -> ChatResponse:
 @router.post("/api/writing/chat/stream")
 def post_chat_stream(body: ChatRequest) -> StreamingResponse:
     """对话 SSE：token 打字机 + process/step 执行过程 + done 终态。"""
-    from report_writing.chat_orchestrator import handle_chat
+    from report_writing.chat import handle_chat
 
     def worker(emit) -> None:
         try:
-            chat_model, control_model, intent_model = _chat_models()
+            chat_model, control_model, clarify_model = _chat_models()
             handle_chat(
                 task_root(),
                 body,
@@ -95,7 +95,7 @@ def post_chat_stream(body: ChatRequest) -> StreamingResponse:
                 stream_model=_make_chat_stream_model(chat_model),
                 model=control_model,
                 chat_model=chat_model,
-                intent_model=intent_model,
+                clarify_model=clarify_model,
             )
         except ValueError as error:
             emit({"type": "error", "detail": str(error)})

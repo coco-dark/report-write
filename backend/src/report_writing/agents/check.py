@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Annotated
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage
-from langchain_core.tools import tool
+from langchain.tools import tool
+from pydantic import Field
 
 from report_writing.agents.react import run_react, tool_result
 from report_writing.agents.scripted import ScriptedChatModel, tool_payloads
@@ -22,9 +24,9 @@ from report_writing.domain.models import (
 )
 from report_writing.domain.rating import _NUMBER
 
-INSTRUCTIONS = """你是报告检查员。先调用 verify，再根据结果选择 accept、revise 或 needs_human。
-不要检索，不要重写正文。
-revise 的 comments 含 index 和 message。needs_human 要给出 reason。
+INSTRUCTIONS = """你是报告检查员。先核对草稿，再根据 findings 选择通过、退回改写或交人工。
+不要检索，不要自己重写正文。
+退回改写时 comments 含段落 index 和 message；交人工必须给 reason。
 
 若 user 中 knowledge_fallback 为 true：表示本章无知识库采纳证据、已按要点写骨架正文。
 此时只要 paragraphs 非空且对 points 有结构性覆盖，应 prefer accept（或 revise 润色），
@@ -66,22 +68,39 @@ def run_check(
     if getattr(requirement, "fixed_output", False):
         return CheckResult(action=CheckAction.ACCEPT, reason="固定内容输出，跳过事实核对")
 
-    @tool
+    @tool(
+        "verify",
+        description=(
+            "何时：每轮检查必须先核对草稿，对照要点、引用和边界生成 findings。"
+            "不要：用 accept/revise/needs_human 代替本工具。"
+        ),
+    )
     def verify() -> str:
-        """对照书写要求和已采纳证据检查当前草稿。"""
         return json.dumps(
             {"findings": inspect_draft(requirement, evidence, draft, knowledge_fallback=knowledge_fallback)},
             ensure_ascii=False,
         )
 
-    @tool
+    @tool(
+        "accept",
+        description=(
+            "何时：verify 之后 findings 无可改问题，通过本章。"
+            "不要：未 verify 时调用；有 uncovered/coverage 用 needs_human；有段落意见用 revise。"
+        ),
+    )
     def accept() -> str:
-        """文字、覆盖和引用均通过。"""
         return json.dumps(CheckResult(action=CheckAction.ACCEPT).to_dict(), ensure_ascii=False)
 
-    @tool
-    def revise(comments: list[dict]) -> str:
-        """把可修改的问题退回写作。comments 含段落序号和意见。"""
+    @tool(
+        "revise",
+        description=(
+            "何时：verify 之后有可改段落问题，退回写作。"
+            "不要：用 accept 代替；无法自动改的用 needs_human。"
+        ),
+    )
+    def revise(
+        comments: Annotated[list[dict], Field(description="必填。每项含段落 index 与 message。")],
+    ) -> str:
         if revision_count >= MAX_REVISIONS:
             result = CheckResult(action=CheckAction.NEEDS_HUMAN, reason="退回次数已达上限")
             return json.dumps(result.to_dict(), ensure_ascii=False)
@@ -91,9 +110,14 @@ def run_check(
         ]
         return json.dumps(CheckResult(action=CheckAction.REVISE, comments=stored).to_dict(), ensure_ascii=False)
 
-    @tool
-    def needs_human(reason: str) -> str:
-        """证据不足、要点无法覆盖或存在无法自动修改的问题。"""
+    @tool(
+        "needs_human",
+        description=(
+            "何时：verify 之后存在无法自动修改的问题（正文空、要点未覆盖等），交人工。"
+            "不要：knowledge_fallback 为 true 时因缺专名/数值调用；可改段落用 revise。"
+        ),
+    )
+    def needs_human(reason: Annotated[str, Field(description="必填。交人工的原因。")]) -> str:
         return json.dumps(CheckResult(action=CheckAction.NEEDS_HUMAN, reason=reason).to_dict(), ensure_ascii=False)
 
     chosen = model or CheckScriptModel()

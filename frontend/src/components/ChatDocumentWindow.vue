@@ -1218,15 +1218,16 @@ const blockingLoad = computed(
 const tabControlsDisabled = computed(
   () => loading.value || saving.value || isClosing.value || Boolean(props.busy)
 );
-/** 分析/写作/配置进行中：禁止切换其它文档 */
-const docSwitchBlocked = computed(
-  () =>
-    Boolean(props.opsLocked) ||
-    loading.value ||
-    saving.value ||
-    isClosing.value ||
-    Boolean(props.busy)
-);
+/** 写作/保存/加载中禁止切文档；分析中允许切到另一份（分析在后台继续） */
+const docSwitchBlocked = computed(() => {
+  if (loading.value || saving.value || isClosing.value || Boolean(props.busy)) return true;
+  if (props.opsLocked) {
+    const label = String(props.opsLockLabel || "").trim();
+    if (/写作|书写/.test(label)) return true;
+    return false;
+  }
+  return false;
+});
 const docSwitchBlockReason = computed(() => {
   if (saving.value) return "正在保存配置，请稍后再切换文档";
   if (props.opsLocked) {

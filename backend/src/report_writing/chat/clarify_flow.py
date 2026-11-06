@@ -144,7 +144,7 @@ def message_skips_clarify(
         return False
     if invoke is not None:
         try:
-            from report_writing.chat.intent_context import pack_classifier_context
+            from report_writing.chat.classifier_context import pack_classifier_context
             from report_writing.chat.clarify_llm import classify_doc_meta_line_llm
 
             ctx = pack_classifier_context(session) if session is not None else {}
@@ -961,7 +961,7 @@ def try_handle_pending_message(
     meta_title = text
     if invoke is not None and text:
         try:
-            from report_writing.chat.intent_context import pack_classifier_context
+            from report_writing.chat.classifier_context import pack_classifier_context
             from report_writing.chat.clarify_llm import classify_doc_meta_line_llm
 
             ctx = pack_classifier_context(session)
@@ -1036,7 +1036,7 @@ def try_handle_pending_message(
     # 4) 有模型：一律结合上下文分类（短语别名不抢先）
     judged: dict[str, Any] = {}
     if invoke is not None:
-        from report_writing.chat.intent_context import pack_classifier_context
+        from report_writing.chat.classifier_context import pack_classifier_context
         from report_writing.chat.clarify_llm import classify_clarify_reply_llm
 
         ctx = pack_classifier_context(session)
@@ -1405,7 +1405,7 @@ def build_ask_intent_clarify(
     )
 
     if message_requests_list_blueprints(text) and home is not None:
-        from report_writing.chat_orchestrator import _action_list_blueprints
+        from report_writing.chat import _action_list_blueprints
 
         return _action_list_blueprints(home, session, {"q": ""})
 
@@ -1493,18 +1493,18 @@ def build_ask_intent_clarify(
     judged: dict[str, Any] = {}
     if invoke is not None and not (question and options):
         from report_writing.chat.dialogue import format_full_dialogue
-        from report_writing.chat.clarify_llm import classify_unclear_intent_llm
-        from report_writing.chat.intent_router import active_blueprint_wizard
+        from report_writing.chat.clarify_llm import classify_unclear_chat_llm
+        from report_writing.chat.session_state import active_blueprint_wizard
         from report_writing.chat.react_speed import control_dialogue_max_turns
 
         wiz = dict(active_blueprint_wizard(session) or {})
-        from report_writing.chat.intent_context import pack_classifier_context
+        from report_writing.chat.classifier_context import pack_classifier_context
 
         ctx = pack_classifier_context(
             session, max_turns=control_dialogue_max_turns()
         )
         focus_bid = focus_bound_blueprint_id(session)
-        judged = classify_unclear_intent_llm(
+        judged = classify_unclear_chat_llm(
             text,
             phase=str(ctx.get("phase") or session.phase or ""),
             blueprint_id=str(
@@ -2351,7 +2351,7 @@ def dispatch_suggested_onboarding_tools(
         return None
     from report_writing.chat.helpers import _emit_process
     from report_writing.chat.tool_dispatch import execute_dispatch_tool
-    from report_writing.chat.intent_router import user_chose_skip_blueprint
+    from report_writing.chat.session_state import user_chose_skip_blueprint
     from report_writing.chat.session_documents import focus_onboarding, peek_pending_entry, session_blueprint_already_selected
 
     probe = (message or "").strip()
@@ -2572,7 +2572,7 @@ def build_entry_path_clarify(
         explicit = ""
         residual_from_name = ""
         if invoke is not None and msg:
-            from report_writing.chat.intent_context import pack_classifier_context
+            from report_writing.chat.classifier_context import pack_classifier_context
             from report_writing.chat.clarify_llm import (
                 classify_explicit_doc_name_given_llm,
                 extract_write_subject_title_llm,
@@ -2668,7 +2668,7 @@ def build_entry_path_clarify(
         prepare_observed_onboarding,
     )
 
-    # 生产路径禁止 apply_turn_plan。apply_plan=True 仅遗留链式 suggested 观察，不跑 JSON 计划。
+    # 生产路径不跑整轮 JSON 工具计划。apply_plan=True 仅链式 suggested 观察。
 
     prepare_observed_onboarding(
         session,
@@ -3028,7 +3028,7 @@ def _clear_entry_tool_from_message(
     except Exception:
         pass
     try:
-        from report_writing.chat.intent_context import pack_classifier_context
+        from report_writing.chat.classifier_context import pack_classifier_context
         from report_writing.chat.clarify_llm import classify_entry_routing_llm
 
         ctx = pack_classifier_context(session) if session is not None else {}
@@ -3367,7 +3367,7 @@ def execute_clarify_spec(
         pending = peek_pending_entry(session)
         cat = category or str((session.freeform or {}).get("category") or "").strip()
         residual = str(slots.get("residual_message") or "").strip()
-        from report_writing.chat.intent_router import user_chose_skip_blueprint
+        from report_writing.chat.session_state import user_chose_skip_blueprint
         from report_writing.chat.session_documents import (
             _titles_conflict,
             clean_document_display_title,
@@ -3463,7 +3463,7 @@ def execute_clarify_spec(
 
             stash_focus_preferred_entry_path(session, path_ep, residual=residual)
         # 定名刚成功：走入口引导（after_doc_name_confirm），禁止再用原「写一份…」句
-        # 跑 apply_turn_plan / force_new，否则会清掉 named、或 focus_document 切回上一份文档。
+        # 勿用「写一份…」原句再跑 force_new，否则会清掉 named、或 focus_document 切回上一份文档。
         cards: list[ChatCard] = []
         events: list[dict[str, Any]] = []
         reply2, cards = build_entry_path_clarify(
@@ -3597,7 +3597,7 @@ def execute_clarify_spec(
         decision = str(slots.get("writing_decision") or name or "").strip()
         # approve / revise / skip → confirm_chapter
         from report_writing.domain.models import HumanDecision
-        from report_writing.chat_orchestrator import _action_confirm_chapter
+        from report_writing.chat import _action_confirm_chapter
 
         mapping = {
             "approve": HumanDecision.APPROVE.value,
@@ -3616,29 +3616,6 @@ def execute_clarify_spec(
                 "task_id": payload.get("task_id") or session.task_id,
             },
         )
-    elif kind == "intent_plan":
-        confirm = str(slots.get("confirm_plan") or "").strip().lower()
-        if confirm in {"no", "rephrase", "false", "0"}:
-            reply = "好的，你再用自己的话说明一下想先做哪一步就行。"
-            cards = []
-        else:
-            from report_writing.chat.tool_dispatch import execute_intent_plan
-
-            plan = list(candidate.get("plan") or [])
-            plan_msg = str(payload.get("message") or message or "").strip()
-            _emit_process(emit, "好，按你确认的顺序依次办理…")
-            hit = execute_intent_plan(
-                home,
-                session,
-                plan,
-                plan_msg,
-                emit=emit,
-                invoke=invoke,
-            )
-            if hit is None:
-                reply = "好的，你再说一下想怎么做就行。"
-            else:
-                reply, cards, _events = hit
     elif kind == "control_tool":
         source = str(spec.get("source") or "")
         if source != "action_slots":

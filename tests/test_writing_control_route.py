@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from report_writing.chat.intent_llm import classify_writing_control_llm
+from report_writing.chat.clarify_llm import classify_writing_control_llm
 from report_writing.chat.writing_control_route import apply_writing_control_classification
 from report_writing.domain.models import ChatPhase, ChatSession, OutlineNode, OutlineTree, WritingTask
 from report_writing.services.store import TaskStore
@@ -120,7 +120,7 @@ def test_suggest_other_writing_control_tool_skips_expected():
             session,
             "加个个人信息要素",
             expected_tool="add_chapter_element",
-            intent_invoke=invoke,
+            clarify_invoke=invoke,
         )
         is None
     )
@@ -129,7 +129,7 @@ def test_suggest_other_writing_control_tool_skips_expected():
         session,
         "加个个人信息要素",
         expected_tool="associate_elements",
-        intent_invoke=invoke,
+        clarify_invoke=invoke,
     )
     assert hop is not None
     assert hop.get("tool") == "add_chapter_element"

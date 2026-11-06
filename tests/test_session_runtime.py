@@ -7,6 +7,7 @@ from pathlib import Path
 from report_writing.chat.session_runtime import (
     WORKFLOW_BLUEPRINT,
     WORKFLOW_WRITING,
+    attach_turn_study_kick,
     migrate_legacy_freeform,
     reconcile_chat_session,
     runtime_public_view,
@@ -160,3 +161,29 @@ def test_derive_writing_workflow_in_runtime(tmp_path: Path):
     assert wf["active"] is True
     assert wf["pace"] == "batch"
     assert wf["chapter_keys"] == ["c1"]
+
+
+def test_public_runtime_strips_study_kick_done_event_keeps_it():
+    session = ChatSession(
+        id="cs_study_kick",
+        freeform={
+            "blueprint_wizard": {
+                "blueprint_id": "bp_k",
+                "working_task_id": "w_k",
+                "step": "study",
+                "study_method": "sample",
+                "trigger_chapter_study": ["c1.1"],
+                "chapter_study_keys": ["c1.1"],
+            }
+        },
+    )
+    view = runtime_public_view(session)
+    public = dict(view.get("blueprint_wizard") or {})
+    assert "trigger_chapter_study" not in public
+    assert "chapter_study_keys" not in public
+    live = dict((session.freeform or {}).get("blueprint_wizard") or {})
+    done = attach_turn_study_kick(public, live)
+    assert done["trigger_chapter_study"] == ["c1.1"]
+    assert done["chapter_study_keys"] == ["c1.1"]
+    assert done["working_task_id"] == "w_k"
+    assert done["step"] == "study"

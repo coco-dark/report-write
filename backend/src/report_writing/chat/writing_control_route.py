@@ -251,7 +251,7 @@ def _resolve_associate_chapter_key(
     payload: ChatPayload,
     task: Any,
 ) -> str:
-    from report_writing.chat.intent_chapter import _chapter_key_on_task
+    from report_writing.chat.chapter_resolve import _chapter_key_on_task
 
     payload = ChatActionPayload.parse(payload)
     raw = str(payload.get("chapter_key") or "").strip()
@@ -350,13 +350,13 @@ def classify_writing_message(
     message: str,
     *,
     invoke: Callable[[str, str], str] | None = None,
-    intent_invoke: Callable[[str, str], str] | None = None,
+    clarify_invoke: Callable[[str, str], str] | None = None,
 ) -> dict[str, Any]:
-    from report_writing.chat.intent_invoke import invoke_intent_llm
+    from report_writing.chat.clarify_invoke import invoke_clarify_llm
 
-    llm_invoke = intent_invoke or (lambda s, u: invoke_intent_llm(s, u, fallback=invoke))
+    llm_invoke = clarify_invoke or (lambda s, u: invoke_clarify_llm(s, u, fallback=invoke))
     meta, dialogue = _classification_context(home, session, message)
-    from report_writing.chat.intent_llm import classify_writing_control_llm
+    from report_writing.chat.clarify_llm import classify_writing_control_llm
     from report_writing.infra.llm_errors import is_rate_limit_error
 
     try:
@@ -386,7 +386,7 @@ def _resolve_chapter_key(
     """原话序号优先于模型 hint / 上一焦点，避免「2.2」被错绑到「1.5.6」。"""
     payload = ChatActionPayload.parse(payload)
     from report_writing.chat.helpers import _load_task
-    from report_writing.chat.intent_chapter import (
+    from report_writing.chat.chapter_resolve import (
         _chapter_key_on_task,
         message_has_chapter_sequence,
         pick_focus_chapter_key_extended,
@@ -499,7 +499,7 @@ def apply_writing_control_classification(
     if tool == "collect_to_element_library":
         from report_writing.chat.collect_element_library import collect_task_elements_to_library
         from report_writing.chat.helpers import _emit_process
-        from report_writing.chat.intent_invoke import invoke_intent_llm
+        from report_writing.chat.clarify_invoke import invoke_clarify_llm
         from report_writing.services.chat_session import save_session
 
         _emit_process(emit, "正在把本任务要素收入个人要素库…")
@@ -508,7 +508,7 @@ def apply_writing_control_classification(
             session,
             message,
             payload,
-            invoke=lambda s, u: invoke_intent_llm(s, u, fallback=None),
+            invoke=lambda s, u: invoke_clarify_llm(s, u, fallback=None),
         )
         try:
             save_session(home, session)
@@ -519,7 +519,7 @@ def apply_writing_control_classification(
     if tool == "dissociate_chapter_element":
         from report_writing.chat.element_document_actions import dissociate_chapter_element
         from report_writing.chat.helpers import _emit_process
-        from report_writing.chat.intent_invoke import invoke_intent_llm
+        from report_writing.chat.clarify_invoke import invoke_clarify_llm
         from report_writing.services.chat_session import save_session
 
         _emit_process(emit, "正在取消章节与要素的关联…")
@@ -528,7 +528,7 @@ def apply_writing_control_classification(
             session,
             message,
             payload,
-            invoke=lambda s, u: invoke_intent_llm(s, u, fallback=None),
+            invoke=lambda s, u: invoke_clarify_llm(s, u, fallback=None),
         )
         try:
             save_session(home, session)
@@ -539,7 +539,7 @@ def apply_writing_control_classification(
     if tool == "remove_document_element":
         from report_writing.chat.element_document_actions import remove_document_element
         from report_writing.chat.helpers import _emit_process
-        from report_writing.chat.intent_invoke import invoke_intent_llm
+        from report_writing.chat.clarify_invoke import invoke_clarify_llm
         from report_writing.services.chat_session import save_session
 
         _emit_process(emit, "正在从本文档移除要素…")
@@ -548,7 +548,7 @@ def apply_writing_control_classification(
             session,
             message,
             payload,
-            invoke=lambda s, u: invoke_intent_llm(s, u, fallback=None),
+            invoke=lambda s, u: invoke_clarify_llm(s, u, fallback=None),
         )
         try:
             save_session(home, session)
@@ -568,13 +568,13 @@ def apply_writing_control_classification(
         payload = merged
         # 分类器 payload 过瘦时用专用抽取模型补全（仍非正则意图）
         if not str(payload.get("name") or "").strip() and not payload.get("kv_pairs"):
-            from report_writing.chat.intent_invoke import invoke_intent_llm
-            from report_writing.chat.intent_llm import infer_element_payload_llm
+            from report_writing.chat.clarify_invoke import invoke_clarify_llm
+            from report_writing.chat.clarify_llm import infer_element_payload_llm
 
             inferred = infer_element_payload_llm(
                 message,
                 chapter_title=str(payload.get("chapter_key_hint") or ""),
-                invoke=lambda s, u: invoke_intent_llm(s, u, fallback=None),
+                invoke=lambda s, u: invoke_clarify_llm(s, u, fallback=None),
             )
             for key, value in (inferred or {}).items():
                 if value not in (None, "", [], {}) and payload.get(key) in (None, "", [], {}):
@@ -645,12 +645,12 @@ def suggest_other_writing_control_tool(
     *,
     expected_tool: str,
     invoke: Callable[[str, str], str] | None = None,
-    intent_invoke: Callable[[str, str], str] | None = None,
+    clarify_invoke: Callable[[str, str], str] | None = None,
 ) -> dict[str, Any] | None:
     """分类器点名其它写作控制 Tool 时只建议改调，不执行。"""
     expected = (expected_tool or "").strip()
     data = classify_writing_message(
-        home, session, message, invoke=invoke, intent_invoke=intent_invoke
+        home, session, message, invoke=invoke, clarify_invoke=clarify_invoke
     )
     if not data:
         return None
@@ -676,7 +676,7 @@ def suggest_tool_instead_of_submit_points(
     message: str,
     *,
     invoke: Callable[[str, str], str] | None = None,
-    intent_invoke: Callable[[str, str], str] | None = None,
+    clarify_invoke: Callable[[str, str], str] | None = None,
 ) -> dict[str, Any] | None:
     """submit_points 被误调时：只建议改调哪一个 Tool，不在本函数里执行。"""
     return suggest_other_writing_control_tool(
@@ -685,7 +685,7 @@ def suggest_tool_instead_of_submit_points(
         message,
         expected_tool="submit_points",
         invoke=invoke,
-        intent_invoke=intent_invoke,
+        clarify_invoke=clarify_invoke,
     )
 
 
@@ -695,8 +695,8 @@ def reroute_submit_points_if_needed(
     message: str,
     *,
     invoke: Callable[[str, str], str] | None = None,
-    intent_invoke: Callable[[str, str], str] | None = None,
+    clarify_invoke: Callable[[str, str], str] | None = None,
 ) -> tuple[str, list[Any]] | None:
-    """已废弃静默改道。请读 submit_points 的 suggested_next_tool。"""
-    del home, session, message, invoke, intent_invoke
+    """已废弃静默改道。误调由总控按 Tool description 改调。"""
+    del home, session, message, invoke, clarify_invoke
     return None

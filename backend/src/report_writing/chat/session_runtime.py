@@ -472,6 +472,43 @@ def reconcile_chat_session(home: Path, session: ChatSession) -> bool:
     return dirty
 
 
+def attach_turn_study_kick(
+    public_wizard: dict[str, Any] | None,
+    live_wizard: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """把本轮分析自驱标记贴回 SSE done 用的 wizard。
+
+    GET / runtime_public_view 仍剥掉 trigger，避免刷新自动重跑；
+    分析卡又不进气泡。若 done.blueprint_wizard 也剥掉，前端只收到口头回复、永远不开 study 流。
+    """
+    out = dict(public_wizard or {})
+    live = dict(live_wizard or {})
+    keys = [
+        str(k).strip()
+        for k in list(live.get("trigger_chapter_study") or live.get("chapter_study_keys") or [])
+        if str(k).strip()
+    ]
+    begin_all = live.get("trigger_begin_study") is True
+    if not keys and not begin_all:
+        return out
+    out["step"] = "study"
+    if begin_all:
+        out["trigger_begin_study"] = True
+    if keys:
+        out["trigger_chapter_study"] = keys
+        out["chapter_study_keys"] = keys
+    method = str(live.get("study_method") or "").strip()
+    if method:
+        out["study_method"] = method
+    work = str(live.get("working_task_id") or "").strip()
+    if work:
+        out["working_task_id"] = work
+    bid = str(live.get("blueprint_id") or out.get("blueprint_id") or "").strip()
+    if bid:
+        out["blueprint_id"] = bid
+    return out
+
+
 def runtime_public_view(session: ChatSession, home: Path | None = None) -> dict[str, Any]:
     """返回可给前端的运行时快照（GET 会话 / SSE done）。"""
     migrate_legacy_freeform(session)

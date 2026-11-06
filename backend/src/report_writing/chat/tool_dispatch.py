@@ -1,18 +1,73 @@
 """按 tool 名执行（按钮、澄清卡已选、单测）。不是「理解用户意图」。
 
-`execute_dispatch_tool` / `execute_intent_plan` 在 tool+args **已经确定** 之后调用。
-口语主路径由 Agent 选 Tool；缺参走 observation / missing_slots。
+`execute_dispatch_tool` 在 tool+args **已经确定** 之后调用。
+口语主路径由 Agent 选 Tool；缺参走 missing_slots。
 """
 
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from report_writing.domain.models import ChatActionPayload, ChatSession
 
 _log = logging.getLogger(__name__)
+
+# 绑定 Tool 内部再调 dispatch 时不再绕回 create_agent Tool，避免递归
+_DISPATCH_INNER: ContextVar[bool] = ContextVar("rw_dispatch_inner", default=False)
+
+# 仅当绑定 Tool 内部再调 dispatch 时走本文件分支；外层一律先走 invoke_named_tool
+
+
+@contextmanager
+def dispatch_inner() -> Iterator[None]:
+    token = _DISPATCH_INNER.set(True)
+    try:
+        yield
+    finally:
+        _DISPATCH_INNER.reset(token)
+
+
+def _execute_bound_chat_tool(
+    home: Path,
+    session: ChatSession,
+    name: str,
+    args: dict[str, Any],
+    message: str,
+    *,
+    emit: EmitFn | None,
+    invoke: InvokeFn | None,
+) -> tuple[str, list[Any], list[dict[str, Any]]] | None:
+    """已绑定总控 Tool：与口语 ReAct 同一实现。未绑定则返回 None 走本文件分支。"""
+    import json
+
+    from report_writing.agents.chat_tools import bound_tool_invoke_args, invoke_named_tool
+    from report_writing.agents.state import ChatControlState
+
+    state = ChatControlState(
+        home=home,
+        session=session,
+        invoke=invoke,
+        emit=emit,
+        last_user_message=(message or "").strip(),
+    )
+    raw = invoke_named_tool(
+        state,
+        name,
+        bound_tool_invoke_args(name, args, message),
+        via="dispatch",
+    )
+    if raw is None:
+        return None
+    try:
+        data = json.loads(raw or "{}")
+    except json.JSONDecodeError:
+        data = {}
+    reply = str((data or {}).get("reply_hint") or "").strip()
+    return reply, list(state.cards), list(state.events)
 
 EmitFn = Callable[[dict[str, Any]], None]
 InvokeFn = Callable[[str, str], str]
@@ -70,63 +125,6 @@ DISPATCH_TOOLS = frozenset(
     }
 )
 
-KEEP_WIZARD_TOOLS = frozenset(
-    {
-        "add_chapter_element",
-        "collect_to_element_library",
-        "associate_elements",
-        "dissociate_chapter_element",
-        "remove_document_element",
-        "open_element_library",
-        "open_blueprint_library",
-        "open_knowledge",
-        "configure_chapter",
-        "select_write_chapters",
-        "write_analyzed_only",
-        "start_writing",
-        "re_study_chapters",
-        "remember_writing_goal",
-        "set_session_meta",
-        "submit_freeform_meta",
-    }
-)
-
-def classify_intent_plan(
-    home: Path | None,
-    session: ChatSession,
-    message: str,
-    *,
-    invoke: InvokeFn | None,
-    freeform_path: bool = False,
-) -> list[dict[str, Any]]:
-    from report_writing.chat.dialogue import format_full_dialogue
-    from report_writing.chat.intent_llm import classify_chat_control_plan_llm
-    from report_writing.chat.intent_router import active_blueprint_wizard
-    from report_writing.chat.react_speed import control_dialogue_max_turns
-    from report_writing.chat.session_snapshot import session_turn_snapshot
-
-    text = (message or "").strip()
-    if not text or invoke is None:
-        return []
-    snap = session_turn_snapshot(session, text)
-    wiz = dict(active_blueprint_wizard(session) or {})
-    from report_writing.chat.session_documents import focus_document_brief, session_documents_brief
-
-    return classify_chat_control_plan_llm(
-        text,
-        phase=str(session.phase or ""),
-        task_id=str(session.task_id or ""),
-        blueprint_id=str(session.blueprint_id or wiz.get("blueprint_id") or ""),
-        writing_brief_tail=str(snap.get("writing_brief_tail") or ""),
-        dialogue_tail=format_full_dialogue(session, max_turns=control_dialogue_max_turns()),
-        wizard_step=str(wiz.get("step") or ""),
-        session_documents_brief=session_documents_brief(session),
-        focus_document_brief=focus_document_brief(session),
-        freeform_path=freeform_path,
-        invoke=invoke,
-        min_steps=1,
-    )
-
 def _bound_blueprint_id(session: ChatSession) -> str:
     bid = str(session.blueprint_id or "").strip()
     if bid:
@@ -134,28 +132,9 @@ def _bound_blueprint_id(session: ChatSession) -> str:
     wiz = dict((session.freeform or {}).get("blueprint_wizard") or {})
     return str(wiz.get("blueprint_id") or "").strip()
 
-def _wizard_belongs_to_focus_document(session: ChatSession) -> bool:
-    """会话单例上的向导是否属于当前焦点文档（防止 skip 误放弃上一份）。"""
-    from report_writing.chat.intent_router import active_blueprint_wizard
-    from report_writing.chat.session_documents import focus_document_key
-
-    wiz = dict(active_blueprint_wizard(session) or {})
-    working = str(wiz.get("working_task_id") or wiz.get("blueprint_id") or "").strip()
-    if not working:
-        return True
-    w = working.replace("task:", "").replace("bp:", "")
-    tid = str(getattr(session, "task_id", "") or "").replace("task:", "").strip()
-    if tid and w == tid:
-        return True
-    bid = str(getattr(session, "blueprint_id", "") or "").replace("bp:", "").strip()
-    if bid and w == bid:
-        return True
-    focus = str(focus_document_key(session) or "").replace("task:", "").replace("bp:", "")
-    return bool(focus and w == focus)
-
 
 def _wizard_still_active(session: ChatSession) -> bool:
-    from report_writing.chat.intent_router import active_blueprint_wizard
+    from report_writing.chat.session_state import active_blueprint_wizard
     from report_writing.chat.wizard_loop_guard import normalized_wizard_step
     from report_writing.chat.wizard_state import wizard_step_index
 
@@ -195,6 +174,13 @@ def execute_dispatch_tool(
 
         args = enrich_payload_with_message_document(session, text, args, switch_focus=True)
         step = {**step, "args": args}
+
+    if not _DISPATCH_INNER.get():
+        bound = _execute_bound_chat_tool(
+            home, session, name, args, text, emit=emit, invoke=invoke
+        )
+        if bound is not None:
+            return bound
 
     if name in {"select_write_chapters", "write_analyzed_only", "start_writing"}:
         from report_writing.chat.tool_capability import (
@@ -308,7 +294,7 @@ def execute_dispatch_tool(
         from report_writing.chat.action_slots import build_action_slot_clarify, missing_action_slots
         from report_writing.chat.actions import _action_configure_chapter
         from report_writing.chat.helpers import _load_task
-        from report_writing.chat.intent_chapter import (
+        from report_writing.chat.chapter_resolve import (
             message_has_chapter_sequence,
             pick_awaiting_confirm_chapter_key,
             resolve_chapter_key_from_message,
@@ -406,7 +392,7 @@ def execute_dispatch_tool(
         return reply, list(cards or []), []
 
     if name == "re_study_chapters":
-        from report_writing.chat.intent_router import user_chose_skip_blueprint
+        from report_writing.chat.session_state import user_chose_skip_blueprint
         from report_writing.chat.wizard_state import is_freeform_sample_wizard_mode
 
         # 纯无蓝本（自动大纲）：对话「学习」= 生成写作要点
@@ -861,11 +847,11 @@ def execute_dispatch_tool(
 
     if name == "blueprint_wizard":
         from report_writing.chat.blueprint_wizard_route import apply_wizard_action
-        from report_writing.chat.intent_llm import _wizard_action_for_command
+        from report_writing.chat.clarify_llm import wizard_action_for_command
 
         command = str(args.get("wizard_command") or args.get("command") or "").strip()
         if command:
-            mapped = _wizard_action_for_command(command, {**args, "title": args.get("title") or ""})
+            mapped = wizard_action_for_command(command, {**args, "title": args.get("title") or ""})
             action = mapped or {"type": "command", "command": command, "study_message": text}
             seqs = args.get("chapter_sequences") or []
             if isinstance(seqs, list) and seqs and action.get("type") == "command":
@@ -953,161 +939,4 @@ def execute_dispatch_tool(
         return reply, list(cards or []), list(events or [])
 
     return None
-
-def _step_hung_user_gate(session: ChatSession, step_cards: list[Any] | None) -> bool:
-    """本步是否已挂起需用户确认的澄清/槽位，后续步不应继续。"""
-    from report_writing.chat.clarify_flow import get_pending
-
-    if get_pending(session) is not None:
-        return True
-    gate_types = {
-        "intent_clarify",
-        "action_slots",
-        "writing_pace",
-        "blueprint_list",  # 匹配结果待选用
-        "blueprint_pick",
-        "chapter_pick",
-    }
-    for card in step_cards or []:
-        ctype = str(getattr(card, "type", "") or "").strip()
-        if ctype in gate_types:
-            return True
-    return False
-
-
-def execute_intent_plan(
-    home: Path,
-    session: ChatSession,
-    plan: list[dict[str, Any]],
-    message: str,
-    *,
-    emit: EmitFn | None = None,
-    invoke: InvokeFn | None = None,
-    early_focus: dict[str, Any] | None = None,
-) -> tuple[str, list[Any], list[dict[str, Any]]] | None:
-    """按 plan 串行执行 Tool（执行层；口语主路径用 ReAct 单 Tool 观察）。"""
-    text = (message or "").strip()
-    steps = [s for s in (plan or []) if str(s.get("tool") or "").strip() in DISPATCH_TOOLS]
-    if not steps:
-        return None
-    names = [str(s.get("tool") or "").strip() for s in steps]
-
-    from report_writing.chat.helpers import _emit_process
-
-    keep_wizard = _wizard_still_active(session) and all(n in KEEP_WIZARD_TOOLS for n in names if n)
-    _emit_process(emit, "正在按你的意图调度…")
-    replies: list[str] = []
-    cards: list[Any] = []
-    events: list[dict[str, Any]] = []
-    if early_focus:
-        from report_writing.chat.session_documents import focus_document_event
-
-        events.append(
-            focus_document_event(
-                session,
-                str(early_focus.get("registry_key") or ""),
-                task_id=str(early_focus.get("task_id") or ""),
-                blueprint_id=str(early_focus.get("blueprint_id") or ""),
-                title=str(early_focus.get("title") or ""),
-            )
-        )
-    write_without_blueprint = False
-    offered_pace = False
-    llm = invoke
-    for step in steps:
-        name = str(step.get("tool") or "").strip()
-        if name == "start_writing":
-            pace_arg = str((step.get("args") or {}).get("writing_pace") or "").strip()
-            already_started = any(
-                str(getattr(c, "type", "") or "") == "progress" for c in cards
-            )
-            if not pace_arg and (offered_pace or already_started):
-                continue
-        if name not in {
-            "begin_blueprint_wizard",
-            "ask_intent",
-            "ask_entry_path",
-            "match_blueprints",
-            "list_blueprints",
-            "focus_document",
-            "set_session_meta",
-            "submit_freeform_meta",
-            "remember_writing_goal",
-        }:
-            from report_writing.chat.session_documents import enrich_payload_with_message_document
-
-            enriched_args = enrich_payload_with_message_document(
-                session, text, dict(step.get("args") or step.get("payload") or {}), switch_focus=True
-            )
-            step = {**step, "args": enriched_args}
-        # 创建蓝本须带澄清/显式确认；勿因已定名静默补 confirmed_create
-        try:
-            hit = execute_dispatch_tool(home, session, step, text, emit=emit, invoke=llm)
-        except ValueError as error:
-            msg = str(error)
-            if "请先选择蓝本" in msg:
-                write_without_blueprint = True
-                hit = None
-            else:
-                hit = (msg, [], [])
-        if hit is None:
-            name = str(step.get("tool") or "").strip()
-            if name in {"select_write_chapters", "write_analyzed_only", "start_writing"}:
-                if not str(_bound_blueprint_id(session) or session.task_id or "").strip():
-                    write_without_blueprint = True
-            # 前置未就绪：停止后续步，勿在缺蓝本/缺任务时继续跑开写等
-            if name in {
-                "select_write_chapters",
-                "write_analyzed_only",
-                "start_writing",
-                "select_blueprint",
-                "configure_chapter",
-                "begin_blueprint_wizard",
-                "match_blueprints",
-            }:
-                break
-            continue
-        reply, step_cards, step_events = hit
-        focus_title = str((step.get("args") or {}).get("_focus_document_title") or "").strip()
-        if reply and focus_title and focus_title not in reply[:48]:
-            reply = f"【当前操作文档：{focus_title}】\n{reply}"
-        if reply:
-            replies.append(reply)
-        cards.extend(step_cards or [])
-        events.extend(step_events or [])
-        if any(str(getattr(c, "type", "") or "") == "writing_pace" for c in (step_cards or [])):
-            offered_pace = True
-        # 本步已挂澄清/待用户点选：停止后续步，避免覆盖 pending 或在未就绪状态继续跑
-        if _step_hung_user_gate(session, step_cards):
-            break
-
-    if write_without_blueprint and not cards:
-        clarify_hit = execute_dispatch_tool(
-            home,
-            session,
-            {"tool": "ask_intent", "args": {}},
-            text,
-            emit=emit,
-            invoke=llm,
-        )
-        if clarify_hit is not None:
-            reply, step_cards, step_events = clarify_hit
-            if reply:
-                replies.append(reply)
-            cards.extend(step_cards or [])
-            events.extend(step_events or [])
-
-    if keep_wizard and _wizard_still_active(session):
-        from report_writing.chat.intent_router import active_blueprint_wizard
-
-        wiz = dict(active_blueprint_wizard(session) or {})
-        if wiz.get("step") in {"study_done", "done"} and str(wiz.get("keep_wizard") or "") != "0":
-            wiz["step"] = "study"
-            session.freeform = {**(session.freeform or {}), "blueprint_wizard": wiz}
-
-    if not replies and not cards:
-        return None
-    from report_writing.chat.cards import collapse_duplicate_turn_cards
-
-    return "\n".join(replies).strip() or "好的。", collapse_duplicate_turn_cards(cards), events
 

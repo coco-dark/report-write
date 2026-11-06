@@ -15,7 +15,7 @@ def is_explicit_remember_goal_message(
     invoke: InvokeFn | None = None,
     session: ChatSession | None = None,
 ) -> bool:
-    from report_writing.chat.intent_context import pack_classifier_context
+    from report_writing.chat.classifier_context import pack_classifier_context
     from report_writing.chat.clarify_llm import classify_explicit_remember_goal_llm
 
     ctx = pack_classifier_context(session) if session is not None else {}
@@ -33,7 +33,7 @@ def doc_meta_patch_from_message(
     session: ChatSession | None = None,
     context: dict[str, Any] | None = None,
 ) -> dict[str, str]:
-    from report_writing.chat.intent_context import pack_classifier_context
+    from report_writing.chat.classifier_context import pack_classifier_context
     from report_writing.chat.clarify_llm import classify_doc_meta_line_llm
 
     ctx = dict(context or {})

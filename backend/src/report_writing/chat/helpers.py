@@ -49,11 +49,6 @@ _log = logging.getLogger("report_writing.chat")
 InvokeFn = Callable[[str, str], str]
 EmitFn = Callable[[dict[str, Any]], None]
 StreamModelFn = Callable[[str, str], Iterable[str]]
-
-_log = logging.getLogger(__name__)
-InvokeFn = Callable[[str, str], str]
-EmitFn = Callable[[dict[str, Any]], None]
-StreamModelFn = Callable[[str, str], Iterable[str]]
 _VAGUE_FREEFORM_META_RE = re.compile(
     r"^(直接写|开始写|开写|写报告|写一份|继续写|继续|好的?|是的?|对的?|没错|确认|可以|行|嗯+|ok|okay|yes|y)$",
     re.I,
@@ -342,16 +337,6 @@ def emit_write_points_lines(emit: EmitFn | None, result: dict[str, Any] | None) 
         _emit_process(emit, f"　补充提示：{aux[:160]}")
 
 
-def _llm_reply(system: str, message: str, *, invoke: InvokeFn) -> str:
-    if not (message or "").strip():
-        return ""
-    try:
-        return str(invoke(system, message) or "").strip()
-    except Exception as error:
-        _log.warning("chat invoke failed: %s", error)
-        return ""
-
-
 def should_skip_reply_polish(
     session: ChatSession | None,
     cards: list | None,
@@ -403,7 +388,7 @@ def compose_polish_situation(session: ChatSession | None, cards: list | None = N
     """给润色模型用的场景约束，避免工单腔、和当前流程打架。"""
     if session is None:
         return ""
-    from report_writing.chat.intent_router import user_chose_skip_blueprint
+    from report_writing.chat.session_state import user_chose_skip_blueprint
 
     parts: list[str] = []
     ff = dict(session.freeform or {})

@@ -259,7 +259,7 @@ def test_resolve_intent_clarify_exposes_suggested_next_tools(tmp_path: Path):
     ]
     assert "skip_blueprint" in names
     assert "submit_outline" in names
-    assert "同轮按序调用" in str(data.get("observation") or "")
+    assert "observation" not in data
 
 
 def test_continue_after_new_document_does_not_dispatch(tmp_path: Path, monkeypatch):

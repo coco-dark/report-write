@@ -88,12 +88,12 @@ def apply_wizard_action(
     invoke: InvokeFn | None = None,
 ) -> tuple[str, list[Any], list[dict[str, Any]]]:
     from report_writing.chat.helpers import _emit_process
-    from report_writing.chat.intent_router import active_blueprint_wizard
+    from report_writing.chat.session_state import active_blueprint_wizard
     from report_writing.chat.resource_actions import _action_blueprint_wizard, execute_wizard_command
 
     kind = str(action.get("type") or "").strip()
     if kind == "chain":
-        from report_writing.chat.intent_action_chain import execute_action_chain
+        from report_writing.chat.classifier_action_chain import execute_action_chain
 
         subs = list(action.get("actions") or [])
         if any(

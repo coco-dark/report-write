@@ -15,7 +15,7 @@ def _entry(
     invoke: InvokeFn | None,
     session: ChatSession | None = None,
 ) -> dict[str, Any]:
-    from report_writing.chat.intent_context import pack_classifier_context
+    from report_writing.chat.classifier_context import pack_classifier_context
     from report_writing.chat.clarify_llm import classify_entry_routing_llm
 
     ctx = pack_classifier_context(session) if session else {}

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from report_writing.chat.intent_llm import resolve_wizard_action
+from report_writing.chat.clarify_llm import resolve_wizard_action
 from report_writing.chat.write_chapter_intent import (
     keys_for_write_scope,
     parse_write_sequences_from_message,

@@ -1468,6 +1468,28 @@ function driveDocWindow(
   const curId = String(docWindowActiveId.value || "").trim();
   const curDoc = curId ? docs.find((d) => d.id === curId) : null;
   const curWid = String(curDoc?.writingTaskId || curDoc?.taskId || "").trim();
+  const locateSameDocOnly = [
+    "analyze",
+    "write_running",
+    "write_chapter_done",
+    "write_batch_advance",
+    "write_awaiting_confirm",
+  ].includes(why);
+  if (locateSameDocOnly && curId) {
+    const pinned = normalizeDocumentRegistryKey(streamFocusPinnedKey);
+    const showing =
+      (curWid && curWid === tid) ||
+      curId === hit.id ||
+      curId === `task:${tid}` ||
+      curId === `bp:${tid}`;
+    const pinOk =
+      !pinned ||
+      pinned === hit.id ||
+      pinned === `task:${tid}` ||
+      pinned === `bp:${tid}`;
+    // 已切到另一份文档：后台分析/写作不得把小窗抢回来
+    if (!showing || !pinOk) return;
+  }
   if (!(curId && curWid && curWid === tid && curDoc)) {
     docWindowActiveId.value = hit.id;
   }
@@ -1559,6 +1581,8 @@ function alignSessionFocusFromDoc(doc) {
 
 /** 本轮流式已切过焦点（focus_document）；softSync 勿用旧 activeBefore / 脏 serverFocus 打回 */
 let streamFocusPinnedKey = "";
+/** 正在跑页面级分析的写作任务 id；切到其它文档时勿把分析锁带到新窗口 */
+let pageStudyOwnerTaskId = "";
 /** 程序切焦点（流式/ syncDocWindow）时勿再 POST announce */
 let programmaticFocusSyncDepth = 0;
 /** 本轮写作流水线已开跑且尚未 run_done；避免 done/finally 过早解锁小窗 */
@@ -1690,9 +1714,11 @@ function syncDocWindowToFocusKey(focusKey, { stashCurrent = true } = {}) {
         mainView: "preview",
       });
     }
+    syncStudyLockToActiveDoc();
     return;
   }
   bumpDocOutlineReload({ force: true });
+  syncStudyLockToActiveDoc();
 }
 
 /** 文档下拉切换：先改 activeId（下拉名称立刻变），后台落盘；目录由小窗 identity watch 拉取，勿再 force 双拉 */
@@ -1702,8 +1728,8 @@ async function onDocWindowActiveId(nextId) {
     if (id) docWindowActiveId.value = id;
     return;
   }
-  // 分析/写作/配置进行中：禁止手动切换其它文档
-  if (docWindowOpsLocked.value || docWindowBusy.value) {
+  // 写作/保存进行中禁止切走；分析中允许切到另一份（分析在后台继续）
+  if (isDocWindowWriteLockActive() || docWindowBusy.value) {
     ElMessage.warning(
       docWindowOpsLockLabel.value
         ? `${docWindowOpsLockLabel.value}，请稍后再切换文档`
@@ -1734,6 +1760,7 @@ async function onDocWindowActiveId(nextId) {
   if (!fromProgram) {
     scrollChatToFocusThread();
   }
+  syncStudyLockToActiveDoc();
 }
 
 /** 切文档 tab 时勿沿用上一份的蓝本向导 live 状态 */
@@ -1800,6 +1827,13 @@ async function toggleDocWindow() {
 async function persistUiStateForced() {
   if (!sessionId.value) return;
   const payload = buildUiStatePayload();
+  // 焦点只走 /focus-document；这里带上会把进行中的「切换到另一份」打回旧文档
+  delete payload.focus_document_key;
+  delete payload.focus_task_id;
+  delete payload.focus_blueprint_id;
+  if (payload.freeform_patch && typeof payload.freeform_patch === "object") {
+    delete payload.freeform_patch.focus_document_key;
+  }
   await request(`/api/writing/chat/sessions/${encodeURIComponent(sessionId.value)}/ui-state`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
@@ -1862,6 +1896,7 @@ function releaseStudyOpsLock({ notify = false, reason = "" } = {}) {
     liveBlueprintWizard.value = next;
   }
   setDocWindowOpsLock(false);
+  pageStudyOwnerTaskId = "";
   if (sending.value) {
     try {
       streamAbortController?.abort();
@@ -1903,9 +1938,41 @@ function isDocWindowWriteLockActive() {
   );
 }
 
+function windowIsShowingTask(tid) {
+  const want = String(tid || "").trim();
+  if (!want) return false;
+  const pinned = normalizeDocumentRegistryKey(streamFocusPinnedKey);
+  const curId = normalizeDocumentRegistryKey(String(docWindowActiveId.value || "").trim());
+  const focusId = pinned || curId;
+  if (!focusId) return false;
+  if (focusId === `task:${want}` || focusId === `bp:${want}` || focusId === want) return true;
+  const hit = (conversationDocuments.value || []).find((d) => d.id === focusId);
+  const hid = String(hit?.writingTaskId || hit?.taskId || "").trim();
+  return Boolean(hid && hid === want);
+}
+
+function syncStudyLockToActiveDoc() {
+  if (isDocWindowWriteLockActive()) return;
+  if (!pageStudyInflight) return;
+  const owner = String(pageStudyOwnerTaskId || "").trim();
+  if (owner && windowIsShowingTask(owner)) {
+    noteStudyProgressHeartbeat();
+    setDocWindowOpsLock(true, docWindowOpsLockLabel.value || "正在分析章节…");
+    return;
+  }
+  setDocWindowOpsLock(false);
+}
+
 function setDocWindowStudyBusy(on, label = "") {
   // 写作锁优先：分析收尾不得清掉「正在写作…」
   if (!on && isDocWindowWriteLockActive()) return;
+  if (on) {
+    const owner = String(pageStudyOwnerTaskId || "").trim();
+    // 正在看另一份文档：分析继续跑，但不要锁死当前窗口
+    if (owner && String(docWindowActiveId.value || "").trim() && !windowIsShowingTask(owner)) {
+      return;
+    }
+  }
   // 心跳只在真实进度事件里刷新，这里上锁不重置超时
   setDocWindowOpsLock(on, label || "正在依据样本分析章节…");
 }
@@ -4555,12 +4622,12 @@ const robots = ref([]);
 const robotId = ref("");
 const currentRobot = ref(null);
 const sending = ref(false);
-/** 发送中或文档窗操作锁（分析/写作）时禁止对话框输入 */
+/** 发送中或写作锁时禁止对话框输入；分析中仍可说话（例如「切换到另一份」） */
 const composerLocked = computed(
   () =>
     Boolean(sending.value) ||
-    Boolean(docWindowOpsLocked.value) ||
-    Boolean(pointsDraftInflight.value)
+    Boolean(pointsDraftInflight.value) ||
+    isDocWindowWriteLockActive()
 );
 
 const pauseBusy = ref(false);
@@ -7899,8 +7966,32 @@ function applyDoneMeta(data) {
     }
     return null;
   })();
-  if (studyPayloadFromCards) {
-    applyLiveWizardFromSource(studyPayloadFromCards);
+  const studyKickFromWizard = (() => {
+    const src = studyPayloadFromCards || wizardFromDone;
+    if (!src || typeof src !== "object") return null;
+    const keys = (src.trigger_chapter_study || src.chapter_study_keys || [])
+      .map((k) => String(k || "").trim())
+      .filter(Boolean);
+    if (src.trigger_begin_study === true || keys.length) {
+      return {
+        ...src,
+        step: "study",
+        ...(keys.length ? { trigger_chapter_study: keys, chapter_study_keys: keys } : {}),
+      };
+    }
+    return null;
+  })();
+  const liveHasStudyKick = (() => {
+    const live = liveBlueprintWizard.value || {};
+    const keys = (live.trigger_chapter_study || live.chapter_study_keys || [])
+      .map((k) => String(k || "").trim())
+      .filter(Boolean);
+    return live.trigger_begin_study === true || keys.length > 0;
+  })();
+  if (studyKickFromWizard) {
+    applyLiveWizardFromSource(studyKickFromWizard);
+  } else if (liveHasStudyKick || pageStudyInflight) {
+    // 本轮已排队/开跑的分析：softSync 剥过的 GET 快照不得清掉 trigger
   } else if (
     shouldSuppressBlueprintWizardForFreeform(
       {
@@ -7920,8 +8011,7 @@ function applyDoneMeta(data) {
   } else {
     const bp = wizardFromDone;
     if (bp) {
-      // 会话快照 / softSync 里的 leftover trigger 不得点燃自动分析；
-      // 本轮真正要开跑时由 done 后续的 studyIntent 分支再写入并 kickoff。
+      // 会话快照 / softSync 里的 leftover trigger 不得点燃自动分析
       applyLiveWizardFromSource(stripEphemeralWizardTriggers(bp));
     }
   }
@@ -8667,6 +8757,7 @@ async function send() {
     }
   } finally {
     sending.value = false;
+    void kickPageLevelStudyIfNeeded();
     await softSyncSessionAfterWizardAction();
     await loadHistory();
     await nextTick();
@@ -9358,6 +9449,7 @@ async function sendAction(action, action_payload = {}, { force = false } = {}) {
     }
   } finally {
     sending.value = false;
+    void kickPageLevelStudyIfNeeded();
     if (isWriteAction && !writingStreamActive) {
       setDocWindowWriteBusy(false);
     } else if (isPointsOrConfirmAction && !writingStreamActive) {
@@ -10052,6 +10144,7 @@ function hardResetCrossSessionUi({ closeDocWindow = true } = {}) {
   pageStudyOwnerEpoch = 0;
   pageStudyOwnerSessionId = "";
   pageStudyOwnerBlueprintId = "";
+  pageStudyOwnerTaskId = "";
   releaseStudyOpsLock({ notify: false });
   liveBlueprintWizard.value = null;
   liveWizardsByDoc.value = {};
@@ -10139,7 +10232,9 @@ async function kickPageLevelStudyIfNeeded() {
   } else if (!pageStudyInflight && !pointsDraftInflight.value && !sending.value) {
     setDocWindowStudyBusy(false);
   }
-  // 分析卡已从会话气泡剔除，必须由页面兜底开跑；勿等 sending 结束（否则会错过 trigger）
+  // 对话回合进行中不要用 leftover trigger 再开分析（会把「切换到另一份」抢回当前文档）
+  if (sending.value) return;
+  // 分析卡已从会话气泡剔除，必须由页面兜底开跑；sending 结束后再 kick
   if (!studyTaskId || pageStudyInflight) return;
   if (normalizeWizardStep(live.step) !== "study") return;
   const beginAll = Boolean(live.trigger_begin_study) && !keys.length;
@@ -10283,6 +10378,7 @@ async function runPageLevelStudy(studyTaskId, chapterKeys, { beginAll = false } 
   pageStudyOwnerEpoch = ownerEpoch;
   pageStudyOwnerSessionId = ownerSid;
   pageStudyOwnerBlueprintId = libraryBp || ownerStudyTid;
+  pageStudyOwnerTaskId = ownerStudyTid;
   pageStudyAbortController = new AbortController();
   const studySignal = pageStudyAbortController.signal;
   const stillHere = () => isCurrentSessionContext(ownerEpoch, ownerSid);
@@ -10560,6 +10656,7 @@ async function runPageLevelStudy(studyTaskId, chapterKeys, { beginAll = false } 
       pageStudyOwnerEpoch = 0;
       pageStudyOwnerSessionId = "";
       pageStudyOwnerBlueprintId = "";
+      pageStudyOwnerTaskId = "";
     }
     // 严禁把旧会话分析结束态写回新会话 live
     if (stillHere()) {

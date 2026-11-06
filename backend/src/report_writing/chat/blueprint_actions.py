@@ -36,7 +36,7 @@ def finish_blueprint_match(
     emit: EmitFn | None = None,
 ) -> tuple[str, list[Any]]:
     from report_writing.chat.cards import _blueprint_list_card, _skip_blueprint_card
-    from report_writing.chat.intent_router import touch_session_plan
+    from report_writing.chat.session_state import touch_session_plan
 
     if matches:
         session.phase = ChatPhase.BLUEPRINT_SELECT.value
@@ -98,13 +98,13 @@ def run_blueprint_action(
         raise ValueError(f"未知蓝本 action：{key}")
 
     if key == "list_blueprints":
-        from report_writing.chat_orchestrator import _action_list_blueprints
+        from report_writing.chat import _action_list_blueprints
 
         return _action_list_blueprints(home, session, body)
 
     if key == "match_blueprints":
-        from report_writing.chat.intent_router import user_chose_skip_blueprint
-        from report_writing.chat_orchestrator import _action_skip_blueprint
+        from report_writing.chat.session_state import user_chose_skip_blueprint
+        from report_writing.chat import _action_skip_blueprint
         from report_writing.services.robots import match_blueprints_with_agent
 
         msg = str(body.get("message") or "").strip()
@@ -127,12 +127,12 @@ def run_blueprint_action(
         )
 
     if key == "select_blueprint":
-        from report_writing.chat_orchestrator import _action_select_blueprint
+        from report_writing.chat import _action_select_blueprint
 
         return _action_select_blueprint(home, session, body)
 
     if key == "skip_blueprint":
-        from report_writing.chat_orchestrator import _action_skip_blueprint
+        from report_writing.chat import _action_skip_blueprint
 
         return _action_skip_blueprint(
             session,
@@ -185,12 +185,12 @@ def run_blueprint_action(
         return _action_blueprint_wizard(home, session, body)
 
     if key == "resume":
-        from report_writing.chat_orchestrator import _action_resume
+        from report_writing.chat import _action_resume
 
         return _action_resume(home, session, body)
 
     if key == "save_freeform_as_blueprint":
-        from report_writing.chat_orchestrator import _action_save_freeform_as_blueprint
+        from report_writing.chat.actions import _action_save_freeform_as_blueprint
 
         return _action_save_freeform_as_blueprint(home, session, body, invoke=invoke, emit=emit)
 

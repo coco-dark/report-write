@@ -333,7 +333,7 @@ def test_entry_and_writing_builders_have_options():
     assert {o["id"] for o in writing_cards[0].payload["options"]} >= {"approve", "revise", "skip"}
 
 
-def test_ask_intent_llm_options_enrich_freeform_slots():
+def test_ask_intent_clarify_options_enrich_freeform_slots():
     """截图复现：大脑生成「不用蓝本，直接搭目录写」但未填 tool → 点选后应走到 skip_blueprint。"""
     from report_writing.chat.clarify_flow import (
         begin_clarify,

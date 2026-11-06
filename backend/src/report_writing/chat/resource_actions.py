@@ -78,7 +78,10 @@ def _create_freeform_sample_document(
     上传/提取向导进行中不要 lock writing_path=freeform：前端会按「无蓝本」吞掉向导卡。
     收录前以 mode=freeform_sample 标识；真正开写无蓝本大纲时再锁路径。
     """
-    from report_writing.chat.intent_router import WRITING_PATH_FREEFORM, get_writing_path
+    from report_writing.chat.session_state import (
+        WRITING_PATH_FREEFORM,
+        get_writing_path,
+    )
     from report_writing.chat.session_documents import (
         confirm_writing_document_name,
         flush_lane,
@@ -201,7 +204,7 @@ def _create_freeform_sample_document(
     stamp_document_thread_messages(session, reg_key)
     session.phase = ChatPhase.CREATE_HANDOFF.value
     workflow_set(session, WORKFLOW_BLUEPRINT, dict(wizard))
-    from report_writing.chat.intent_router import touch_session_plan
+    from report_writing.chat.session_state import touch_session_plan
 
     touch_session_plan(session, goal="template_wizard", step="wizard_upload")
     mark_focus_entry_path(session, "template")
@@ -425,7 +428,7 @@ def _continue_active_wizard_reply(
 ) -> tuple[str, list[ChatCard]] | None:
     """已有进行中的向导时不再重置为 meta，避免重复「填写名称」卡片。"""
     from report_writing.chat.cards import _blueprint_wizard_card
-    from report_writing.chat.intent_router import active_blueprint_wizard
+    from report_writing.chat.session_state import active_blueprint_wizard
     from report_writing.chat.wizard_state import (
         _wizard_card_title,
         refresh_latest_wizard_card_in_session,
@@ -486,7 +489,7 @@ def _begin_blueprint_wizard(
     invoke=None,
 ) -> tuple[str, list[ChatCard]]:
     from report_writing.chat.cards import _blueprint_wizard_card
-    from report_writing.chat.intent_router import touch_session_plan
+    from report_writing.chat.session_state import touch_session_plan
     from report_writing.chat.session_runtime import WORKFLOW_BLUEPRINT, workflow_set
 
     hint = (title_hint or "").strip()
@@ -611,7 +614,10 @@ def _begin_blueprint_wizard(
 
     session.phase = ChatPhase.CREATE_HANDOFF.value
     from report_writing.chat.wizard_state import WIZARD_MODE_CREATE
-    from report_writing.chat.intent_router import WRITING_PATH_FREEFORM, get_writing_path
+    from report_writing.chat.session_state import (
+        WRITING_PATH_FREEFORM,
+        get_writing_path,
+    )
 
     # 用户改口「我有样本 / 创建蓝本」：必须退出无蓝本锁，否则前端会按 freeform 吞掉向导卡
     ff_unlock = {**(session.freeform or {})}
@@ -720,7 +726,7 @@ def execute_wizard_command(
     invoke=None,
 ) -> tuple[str, list[ChatCard]]:
     """子 Agent 工具统一入口：wizard_command → 卡片与回复。"""
-    from report_writing.chat.intent_router import active_blueprint_wizard
+    from report_writing.chat.session_state import active_blueprint_wizard
     from report_writing.chat.wizard_state import (
         CREATE_ONLY_WIZARD_COMMANDS,
         is_selected_wizard_mode,
@@ -767,7 +773,7 @@ def execute_wizard_command(
         if keys:
             body["chapter_keys"] = keys
         if invoke is not None:
-            body["_intent_invoke"] = invoke
+            body["_clarify_invoke"] = invoke
     return _action_blueprint_wizard(home, session, body)
 
 
@@ -1020,7 +1026,7 @@ def _action_blueprint_wizard(
                 home,
                 session,
                 "go_study",
-                invoke=payload.get("_intent_invoke"),
+                invoke=payload.get("_clarify_invoke"),
             )
         wizard["step"] = "outline_confirm"
         wizard["outline_confirmed"] = False
@@ -1122,7 +1128,7 @@ def _action_blueprint_wizard(
     if wizard_command == "re_study_chapters":
         if not blueprint_id:
             raise ValueError("还没有蓝本")
-        intent_invoke = payload.pop("_intent_invoke", None)
+        clarify_invoke = payload.pop("_clarify_invoke", None)
         from report_writing.chat.helpers import _load_task
         from report_writing.chat.study_chapter_resolve import resolve_study_chapter_keys
 
@@ -1157,18 +1163,18 @@ def _action_blueprint_wizard(
 
             if (
                 resolved_scope not in STUDY_SCOPES
-                and intent_invoke is not None
+                and clarify_invoke is not None
                 and study_scope_needs_clarify(task, msg, tops, resolved_scope=resolved_scope)
             ):
-                from report_writing.chat.intent_context import pack_classifier_context
-                from report_writing.chat.intent_llm import classify_study_scope_llm
+                from report_writing.chat.classifier_context import pack_classifier_context
+                from report_writing.chat.clarify_llm import classify_study_scope_llm
 
                 ctx = pack_classifier_context(session)
                 judged = classify_study_scope_llm(
                     msg,
                     dialogue_tail=list(ctx.get("dialogue_tail") or []),
                     focus_document_brief=str(ctx.get("focus_document_brief") or ""),
-                    invoke=intent_invoke,
+                    invoke=clarify_invoke,
                 )
                 if judged in STUDY_SCOPES:
                     resolved_scope = judged

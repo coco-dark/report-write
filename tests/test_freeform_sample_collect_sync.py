@@ -43,7 +43,10 @@ def test_freeform_sample_meta_creates_writing_task_not_library_bp(tmp_path: Path
     assert getattr(cards[0], "payload", {}).get("step") == "upload"
 
     # 向导进行中不得锁 freeform（前端会吞上传卡）；sync/reconcile 仍保留向导
-    from report_writing.chat.intent_router import WRITING_PATH_FREEFORM, get_writing_path
+    from report_writing.chat.session_state import (
+        WRITING_PATH_FREEFORM,
+        get_writing_path,
+    )
     from report_writing.chat.session_runtime import reconcile_chat_session
     from report_writing.chat.session_state import user_chose_skip_blueprint
     from report_writing.chat.wizard_state import (

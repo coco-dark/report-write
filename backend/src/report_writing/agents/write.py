@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Annotated
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage
-from langchain_core.tools import tool
+from langchain.tools import tool
+from pydantic import Field
 
 from report_writing.agents.react import run_react, tool_result
 from report_writing.agents.scripted import ScriptedChatModel, human_payload, tool_payloads
@@ -15,8 +17,8 @@ from report_writing.domain.content_blocks import ensure_html_fragment
 from report_writing.domain.point_items_sync import SUPPLEMENT_TODO_RE, text_needs_supplement
 from report_writing.domain.models import ChapterDraft, ChapterRequirement, EvidenceCard, Paragraph, ParagraphComment
 
-INSTRUCTIONS = """你是报告章节写作员。只写当前章节。
-按 sequence 标出的章节序号组织标题，按 describes 理解本章在写什么，按 generate / points 生成需要的内容。
+INSTRUCTIONS = """你是报告章节写作员。只写当前这一章，写完用提交工具交稿，不要检索、不要检查。
+按 sequence 组织标题，按 describes 理解本章功能，按 generate / points 覆盖内容。
 
 【严禁照搬原文】——全章硬约束（fixed_output=true 除外）：
 - 样板/参考正文（reference_text）以及证据摘录中的成段原文，严禁整段、整句原样照抄进正文。
@@ -128,9 +130,18 @@ def run_write(
         text_needs_supplement(p) for p in write_points_preview
     ) and ("【建议补充资料】" not in aux_preview)
 
-    @tool
-    def submit_chapter(title: str, paragraphs: list[dict], uncovered_points: list[str]) -> str:
-        """提交本章草稿（HTML）。这是写作阶段的结束动作。"""
+    @tool(
+        "submit_chapter",
+        description=(
+            "何时：本章已写完，提交 HTML 草稿。写作结束动作。"
+            "不要：检索、再调其它工具；证据编号写在 paragraphs[].evidence_ids。"
+        ),
+    )
+    def submit_chapter(
+        title: Annotated[str, Field(description="必填。本章标题。")],
+        paragraphs: Annotated[list[dict], Field(description="必填。每项含 text（HTML）和 evidence_ids。")],
+        uncovered_points: Annotated[list[str], Field(description="可选。覆盖不了的要点，不要编造。")],
+    ) -> str:
         stored = []
         extracted_gaps: list[str] = []
         for index, item in enumerate(paragraphs):

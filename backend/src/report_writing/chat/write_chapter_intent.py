@@ -157,7 +157,7 @@ def resolve_write_chapter_keys(
     scope: str = "",
 ) -> list[str]:
     """按 slots / 序号 / 配置同路解析大纲 key。scope 由大脑给出。"""
-    from report_writing.chat.intent_chapter import (
+    from report_writing.chat.chapter_resolve import (
         resolve_chapter_key_by_sequence,
         resolve_chapter_key_from_message,
     )
@@ -273,8 +273,8 @@ def try_write_chapters_from_message(
     probe_seqs = seqs or ([hint] if hint else []) or parse_write_sequences_from_message(text)
     if probe_seqs and write_sequences_have_descendants(task, probe_seqs) and scope not in WRITE_SCOPES:
         if invoke is not None:
-            from report_writing.chat.intent_context import pack_classifier_context
-            from report_writing.chat.intent_llm import classify_write_scope_llm
+            from report_writing.chat.classifier_context import pack_classifier_context
+            from report_writing.chat.clarify_llm import classify_write_scope_llm
 
             ctx = pack_classifier_context(session)
             judged = classify_write_scope_llm(

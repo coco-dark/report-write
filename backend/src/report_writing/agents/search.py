@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Annotated
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage
-from langchain_core.tools import tool
+from langchain.tools import tool
+from pydantic import Field
 
 from report_writing.agents.react import run_react, tool_result
 from report_writing.agents.scripted import ScriptedChatModel, human_payload, tool_payloads
@@ -22,9 +24,9 @@ from report_writing.domain.models import (
 )
 from report_writing.domain.rating import rate_hit
 
-INSTRUCTIONS = """你是报告证据检索员。按本章给出的检索关键字做向量检索，不要写报告。
-检索只使用当前业务类型的资料。对 points 中的每一项调用一次 search，全部检索完成后调用 submit_evidence。
-（points 可能是合并后的一条查询，也可能是多个分开的检索词，按列表项逐条即可。）"""
+INSTRUCTIONS = """你是报告证据检索员。只检索、评级，不要写报告、不要改要点。
+只用当前任务资料做向量检索。对 user.points 每一项检索一次，全部完成后提交证据。
+points 可能是合并后的一条查询，也可能是多个检索词，按列表项逐条即可。"""
 
 _SPACE = re.compile(r"\s+")
 
@@ -63,9 +65,15 @@ def run_search(
     sequence = {"n": 1}
     seen_excerpts: set[str] = set()
 
-    @tool
-    def search(point: str) -> str:
-        """按一个章节要点做向量检索，并为每条命中评级。"""
+    @tool(
+        "search",
+        description=(
+            "何时：按 user.points 的一项做向量检索并评级。points 里每一项调用一次。"
+            "缺了：用 points 当前未检索项，不要编查询。"
+            "不要：写正文；未全部检索完不要 submit_evidence。"
+        ),
+    )
+    def search(point: Annotated[str, Field(description="必填。user.points 中的一项检索词。")]) -> str:
         adopted_text = [card.excerpt for card in cards if card.adopted]
         added = []
         # 知识库已下线：检索仅走任务本地 corpus + 要素解析结果
@@ -117,9 +125,14 @@ def run_search(
         _cap_adopted(cards)
         return json.dumps({"point": point, "cards": added}, ensure_ascii=False)
 
-    @tool
+    @tool(
+        "submit_evidence",
+        description=(
+            "何时：points 全部 search 完成后提交本章证据。检索结束动作。"
+            "不要：还有未检索要点时调用；不要用 search 代替提交。"
+        ),
+    )
     def submit_evidence() -> str:
-        """提交本章全部证据卡片。这是检索阶段的结束动作。"""
         pruned = _prune_cards(cards)
         cards.clear()
         cards.extend(pruned)

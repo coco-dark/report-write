@@ -183,6 +183,29 @@ def test_match_session_document_by_title_in_message():
     assert body.get("blueprint_id") == "bpB"
 
 
+def test_match_session_document_switch_to_quarterly_report():
+    session = ChatSession(id="s_q")
+    upsert_session_document(
+        session,
+        kind="writing",
+        task_id="w_overview",
+        title="依据样本-概述",
+        clear_blueprint_id=True,
+    )
+    upsert_session_document(
+        session,
+        kind="writing",
+        task_id="w_quarter",
+        title="我的季度报告",
+        clear_blueprint_id=True,
+    )
+    from report_writing.chat.session_documents import match_session_document
+
+    hit = match_session_document(session, "切换到我的季度报告")
+    assert hit is not None
+    assert hit.get("task_id") == "w_quarter"
+
+
 def test_message_wants_new_document_strong():
     # 启发式仅作无模型窄兜底；口语变化走 resolve_document_scope + LLM
     assert message_wants_new_document_strong("再写一份安全预评价")
@@ -190,6 +213,9 @@ def test_message_wants_new_document_strong():
     assert message_wants_new_document_strong("重写帮我写一份安全报告")
     assert message_wants_new_document_strong("重新写一份述职报告")
     assert message_wants_new_document_strong("新写一份述职报告")
+    assert message_wants_new_document_strong(
+        "再根据这个蓝本帮我写一份新的安全报告 名字叫新的安全报告"
+    )
     assert not message_wants_new_document_strong("帮我写一份职业病危害评价")
     assert not message_wants_new_document_strong("继续分析第2章")
     # 裸「重写」留给退回重写本章，不算新开文档
@@ -426,6 +452,112 @@ def test_select_same_blueprint_new_document_isolates_writing_copy(tmp_path: Path
     new_wid = str(doc_slots[0].get("writing_task_id") or "").strip()
     assert new_wid and new_wid != "wDocAClone"
     assert doc_slots[0].get("title") == "文档B"
+
+
+def test_select_same_blueprint_force_new_same_title_does_not_overwrite(tmp_path: Path):
+    """新开一份即便沿用同一文档名，也不得覆盖上一份写作副本。"""
+    from report_writing.chat import actions as actions_mod
+    from report_writing.chat.session_documents import (
+        begin_document_onboarding,
+        focus_document_key,
+        session_documents_map,
+    )
+    from report_writing.controller import create_blueprint, ensure_task
+    from report_writing.domain.models import OutlineNode, OutlineTree
+    from report_writing.services.store import TaskStore
+
+    home = tmp_path
+    (home / "tasks").mkdir(parents=True)
+    bid = "bpSafetyLib"
+    path = home / "tasks" / bid
+    ensure_task(path)
+    create_blueprint(path, title="我的安全报告", category="", description="t")
+    task = TaskStore(path).load()
+    task.outline = OutlineTree(
+        chapters=[OutlineNode(key="c1", title="章一", sequence="1", points=["旧要点"])]
+    )
+    task.outline_confirmed = True
+    task.sample_ready = True
+    TaskStore(path).save(task)
+
+    session = ChatSession(
+        id="s_overwrite",
+        freeform={"title": "lzb安全报告", "writing_doc_named": True},
+    )
+    actions_mod._action_select_blueprint(home, session, {"blueprint_id": bid})
+    old_wid = str(session.task_id or "").strip()
+    assert old_wid.startswith("w")
+    old_task = TaskStore(home / "tasks" / old_wid).load()
+    old_task.outline.chapters[0].points = ["上一份已写要点"]
+    TaskStore(home / "tasks" / old_wid).save(old_task)
+
+    begin_document_onboarding(
+        session,
+        home,
+        message="新开一份安全报告",
+        title_hint="lzb安全报告",
+        force_new=True,
+    )
+    shell_tid = str(session.task_id or "").strip()
+    assert shell_tid and shell_tid != old_wid
+    assert str(focus_document_key(session) or "").startswith("task:")
+
+    actions_mod._action_select_blueprint(home, session, {"blueprint_id": bid})
+    new_wid = str(session.task_id or "").strip()
+    assert new_wid != old_wid
+    kept = TaskStore(home / "tasks" / old_wid).load()
+    assert kept.outline.chapters[0].points == ["上一份已写要点"]
+    docs = session_documents_map(session)
+    old_still = [
+        v
+        for v in docs.values()
+        if str(v.get("writing_task_id") or v.get("task_id") or "") == old_wid
+    ]
+    assert old_still
+    assert docs.get(f"bp:{bid}", {}).get("writing_task_id") == old_wid
+
+
+def test_apply_explicit_new_document_turn_mints_named_copy(tmp_path: Path):
+    from report_writing.chat import actions as actions_mod
+    from report_writing.chat.session_documents import (
+        apply_explicit_new_document_turn,
+        focus_document_key,
+        session_documents_map,
+    )
+    from report_writing.controller import create_blueprint, ensure_task
+    from report_writing.domain.models import OutlineNode, OutlineTree
+    from report_writing.services.store import TaskStore
+
+    home = tmp_path
+    (home / "tasks").mkdir(parents=True)
+    bid = "bpLzb"
+    path = home / "tasks" / bid
+    ensure_task(path)
+    create_blueprint(path, title="lzb安全报告", category="", description="t")
+    task = TaskStore(path).load()
+    task.outline = OutlineTree(
+        chapters=[OutlineNode(key="c1", title="章一", sequence="1", points=["p"])]
+    )
+    task.outline_confirmed = True
+    TaskStore(path).save(task)
+    session = ChatSession(
+        id="s_new_named",
+        freeform={"title": "lzb安全报告", "writing_doc_named": True, "meta_confirmed": True},
+    )
+    actions_mod._action_select_blueprint(home, session, {"blueprint_id": bid})
+    old_wid = str(session.task_id or "")
+    msg = "再根据这个蓝本帮我写一份新的安全报告 名字叫新的安全报告"
+    assert apply_explicit_new_document_turn(session, home, msg)
+    new_wid = str(session.task_id or "")
+    assert new_wid and new_wid != old_wid
+    assert "新的安全报告" in str((session.freeform or {}).get("title") or "")
+    assert session.blueprint_id == bid
+    docs = session_documents_map(session)
+    assert any(
+        str(v.get("writing_task_id") or v.get("task_id") or "") == old_wid
+        for v in docs.values()
+    )
+    assert str(focus_document_key(session) or "") != f"bp:{bid}" or new_wid != old_wid
 
 
 def test_select_blueprint_clears_stale_writing_task(tmp_path: Path, monkeypatch):

@@ -1,4 +1,4 @@
-"""口语主路径：ReAct 观察闭环（改名结构化 title、缺参 observation、多跳）。"""
+"""口语主路径：ReAct 观察闭环（改名结构化 title、缺参 missing_slots、多跳）。"""
 
 from __future__ import annotations
 
@@ -51,7 +51,8 @@ def test_set_session_meta_tool_requires_structured_title(tmp_path: Path):
     data = json.loads(raw)
     assert data.get("ok") is False
     assert "title" in (data.get("missing_slots") or [])
-    assert (data.get("observation") or "").strip()
+    assert "observation" not in data
+    assert str(data.get("reply_hint") or "").strip()
     assert get_session_goal(session).get("doc_title") != "2026个人述职报告"
 
 
@@ -64,7 +65,8 @@ def test_set_session_meta_tool_with_title_returns_observation(tmp_path: Path):
     )
     data = json.loads(raw)
     assert data.get("ok") is True
-    assert "observation" in data
+    assert "observation" not in data
+    assert str(data.get("reply_hint") or "").strip()
     assert get_session_goal(session).get("doc_title") == "2026个人述职报告"
 
 
@@ -130,13 +132,13 @@ class _MultiHopWriteModel(ScriptedChatModel):
                 data = json.loads(tool_msgs[-1].content or "{}")
             except json.JSONDecodeError:
                 data = {}
-            assert (data.get("observation") or data.get("reply_hint") or "").strip()
+            assert (data.get("reply_hint") or "").strip() or data.get("ok") is False
             return self.finish(str(data.get("reply_hint") or "好，按无蓝本继续。"))
         return self.call("skip_blueprint", {"message": "不用蓝本"})
 
 
 def test_react_open_write_multi_hop_reads_observation(tmp_path: Path):
-    from report_writing.chat.intent_router import user_chose_skip_blueprint
+    from report_writing.chat.session_state import user_chose_skip_blueprint
 
     session = ChatSession(id="s-hop", phase=ChatPhase.INTENT.value)
     state = ChatControlState(home=tmp_path, session=session)
@@ -166,9 +168,9 @@ class _FailThenClarifyModel(ScriptedChatModel):
                     data = json.loads(message.content or "{}")
                 except json.JSONDecodeError:
                     data = {}
-                obs = str(data.get("observation") or data.get("reply_hint") or "")
+                hint = str(data.get("reply_hint") or "")
                 if data.get("ok") is False:
-                    return self.finish(f"这章还没分析好，我先帮你安排学习。（观察：{obs[:60]}）")
+                    return self.finish(f"这章还没分析好，我先帮你安排学习。（观察：{hint[:60]}）")
                 return self.finish(str(data.get("reply_hint") or "好的。"))
             if isinstance(message, HumanMessage):
                 break
@@ -201,7 +203,7 @@ def test_start_writing_requires_doc_name_observation(tmp_path: Path):
     assert data.get("ok") is False
     miss = data.get("missing_slots") or []
     assert "outline" in miss or "doc_name" in miss
-    assert str(data.get("observation") or "")
+    assert str(data.get("reply_hint") or "")
 
 
 def test_add_chapter_element_hops_when_classifier_picks_collect(tmp_path: Path):
@@ -220,7 +222,7 @@ def test_add_chapter_element_hops_when_classifier_picks_collect(tmp_path: Path):
     state = ChatControlState(
         home=tmp_path,
         session=session,
-        intent_invoke=invoke,
+        clarify_invoke=invoke,
         last_user_message="将知识库要素添加到要素库",
     )
     tools = {t.name: t for t in build_chat_tools(state)}
@@ -229,7 +231,7 @@ def test_add_chapter_element_hops_when_classifier_picks_collect(tmp_path: Path):
     )
     data = json.loads(raw)
     assert data.get("ok") is False
-    assert data.get("suggested_next_tool") == "collect_to_element_library"
+    assert "suggested_next_tool" not in data
     assert not state.cards
 
 
@@ -249,7 +251,7 @@ def test_retry_chapter_missing_entry_suggests_ask_entry_path(tmp_path: Path):
     data = json.loads(raw)
     assert data.get("ok") is False
     assert "writing_path" in (data.get("missing_slots") or [])
-    assert data.get("suggested_next_tool") == "ask_entry_path"
+    assert "suggested_next_tool" not in data
     assert not any(getattr(c, "type", None) == "intent_clarify" for c in (state.cards or []))
 
 
@@ -286,7 +288,7 @@ def test_submit_outline_missing_text_observation(tmp_path: Path):
     data = json.loads(raw)
     assert data.get("ok") is False
     assert "outline_text" in (data.get("missing_slots") or [])
-    assert "regenerate" in (data.get("observation") or "")
+    assert "目录" in str(data.get("reply_hint") or "")
 
 
 def test_generate_freeform_points_needs_outline_task(tmp_path: Path):
@@ -322,7 +324,7 @@ def test_oral_entry_skips_domain_claim_modules():
     assert not hasattr(intent_dispatch, "try_intent_dispatch_route")
     assert not hasattr(progress_continue, "try_progress_continue_clarify")
     assert not hasattr(writing_control_route, "try_writing_control_route")
-    assert hasattr(intent_dispatch, "execute_intent_plan")
+    assert not hasattr(intent_dispatch, "execute_intent_plan")
     assert hasattr(writing_control_route, "apply_writing_control_classification")
 
 
@@ -334,21 +336,11 @@ class _FinishOnlyModel(ScriptedChatModel):
         return self.finish("好的，我继续。")
 
 
-def test_run_chat_control_ignores_intent_plan_flag(tmp_path: Path, monkeypatch):
-    """即使打开遗留开关，口语也不走 JSON 计划。"""
-    monkeypatch.setenv("REPORT_WRITING_INTENT_PLAN", "1")
-    from report_writing.infra import config_settings
+def test_run_chat_control_without_intent_multi_plan(tmp_path: Path):
+    """口语只走 create_agent；整轮 JSON 计划模块不存在。"""
+    import importlib.util
 
-    config_settings._application.cache_clear()
-    assert config_settings.intent_plan_enabled() is True
-
-    def _boom(*_a, **_k):
-        raise AssertionError("run_chat_control must not call try_run_oral_multi_intent")
-
-    monkeypatch.setattr(
-        "report_writing.chat.intent_multi_plan.try_run_oral_multi_intent",
-        _boom,
-    )
+    assert importlib.util.find_spec("report_writing.chat.intent_multi_plan") is None
 
     session = _session_named(tmp_path)
     state = ChatControlState(home=tmp_path, session=session)
@@ -367,7 +359,6 @@ def test_run_chat_control_ignores_intent_plan_flag(tmp_path: Path, monkeypatch):
         system_prompt="",
     )
     assert "好的" in (reply or "")
-    config_settings._application.cache_clear()
 
 
 def test_click_action_is_in_agent_user_text(tmp_path: Path):
@@ -385,10 +376,11 @@ def test_click_action_is_in_agent_user_text(tmp_path: Path):
     )
     assert body.get("action") == "skip_blueprint"
     assert "同名" in str(body.get("hint") or "")
+    assert "suggested_next_step" not in body
 
 
 def test_handle_chat_click_selects_blueprint_via_agent(tmp_path: Path):
-    from report_writing.chat_orchestrator import handle_chat
+    from report_writing.chat import handle_chat
     from report_writing.controller import ensure_task
     from report_writing.domain.models import ChatRequest, OutlineNode, OutlineTree, WritingTask
     from report_writing.services.robots import create_robot
@@ -420,20 +412,14 @@ def test_handle_chat_click_selects_blueprint_via_agent(tmp_path: Path):
     assert session.blueprint_id == "bp_click" or "蓝本" in (resp.reply or "")
 
 
-def test_clarify_llm_reexports_narrow_classifiers():
-    from report_writing.chat import clarify_llm, intent_llm
-
-    assert clarify_llm.classify_clarify_reply_llm is intent_llm.classify_clarify_reply_llm
-    assert not hasattr(clarify_llm, "classify_turn_plan_llm")
-
-
-def test_clarify_flow_does_not_import_apply_turn_plan():
+def test_clarify_llm_narrow_classifiers_module():
     import inspect
 
-    from report_writing.chat import clarify_flow
+    from report_writing.chat import clarify_llm
 
-    source = inspect.getsource(clarify_flow)
-    assert "intent_turn_plan import apply_turn_plan" not in source
+    assert inspect.getmodule(clarify_llm.classify_clarify_reply_llm).__name__ == "report_writing.chat.clarify_llm"
+    assert not hasattr(clarify_llm, "classify_turn_plan_llm")
+    assert not hasattr(clarify_llm, "classify_chat_control_plan_llm")
 
 
 def test_clarify_flow_and_tool_dispatch_have_no_legacy_shims():
@@ -498,6 +484,7 @@ def test_agent_user_text_exposes_suggested_next_tools(tmp_path: Path):
     )
     assert body.get("suggested_next_tools")
     assert "suggested_next_tools" in str(body.get("routing_hint") or "")
+    assert "suggested_next_step" not in body
 
 
 def test_materials_pack_and_supplement_tools_are_bound(tmp_path: Path):
@@ -511,7 +498,7 @@ def test_materials_pack_and_supplement_tools_are_bound(tmp_path: Path):
 
 
 def test_handle_chat_materials_pack_skip_via_agent(tmp_path: Path):
-    from report_writing.chat_orchestrator import handle_chat
+    from report_writing.chat import handle_chat
     from report_writing.domain.models import ChatRequest, WritingTask
     from report_writing.services.chat_session import load_or_create
     from report_writing.services.store import TaskStore
@@ -551,14 +538,13 @@ def test_submit_points_suggests_other_tool_without_silent_reroute(tmp_path: Path
         home=tmp_path,
         session=session,
         invoke=invoke,
-        intent_invoke=invoke,
+        clarify_invoke=invoke,
     )
     tools = {t.name: t for t in build_chat_tools(state)}
     raw = tools["submit_points"].invoke({"message": "给这章加个气候要素"})
     data = json.loads(raw)
     assert data.get("ok") is False
-    assert data.get("suggested_next_tool") == "add_chapter_element"
-    assert "add_chapter_element" in str(data.get("observation") or "")
+    assert "suggested_next_tool" not in data
     from report_writing.chat.writing_control_route import reroute_submit_points_if_needed
 
     assert (
@@ -577,13 +563,13 @@ def test_submit_points_skip_phrase_suggests_skip_tool(tmp_path: Path):
         return json.dumps({"tool": "none", "confidence": 0.1})
 
     state = ChatControlState(
-        home=tmp_path, session=session, invoke=invoke, intent_invoke=invoke
+        home=tmp_path, session=session, invoke=invoke, clarify_invoke=invoke
     )
     tools = {t.name: t for t in build_chat_tools(state)}
     raw = tools["submit_points"].invoke({"message": "先跳过要点直接开写"})
     data = json.loads(raw)
     assert data.get("ok") is False
-    assert data.get("suggested_next_tool") == "skip_freeform_points"
+    assert "suggested_next_tool" not in data
 
 
 def test_submit_points_without_outline_suggests_submit_outline(tmp_path: Path):
@@ -594,4 +580,4 @@ def test_submit_points_without_outline_suggests_submit_outline(tmp_path: Path):
     data = json.loads(raw)
     assert data.get("ok") is False
     assert "outline" in (data.get("missing_slots") or [])
-    assert data.get("suggested_next_tool") == "submit_outline"
+    assert "suggested_next_tool" not in data

@@ -59,7 +59,7 @@ def test_write_intent_mints_lane(tmp_path: Path):
 
 
 def test_handle_chat_hello_no_name_ask(tmp_path: Path):
-    from report_writing.chat_orchestrator import handle_chat
+    from report_writing.chat import handle_chat
     from report_writing.domain.models import ChatRequest
     from report_writing.services.robots import create_robot
 

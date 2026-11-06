@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from report_writing.chat_orchestrator import _writing_chapter_keys, handle_chat
+from report_writing.chat import _writing_chapter_keys, handle_chat
 from report_writing.controller import ensure_task
 from report_writing.domain.models import (
     ChapterState,
@@ -252,7 +252,7 @@ def _bind_robot_blueprints(home: Path, robot_id: str, *blueprint_ids: str) -> No
 
 
 def test_step_mode_progress_shows_focus_chapter_only():
-    from report_writing.chat_orchestrator import WRITING_PACE_STEP, _visible_progress_chapters
+    from report_writing.chat import WRITING_PACE_STEP, _visible_progress_chapters
 
     rows = [
         {"key": "c1", "status": "awaiting_confirm", "has_draft": True, "steps": []},
@@ -265,7 +265,7 @@ def test_step_mode_progress_shows_focus_chapter_only():
 
 
 def test_batch_mode_progress_lists_all_chapters():
-    from report_writing.chat_orchestrator import WRITING_PACE_BATCH, _visible_progress_chapters
+    from report_writing.chat import WRITING_PACE_BATCH, _visible_progress_chapters
 
     rows = [
         {"key": "c1", "status": "awaiting_confirm", "has_draft": True, "steps": []},
@@ -277,7 +277,7 @@ def test_batch_mode_progress_lists_all_chapters():
 
 
 def test_filter_outline_keeps_ancestors_only():
-    from report_writing.chat_orchestrator import _filter_outline_by_selected_keys
+    from report_writing.chat import _filter_outline_by_selected_keys
 
     nodes = [
         OutlineNode(key="p", sequence="1", title="父", structure_only=True),
@@ -677,7 +677,7 @@ def test_writing_chapter_keys_follow_outline_order():
 
 def test_analysis_choice_cards_survive_handoff_overwrite(tmp_path: Path):
     """选蓝本后即使 Agent 再调 handoff，仍应保留「仅写已分析」。"""
-    from report_writing.chat_orchestrator import _ensure_analysis_choice_cards
+    from report_writing.chat import _ensure_analysis_choice_cards
     from report_writing.domain.models import ChatCard
 
     path = tmp_path / "tasks" / "bp_keep"

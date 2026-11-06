@@ -14,9 +14,21 @@ _SNAKE_ID = re.compile(r"\b[a-z][a-z0-9_]{2,48}\b")
 
 
 def _known_tool_ids() -> frozenset[str]:
-    from report_writing.chat.tool_registry import all_registered_tool_ids
+    """实际绑定到总控的 Tool.name，用来拦 system prompt 贴工具清单。"""
+    from pathlib import Path
 
-    return all_registered_tool_ids()
+    from report_writing.agents.chat_control import ChatControlState
+    from report_writing.agents.chat_tools import build_chat_tools
+    from report_writing.domain.models import ChatSession
+
+    state = ChatControlState(home=Path("."), session=ChatSession(id="_lint"))
+    return frozenset(
+        name
+        for name in (
+            str(getattr(item, "name", "") or "").strip() for item in build_chat_tools(state)
+        )
+        if name
+    )
 
 
 def chat_prompt_tool_catalog_violations(text: str) -> list[str]:

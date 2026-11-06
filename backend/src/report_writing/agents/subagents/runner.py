@@ -1,4 +1,13 @@
-"""子 Agent 通用 ReAct 运行器。"""
+"""子 Agent：官方 Subagents 模式（总控把子 Agent 当 Tool）。
+
+https://docs.langchain.com/oss/python/langchain/multi-agent/subagents
+
+    sub = create_agent(model, tools, system_prompt=...)
+    result = sub.invoke({"messages": [{"role": "user", "content": query}]})
+    # 返回给总控，不直接对用户说话
+
+产品侧多包一层 JSON（reply_hint / cards），便于总控卡片与观察闭环。
+"""
 
 from __future__ import annotations
 
@@ -7,11 +16,13 @@ import os
 from collections.abc import Callable
 from typing import Any
 
+from langchain.agents import create_agent
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, ToolMessage
 
-from report_writing.agents.react import run_react
+from report_writing.agents.react_middleware import build_react_middleware
 from report_writing.agents.state import ChatControlState
+from report_writing.domain.models import MAX_AGENT_STEPS
 
 
 def _dump(data: dict[str, Any]) -> str:
@@ -19,7 +30,7 @@ def _dump(data: dict[str, Any]) -> str:
 
 
 def subagent_final_text(messages: list[Any], *, default: str) -> str:
-    """优先最近 Tool reply_hint；若子 Agent 直接 finish（如 abandon 澄清）则采信 AI 文本。"""
+    """优先最近 Tool reply_hint；否则官方约定：取最后一条 AI 文本。"""
     ai_text = ""
     for message in reversed(messages or []):
         if isinstance(message, ToolMessage):
@@ -46,6 +57,49 @@ def subagent_final_text(messages: list[Any], *, default: str) -> str:
     return ai_text or default
 
 
+def invoke_subagent(
+    model: BaseChatModel,
+    tools: list,
+    system_prompt: str,
+    query: str,
+    name: str,
+    *,
+    session: Any = None,
+    emit: Any = None,
+    rounds: int = 6,
+) -> dict[str, Any]:
+    """create_agent(...).invoke({\"messages\": [user query]})。"""
+    needed = max(rounds or MAX_AGENT_STEPS, 1)
+    limit = needed * 4 + 4
+    if session is not None:
+        from report_writing.chat.agent_chain_log import log_react_round
+
+        log_react_round(session, emit, agent=name, system_prompt=system_prompt, user_text=query)
+    agent = create_agent(
+        model,
+        tools,
+        system_prompt=system_prompt,
+        name=name,
+        middleware=build_react_middleware(
+            session=session,
+            emit=emit,
+            agent=name,
+            model_call_limit=limit,
+        ),
+    )
+    try:
+        result = agent.invoke(
+            {"messages": [{"role": "user", "content": query}]},
+            config={"recursion_limit": limit},
+        )
+    except Exception as error:
+        kind = error.__class__.__name__
+        if kind not in {"GraphRecursionError", "ModelCallLimitExceededError"}:
+            raise
+        raise RuntimeError(f"{name} 在 {limit} 步内没有结束") from error
+    return result
+
+
 def run_domain_subagent(
     *,
     model: BaseChatModel,
@@ -60,6 +114,7 @@ def run_domain_subagent(
     scripted_factory: Callable[[ChatControlState], BaseChatModel] | None = None,
     rounds: int = 6,
 ) -> str:
+    """领域子 Agent：官方 create_agent 循环，结果以 Tool JSON 回总控。"""
     text = (user_request or state.last_user_message or "").strip()
     if not text:
         return _dump({"ok": False, "reply_hint": "请说明要做什么。"})
@@ -71,7 +126,6 @@ def run_domain_subagent(
 
     turn_ctx = ensure_control_state_context(state, text)
     ctx_block = turn_context_prompt_block(turn_ctx)
-
     prompt = instructions.strip()
     extra_blocks = [b for b in (ctx_block, context.strip()) if b]
     if extra_blocks:
@@ -83,30 +137,15 @@ def run_domain_subagent(
     ):
         sub_model = scripted_factory(state)
 
-    from report_writing.chat.agent_chain_log import log_chain
-
-    log_chain(
-        state.session,
-        state.emit,
-        step="subagent",
-        summary=f"子Agent·{agent_name}",
-        detail={
-            "agent": agent_name,
-            "instructions_preview": instructions[:2000],
-            "context_preview": context[:1200] if context else "",
-            "turn_context_block": ctx_block[:2000] if ctx_block else "",
-            "user_request": text[:800],
-        },
-    )
-    result = run_react(
+    result = invoke_subagent(
         sub_model,
         tools,
         prompt,
         text,
         agent_name,
-        rounds=rounds,
         session=state.session,
         emit=state.emit,
+        rounds=rounds,
     )
     hint = subagent_final_text(result.get("messages") or [], default=default_reply)
     suggested = list((state.session.freeform or {}).get("suggested_next_tools") or [])
@@ -117,8 +156,4 @@ def run_domain_subagent(
     }
     if suggested:
         body["suggested_next_tools"] = suggested
-        body["observation"] = (
-            f"子Agent观察：suggested_next_tools={suggested}；"
-            "由总控同轮调用，子Agent不代跑 begin。"
-        )
     return _dump(body)

@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 import logging
 import re
+from typing import Annotated
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
-from langchain_core.tools import tool
+from langchain.tools import tool
+from pydantic import Field
 
 from report_writing.agents.react import run_react, tool_result
 from report_writing.agents.scripted import ScriptedChatModel, tool_payloads
@@ -20,9 +22,9 @@ from report_writing.domain.models import ChapterRequirement, ContentBlock, Extra
 _log = logging.getLogger("uvicorn.error")
 _SAMPLE_LIMIT = CHAPTER_EXCERPT_MAX_CHARS
 
-INSTRUCTIONS = """你是报告章节配置助手（对齐 anyuan V2 章节分析）。只阅读已经写过的样板正文，不要阅读本次项目材料，不要写新报告。
-先 list_chapters，再对每一章 read_chapter，最后 submit_writing_brief。
-submit_writing_brief 的参数包含 voice、layout、paragraph_format、chapters。
+INSTRUCTIONS = """你是报告章节配置助手。只阅读已经写过的样板正文，不要读本次项目材料，不要写新报告。
+流程：先列出章节，再逐章阅读样板，最后一次性提交整份书写要求。
+提交参数包含 voice、layout、paragraph_format、chapters。
 
 分两层：固定层=版式与写法；元数据层=随项目而变的名称/型号/数值等 → 只进 extracts，不进 generate。
 
@@ -79,17 +81,28 @@ def run_study(template: ReportTemplate, model: BaseChatModel | None = None, *, r
 def _tools(template: ReportTemplate):
     payload = _template_payload(template)
 
-    @tool
+    @tool(
+        "list_chapters",
+        description=(
+            "何时：分析开始，先列出样板章节 key/标题/层级。"
+            "不要：跳过直接 submit_writing_brief；读正文用 read_chapter。"
+        ),
+    )
     def list_chapters() -> str:
-        """列出模板中的章节键、标题和层级。"""
         return json.dumps(
             [{"key": item["key"], "sequence": item.get("sequence") or "", "title": item["title"], "level": item["level"]} for item in payload["chapters"]],
             ensure_ascii=False,
         )
 
-    @tool
-    def read_chapter(key: str) -> str:
-        """阅读某一章的范文段落和已有要点。"""
+    @tool(
+        "read_chapter",
+        description=(
+            "何时：list_chapters 之后阅读一章样板正文与已有要点，每一章调用一次。"
+            "缺了：用 list_chapters 返回的 key，不要猜。"
+            "不要：读项目材料、写新报告；全部读完再 submit_writing_brief。"
+        ),
+    )
+    def read_chapter(key: Annotated[str, Field(description="必填。章节 key，来自 list_chapters。")]) -> str:
         title = next((item["title"] for item in payload["chapters"] if item["key"] == key), key)
         _log.info("模型正在阅读 %s %s", key, title)
         for item in payload["chapters"]:
@@ -97,14 +110,19 @@ def _tools(template: ReportTemplate):
                 return json.dumps(item, ensure_ascii=False)
         return json.dumps({"error": f"未知章节 {key}"}, ensure_ascii=False)
 
-    @tool
+    @tool(
+        "submit_writing_brief",
+        description=(
+            "何时：已 list_chapters 且读完每一章，提交整份书写要求。分析结束动作。"
+            "不要：用 read_chapter 代替提交；未读完不要交。"
+        ),
+    )
     def submit_writing_brief(
-        voice: str,
-        layout: str,
-        paragraph_format: str,
-        chapters: list[dict],
+        voice: Annotated[str, Field(description="必填。文风。")],
+        layout: Annotated[str, Field(description="必填。版式。")],
+        paragraph_format: Annotated[str, Field(description="必填。段落格式说明。")],
+        chapters: Annotated[list[dict], Field(description="必填。各章书写要求列表。")],
     ) -> str:
-        """提交整份书写要求。这是分析要点阶段的结束动作。"""
         brief = _assemble(template, voice, layout, paragraph_format, chapters)
         return json.dumps(brief.to_dict(), ensure_ascii=False)
 

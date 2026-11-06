@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Annotated, Any
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-from langchain_core.tools import tool
+from langchain.tools import tool
+from pydantic import Field
 
 from report_writing.agents.state import ChatControlState
 from report_writing.agents.scripted import ScriptedChatModel
@@ -33,10 +34,18 @@ def build_blueprint_wizard_subagent_tools(state: ChatControlState) -> list:
 
         return execute_wizard_command(state.home, state.session, command)
 
-    @tool
-    def begin_blueprint_wizard(title_hint: str = "") -> str:
-        """开始对话内蓝本向导（填写名称步）。title_hint 为用户口述的蓝本名称，可空。"""
-        from report_writing.chat.intent_router import extract_wizard_title_hint
+    @tool(
+        "begin_blueprint_wizard",
+        description=(
+            "何时：向导尚未开始，用户要依据模版编写。打开填写名称步。"
+            "缺了：名称可空，先开填写名称步。"
+            "不要：向导已进行中重复开启；不要代写正文。"
+        ),
+    )
+    def begin_blueprint_wizard(
+        title_hint: Annotated[str, Field(description="可选。用户口述的蓝本名称，不是已定名。")] = "",
+    ) -> str:
+        from report_writing.chat.entry_intent import extract_wizard_title_hint
         from report_writing.chat.resource_actions import _begin_blueprint_wizard
 
         hint = (title_hint or "").strip() or extract_wizard_title_hint(
@@ -48,30 +57,44 @@ def build_blueprint_wizard_subagent_tools(state: ChatControlState) -> list:
         state.cards = list(cards)
         return _tool_ok(state, reply)
 
-    @tool
+    @tool(
+        "re_extract_outline_from_sample",
+        description=(
+            "何时：样板已上传，用户要识别、生成或修正章节目录。"
+            "不要：尚未上传时调用；不要代替确认目录。"
+        ),
+    )
     def re_extract_outline_from_sample() -> str:
-        """从已上传的样板 Word/PDF 重新识别并生成章节目录。"""
         reply, cards = _run_command("re_extract_outline")
         state.cards = list(cards)
         return _tool_ok(state, reply)
 
-    @tool
+    @tool(
+        "re_upload_sample_file",
+        description="何时：用户要重新上传或更换 Word/PDF 样板。回到上传步，不要在本工具里提取目录。",
+    )
     def re_upload_sample_file() -> str:
-        """回到上传样板步骤，让用户重新上传或更换文件。"""
         reply, cards = _run_command("re_upload_sample")
         state.cards = list(cards)
         return _tool_ok(state, reply)
 
-    @tool
+    @tool(
+        "go_outline_confirm_step",
+        description="何时：目录已抽出，用户要在拓扑图核对。这是核对，不是最终确认、也不是开始分析。",
+    )
     def go_outline_confirm_step() -> str:
-        """进入「确认目录」步骤，在拓扑图中核对章节结构。"""
         reply, cards = _run_command("go_outline_confirm")
         state.cards = list(cards)
         return _tool_ok(state, reply)
 
-    @tool
+    @tool(
+        "go_study_analysis_step",
+        description=(
+            "何时：目录已确认，用户要开始分析写作要点。"
+            "进入分析步；真正跑流式分析由卡片「开始分析」触发，本工具不写正文。"
+        ),
+    )
     def go_study_analysis_step() -> str:
-        """进入分析要点步骤（用户再在卡片点「开始分析」跑流式任务）。"""
         reply, cards = _run_command("go_study")
         state.cards = list(cards)
         return _tool_ok(state, reply)
@@ -106,9 +129,9 @@ def _make_wizard_scripted_model(state: ChatControlState, invoke) -> ScriptedChat
                     break
 
             from report_writing.chat.blueprint_wizard_route import apply_wizard_action
-            from report_writing.chat.intent_llm import resolve_wizard_action
-            from report_writing.chat.intent_router import (
-                active_blueprint_wizard,
+            from report_writing.chat.clarify_llm import resolve_wizard_action
+            from report_writing.chat.session_state import active_blueprint_wizard
+            from report_writing.chat.entry_intent import (
                 extract_wizard_title_hint,
                 is_create_blueprint_intent,
             )

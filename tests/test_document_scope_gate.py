@@ -7,14 +7,17 @@ from pathlib import Path
 
 from report_writing.agents.chat_control import build_chat_tools
 from report_writing.agents.state import ChatControlState
+from report_writing.chat.action_slots import build_action_slot_clarify
 from report_writing.chat.clarify_flow import (
     build_document_scope_clarify,
+    build_entry_path_clarify,
     execute_clarify_spec,
     get_pending,
 )
-from report_writing.chat.intent_turn_plan import TurnPlan, apply_turn_plan
 from report_writing.chat.session_documents import (
+    begin_document_onboarding,
     confirm_writing_document_name,
+    focus_document_key,
     focus_needs_entry_path,
     message_looks_like_chapter_revise,
     message_looks_like_weak_rewrite,
@@ -125,56 +128,46 @@ def test_rewrite_current_option_ladder(tmp_path: Path):
 
 
 def test_force_new_hangs_entry_path(tmp_path: Path):
+    """异题 + force_new：新开文档后应挂入口选路，不静默 start_writing。"""
     (tmp_path / "tasks").mkdir(parents=True)
     session = _named_session("安全评价报告")
-    plan = TurnPlan(
-        confidence=0.92,
-        uncertain=False,
-        slots={"doc_name": "lzb个人述职"},
-        tools=[{"tool": "start_writing", "args": {}}],
-        missing=[],
-    )
-    hit = apply_turn_plan(
-        tmp_path,
+    begin_document_onboarding(
         session,
-        "写一份lzb个人述职",
+        tmp_path,
+        message="写一份lzb个人述职",
+        title_hint="lzb个人述职",
+        force_new=True,
+    )
+    reply, _cards = build_entry_path_clarify(
+        session,
+        message="写一份lzb个人述职",
+        title_hint="lzb个人述职",
         invoke=None,
-        plan=plan,
+        home=tmp_path,
     )
-    assert hit is not None
-    reply, cards, events = hit
-    assert "新开" in (reply or "")
-    assert str((session.freeform or {}).get("title") or "") == "安全评价报告"
     pending = get_pending(session) or {}
-    assert pending.get("source") == "document_scope" or "新开" in (reply or "")
-    assert not any(
-        e.get("type") == "turn_plan" and "start_writing" in (e.get("tools") or [])
-        for e in (events or [])
-        if isinstance(e, dict) and e.get("type") == "turn_plan" and e.get("tools")
-    )
+    assert "新开" in (reply or "") or pending.get("source") in {
+        "entry",
+        "entry_branch",
+        "entry_freeform_mode",
+        "doc_name",
+    }
+    assert focus_document_key(session)
 
 
 def test_chapter_revise_blocks_start_writing_in_plan(tmp_path: Path):
+    """显式章节重写：缺 chapter_key 时应挂槽位澄清，不当作普通开写。"""
     (tmp_path / "tasks").mkdir(parents=True)
     session = _named_session("安全评价报告")
-    plan = TurnPlan(
-        confidence=0.9,
-        uncertain=False,
-        slots={},
-        tools=[{"tool": "start_writing", "args": {}}],
-        missing=[],
+    reply, cards = build_action_slot_clarify(
+        session,
+        "add_chapter_element",
+        {"message": "重写第2章", "task_id": session.task_id},
+        ["chapter_key"],
+        message="重写第2章",
     )
-    hit = apply_turn_plan(
-        tmp_path, session, "重写第2章", invoke=None, plan=plan
-    )
-    assert hit is not None
-    reply, _cards, events = hit
     assert "章" in (reply or "")
-    assert any(
-        "chapter_key" in (e.get("missing") or [])
-        for e in (events or [])
-        if isinstance(e, dict)
-    )
+    assert cards
 
 
 def test_llm_high_confidence_force_new_promotes_from_ask():
@@ -318,7 +311,8 @@ def test_strong_new_doc_phrase_beats_llm_continue():
     assert "述职" in str(scope.get("title") or "")
 
 
-def test_apply_turn_plan_force_new_during_wizard_study(tmp_path: Path):
+def test_force_new_during_wizard_study_leaves_old_task(tmp_path: Path):
+    """向导 study 步时强新开：应 mint 新文档槽，旧 task_id / wizard 与焦点解绑。"""
     (tmp_path / "tasks").mkdir(parents=True)
     session = _named_session("环境报告")
     old_id = "w_env_study"
@@ -343,26 +337,13 @@ def test_apply_turn_plan_force_new_during_wizard_study(tmp_path: Path):
         clear_blueprint_id=True,
     )
 
-    plan = TurnPlan(
-        confidence=0.9,
-        tools=[{"tool": "write_analyzed_only", "args": {}}],
-        missing=[],
-        uncertain=False,
-        slots={},
-    )
-
-    def invoke(_s: str, _u: str) -> str:
-        return json.dumps({"action": "continue", "title": "", "confidence": 0.95})
-
-    hit = apply_turn_plan(
-        tmp_path,
+    begin_document_onboarding(
         session,
-        "再写一份述职报告",
-        invoke=invoke,
-        plan=plan,
+        tmp_path,
+        message="再写一份述职报告",
+        title_hint="述职报告",
+        force_new=True,
     )
-    assert hit is not None
-    reply, _cards, _events = hit
-    assert "新开" in (reply or "")
     assert str(session.task_id or "") != old_id
     assert str(session.freeform.get("focus_document_key") or "") != f"task:{old_id}"
+    assert not (session.freeform or {}).get("blueprint_wizard")

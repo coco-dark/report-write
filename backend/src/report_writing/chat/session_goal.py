@@ -56,7 +56,7 @@ def merge_session_goal(session: ChatSession, patch: dict[str, Any] | SessionGoal
             session.freeform = {**(session.freeform or {}), "session_documents": docs}
     except Exception:
         pass
-    from report_writing.chat.intent_router import touch_session_plan
+    from report_writing.chat.session_state import touch_session_plan
 
     touch_session_plan(
         session,

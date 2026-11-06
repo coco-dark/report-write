@@ -15,7 +15,7 @@ from report_writing.infra.bailian import (
 from report_writing.infra.config_settings import (
     control_max_tokens,
     control_model_name,
-    intent_max_tokens,
+    clarify_max_tokens,
     llm_mode,
 )
 from report_writing.infra.token_tracking import wrap_token_tracking
@@ -81,7 +81,7 @@ def live_control_model(*, label: str = "control") -> BaseChatModel | None:
         return None
 
 
-def live_intent_model(*, label: str = "intent") -> BaseChatModel | None:
+def live_clarify_model(*, label: str = "clarify") -> BaseChatModel | None:
     if llm_mode() == "scripted":
         return None
     from report_writing.infra.project_config import data_home_path
@@ -101,7 +101,7 @@ def live_intent_model(*, label: str = "intent") -> BaseChatModel | None:
         intent_name = normalize_model_name(load_bailian_intent_model_name())
     data = base.model_dump()
     data["model_name"] = intent_name
-    data["max_tokens"] = intent_max_tokens()
+    data["max_tokens"] = clarify_max_tokens()
     data["temperature"] = 0.0
     data["thinking_level"] = "NONE"
     data["chat_template_kwargs_enabled"] = False
@@ -115,7 +115,7 @@ def live_intent_model(*, label: str = "intent") -> BaseChatModel | None:
 __all__ = [
     "live_model",
     "live_control_model",
-    "live_intent_model",
+    "live_clarify_model",
     "or_live_model",
     "model_invoke_fn",
 ]

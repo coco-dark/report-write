@@ -2,21 +2,21 @@
 
 from __future__ import annotations
 
-from report_writing.chat.tool_dispatch import execute_intent_plan
+from report_writing.chat.tool_dispatch import execute_dispatch_tool
 from report_writing.domain.models import ChatSession
 
 
 def test_dispatch_empty_plan_returns_none(tmp_path):
     session = ChatSession(id="s1", phase="intent")
-    assert execute_intent_plan(tmp_path, session, [], "看看有哪些要素") is None
+    assert execute_dispatch_tool(tmp_path, session, {}, "看看有哪些要素") is None
 
 
 def test_dispatch_does_not_regex_remap_wrong_match_plan(tmp_path):
     session = ChatSession(id="s1", phase="intent")
-    hit = execute_intent_plan(
+    hit = execute_dispatch_tool(
         tmp_path,
         session,
-        [{"tool": "match_blueprints", "args": {}}],
+        {"tool": "match_blueprints", "args": {}},
         "看看有哪些要素",
     )
     assert hit is not None
@@ -30,10 +30,10 @@ def test_dispatch_does_not_regex_remap_wrong_match_plan(tmp_path):
 
 def test_dispatch_opens_element_library_when_llm_selects(tmp_path):
     session = ChatSession(id="s1", phase="intent")
-    reply, cards, _ = execute_intent_plan(
+    reply, cards, _ = execute_dispatch_tool(
         tmp_path,
         session,
-        [{"tool": "open_element_library", "args": {}}],
+        {"tool": "open_element_library", "args": {}},
         "看看有哪些要素",
     )
     assert "要素" in reply

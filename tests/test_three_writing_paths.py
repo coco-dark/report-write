@@ -7,7 +7,7 @@ from pathlib import Path
 
 from report_writing.chat.actions import _action_select_blueprint, _action_skip_blueprint
 from report_writing.chat.freeform_route import _apply_single_freeform_intent
-from report_writing.chat.intent_router import (
+from report_writing.chat.session_state import (
     WRITING_PATH_BLUEPRINT,
     WRITING_PATH_FREEFORM,
     active_blueprint_wizard,

@@ -7,14 +7,16 @@ from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-from langchain_core.tools import tool
+from langchain.tools import tool
 
 from report_writing.agents.scripted import ScriptedChatModel
 from report_writing.agents.state import ChatControlState
 from report_writing.agents.subagents.runner import run_domain_subagent
 
-INSTRUCTIONS = """你是「Word 导出样式」领域子助手。只通过已绑定 Tool 操作；何时调用见各 Tool description。
-导出前用户要配 Word 样式；未配置时导出仍可用默认样式。完成后口语总结。"""
+INSTRUCTIONS = """你是 Word 导出样式子助手。只通过已绑定 Tool 操作；何时调用见各 Tool description。
+
+职责：导出前按用户要求列出或打开配置向导。未配置时导出仍可用默认样式，不要强推。
+不要改 HTML 渲染模版（那是另一个子助手）。完成后用一两句口语总结。"""
 
 
 def _dump(data: dict[str, Any]) -> str:
@@ -22,9 +24,15 @@ def _dump(data: dict[str, Any]) -> str:
 
 
 def build_style_subagent_tools(state: ChatControlState) -> list:
-    @tool
+    @tool(
+        "list_word_styles",
+        description=(
+            "何时：用户要看有哪些 Word 导出样式。"
+            "缺了：直接列出即可。"
+            "不要：用本工具代替配置向导（用 begin_word_style_wizard）。"
+        ),
+    )
     def list_word_styles() -> str:
-        """列出当前机器人/账号下可用的 Word 样式。"""
         from report_writing.services.robots import scoped_word_styles
 
         items = scoped_word_styles(state.home, state.session.robot_id or None)
@@ -33,9 +41,15 @@ def build_style_subagent_tools(state: ChatControlState) -> list:
         lines = [f"- {getattr(t, 'title', None) or getattr(t, 'name', '')} ({t.id})" for t in items[:20]]
         return _dump({"ok": True, "reply_hint": "可用 Word 样式：\n" + "\n".join(lines)})
 
-    @tool
+    @tool(
+        "begin_word_style_wizard",
+        description=(
+            "何时：用户说配置/新建 Word 样式，打开卡片向导。"
+            "缺了：打开向导卡让用户选，不要猜样式 id。"
+            "不要：只浏览列表时调用；未配置时导出仍可用默认样式，不要强推。"
+        ),
+    )
     def begin_word_style_wizard() -> str:
-        """在对话中打开 Word 样式配置向导。"""
         from report_writing.chat.resource_actions import open_template_wizard_choose
 
         reply, cards = open_template_wizard_choose(state.session, "word_style")

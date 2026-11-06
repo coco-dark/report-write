@@ -1,4 +1,4 @@
-from report_writing.chat.intent_action_chain import (
+from report_writing.chat.classifier_action_chain import (
     WIZARD_POLICY,
     order_action_ids,
 )
@@ -16,8 +16,8 @@ def test_wizard_does_not_inject_confirm_for_go_study_alone():
 
 
 def test_chat_plan_order_start_after_select_chapters():
-    from report_writing.chat.intent_action_chain import CHAT_CONTROL_PLAN_POLICY, order_action_ids
+    from report_writing.chat.classifier_action_chain import CLASSIFIER_ACTION_POLICY, order_action_ids
 
-    out = order_action_ids(["start_writing", "select_write_chapters", "select_blueprint"], CHAT_CONTROL_PLAN_POLICY)
+    out = order_action_ids(["start_writing", "select_write_chapters", "select_blueprint"], CLASSIFIER_ACTION_POLICY)
     assert out.index("select_blueprint") < out.index("select_write_chapters") < out.index("start_writing")
 

@@ -5,7 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from report_writing.chat.actions import _action_select_blueprint
-from report_writing.chat.intent_router import WRITING_PATH_BLUEPRINT, active_blueprint_wizard, get_writing_path
+from report_writing.chat.session_state import (
+    WRITING_PATH_BLUEPRINT,
+    active_blueprint_wizard,
+    get_writing_path,
+)
 from report_writing.chat.resource_actions import execute_wizard_command
 from report_writing.chat.wizard_state import (
     WIZARD_MODE_SELECTED,

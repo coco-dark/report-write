@@ -8,7 +8,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from report_writing.chat.tool_dispatch import DISPATCH_TOOLS, execute_dispatch_tool
-from report_writing.chat.intent_multi_plan import _SAFE_SILENT_MULTI_TOOLS
 from report_writing.chat.session_documents import (
     confirm_writing_document_name,
     ensure_named_freeform_document,
@@ -77,12 +76,9 @@ def test_scenario_save_and_sync_tools_in_dispatch():
     assert "save_freeform_as_blueprint" in DISPATCH_TOOLS
     assert "sync_document_to_blueprint_library" in DISPATCH_TOOLS
     assert "confirm_chapter" in DISPATCH_TOOLS
-    # 静默多意图不含开写/收录，避免无观察闭环硬跑
-    assert "start_writing" not in _SAFE_SILENT_MULTI_TOOLS
-    assert "save_freeform_as_blueprint" not in _SAFE_SILENT_MULTI_TOOLS
-    assert "sync_document_to_blueprint_library" not in _SAFE_SILENT_MULTI_TOOLS
-    assert "set_session_meta" in _SAFE_SILENT_MULTI_TOOLS
-    assert "match_blueprints" in _SAFE_SILENT_MULTI_TOOLS
+    assert "start_writing" in DISPATCH_TOOLS
+    assert "set_session_meta" in DISPATCH_TOOLS
+    assert "match_blueprints" in DISPATCH_TOOLS
 
 
 def test_scenario_user_constraints_in_writing_brief_prompt():

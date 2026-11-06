@@ -11,7 +11,6 @@ from report_writing.chat.clarify_flow import (
     get_pending,
 )
 from report_writing.chat.tool_dispatch import execute_dispatch_tool
-from report_writing.chat.intent_turn_plan import TurnPlan, apply_turn_plan
 from report_writing.chat.session_documents import (
     confirm_writing_document_name,
     resolve_document_scope,
@@ -104,30 +103,17 @@ def test_set_session_meta_dispatch_asks_not_renames(tmp_path: Path):
     assert "新开" in (reply or "") or cards
 
 
-def test_apply_turn_plan_scope_clarify_on_named_diff_topic(tmp_path: Path):
+def test_build_document_scope_clarify_on_named_diff_topic(tmp_path: Path):
     """异题新写：挂 document_scope，禁止静默改当前名。"""
     (tmp_path / "tasks").mkdir(parents=True)
     session = _named_session("述职报告")
     before = str((session.freeform or {}).get("title") or "")
-    plan = TurnPlan(
-        confidence=0.9,
-        uncertain=False,
-        slots={"doc_name": "AI应用对市场的影响"},
-        tools=[{"tool": "set_session_meta", "args": {"title": "AI应用对市场的影响"}}],
-        missing=[],
+    reply, cards = build_document_scope_clarify(
+        session, message=AI_LINE, topic_hint="AI应用对市场的影响"
     )
-    hit = apply_turn_plan(
-        tmp_path, session, AI_LINE, invoke=None, plan=plan
-    )
-    assert hit is not None
-    reply, cards, events = hit
     assert str((session.freeform or {}).get("title") or "") == before
     pending = get_pending(session) or {}
-    assert pending.get("source") == "document_scope" or any(
-        e.get("type") == "document_scope" and e.get("action") == "ask"
-        for e in (events or [])
-        if isinstance(e, dict)
-    )
+    assert pending.get("source") == "document_scope"
     assert "新开" in (reply or "") or "继续" in (reply or "") or cards
     assert "好，文档就叫" not in (reply or "")
 

@@ -24,8 +24,9 @@ _schema_ready = False
 
 DEFAULT_CHAT_PROMPT = (
     "你是智能文档协作助手，一位靠谱、好说话的协作搭档，帮用户写报告、函件、方案、说明等各类文档。"
-    "像真人同事聊天：语气自然、口语化一点，先接住对方意图，再给清晰下一步；"
+    "像真人同事聊天：语气自然、口语化一点，先接住对方，再给清晰下一步；"
     "少用「请」「已」「当前」这类公文腔，也不要一上来甩术语或流程说明。"
+    "默认针对当前焦点文档；用户点名另一份时先切过去再动手。"
     "未选机器人时用通用能力帮忙；已选机器人时，仍保持这种说话方式，并遵循该机器人的职责与边界。"
     "不要编造用户没给的真实项目数据或隐私；缺信息时用【占位】标出，并随口问一句。"
     "结构可以清楚（短段落、列表），但读起来要像人在说话，不要像系统通知。"
@@ -639,11 +640,11 @@ def chat(
     invoke,
     model=None,
     chat_model=None,
-    intent_model=None,
+    clarify_model=None,
     stream_model=None,
 ) -> ChatResponse:
     """兼容入口：委托有状态编排器。"""
-    from report_writing.chat_orchestrator import handle_chat
+    from report_writing.chat import handle_chat
 
     return handle_chat(
         home,
@@ -651,7 +652,7 @@ def chat(
         invoke=invoke,
         model=model,
         chat_model=chat_model,
-        intent_model=intent_model,
+        clarify_model=clarify_model,
         stream_model=stream_model,
     )
 

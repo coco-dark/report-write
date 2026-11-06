@@ -15,15 +15,15 @@ class _FakeChatModel:
         return SimpleNamespace(content=self.text)
 
 
-def test_invoke_intent_llm_uses_passed_model(monkeypatch):
-    from report_writing.chat.intent_invoke import invoke_intent_llm
+def test_invoke_clarify_llm_uses_passed_model(monkeypatch):
+    from report_writing.chat.clarify_invoke import invoke_clarify_llm
 
     fake = _FakeChatModel('{"ok":true}')
     monkeypatch.setattr(
-        "report_writing.infra.llm.live_intent_model",
+        "report_writing.infra.llm.live_clarify_model",
         lambda **_k: (_ for _ in ()).throw(AssertionError("should not fetch intent model")),
     )
-    out = invoke_intent_llm("sys", "user", model=fake)
+    out = invoke_clarify_llm("sys", "user", model=fake)
     assert out == '{"ok":true}'
     assert fake.invoked
 

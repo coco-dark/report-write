@@ -37,16 +37,16 @@ def run_session_goal_action(
 
     return _set_session_meta(home, session, body, invoke=invoke, emit=emit, model=model)
 
-def _intent_invoke(invoke: InvokeFn | None, *, model=None) -> InvokeFn | None:
+def _clarify_invoke_binding(invoke: InvokeFn | None, *, model=None) -> InvokeFn | None:
     if model is not None:
-        from report_writing.chat.intent_invoke import intent_invoke_fn
+        from report_writing.chat.clarify_invoke import clarify_invoke_fn
 
-        return intent_invoke_fn(invoke, model=model)
+        return clarify_invoke_fn(invoke, model=model)
     if invoke is None:
         return None
-    from report_writing.chat.intent_invoke import intent_invoke_fn
+    from report_writing.chat.clarify_invoke import clarify_invoke_fn
 
-    return intent_invoke_fn(invoke)
+    return clarify_invoke_fn(invoke)
 
 def _remember_writing_goal(
     home: Path,
@@ -61,7 +61,7 @@ def _remember_writing_goal(
 
     payload = ChatActionPayload.parse(payload)
     notes = str(payload.get("notes") or payload.get("message") or "").strip()
-    llm = _intent_invoke(invoke, model=model)
+    llm = _clarify_invoke_binding(invoke, model=model)
     reply = remember_from_user_message(session, notes, invoke=llm)
     tid = (session.task_id or "").strip()
     if tid and home:
@@ -175,7 +175,7 @@ def _set_session_meta(
     if not message:
         return "跟我说一下文档叫什么、写哪一类就行（口语或「类型｜标题」都可以）。", []
 
-    llm = _intent_invoke(invoke, model=model)
+    llm = _clarify_invoke_binding(invoke, model=model)
 
     from report_writing.chat.session_documents import (
         focus_has_active_writing_context,

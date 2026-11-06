@@ -49,7 +49,7 @@ def test_set_session_meta_hangs_entry_after_named_write(tmp_path: Path):
     hint = str(data.get("reply_hint") or "")
     assert "有蓝本" in hint or "无蓝本" in hint or "写作方式" in hint or state.cards
     # 要素不只 doc_name：仍缺 writing_path
-    assert "writing_path" in str(data.get("observation") or "") or focus_needs_entry_path(
+    assert "writing_path" in (data.get("missing_slots") or []) or focus_needs_entry_path(
         session
     )
 
@@ -90,8 +90,8 @@ def test_remember_keeps_entry_cards_and_hangs_when_needs_path(tmp_path: Path):
     hint = str(data.get("reply_hint") or "")
     # 可短确认，但不得只剩「后面选蓝本都会按这个来」且无卡
     assert state.cards
-    assert "writing_path" in (data.get("missing_slots") or []) or "ask_entry_path" in str(
-        data.get("observation") or ""
+    assert "writing_path" in (data.get("missing_slots") or []) or data.get(
+        "needs_entry_path"
     )
     assert "有蓝本" in hint or "无蓝本" in hint or "写作" in hint or sources
 
@@ -131,5 +131,7 @@ def test_continue_after_named_advances_entry_not_re_remember(tmp_path: Path):
             home=tmp_path,
         )
     )
-    assert "ask_entry_path" in str(body.get("routing_hint") or "")
-    assert "remember_writing_goal" in str(body.get("routing_hint") or "")
+    hint = str(body.get("routing_hint") or "")
+    assert "入口" in hint
+    assert "suggested_next_tools" in hint or "不要只口头记下" in hint
+    assert "suggested_next_step" not in body

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from report_writing.chat.intent_context import classifier_context_user_block, pack_classifier_context
+from report_writing.chat.classifier_context import classifier_context_user_block, pack_classifier_context
 from report_writing.chat.session_documents import set_focus_document_key, upsert_session_document
 from report_writing.domain.models import ChatMessage, ChatSession
 

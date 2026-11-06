@@ -142,7 +142,8 @@ def control_dialogue_turns() -> int:
     )
 
 
-def intent_max_tokens() -> int:
+def clarify_max_tokens() -> int:
+    """澄清小模型 max_tokens。yaml 键仍是 `intent.max_tokens`（配置契约）。"""
     return setting("intent", "max_tokens", default=768, env="REPORT_WRITING_INTENT_MAX_TOKENS", coerce=int)
 
 
@@ -173,24 +174,6 @@ def scripted_chat() -> bool:
     if os.environ.get("REPORT_WRITING_SCRIPTED_CHAT") == "1":
         return True
     return setting("features", "scripted_chat", default=False, coerce=bool)
-
-
-def intent_plan_enabled() -> bool:
-    """遗留开关：仅 `try_run_oral_multi_intent`（单测）读取。
-
-    `run_chat_control` 口语主路径不再咨询本函数。
-    """
-    env = (os.environ.get("REPORT_WRITING_INTENT_PLAN", "") or "").strip().lower()
-    if env in {"0", "false", "off", "no"}:
-        return False
-    if env in {"1", "true", "on", "yes"}:
-        return True
-    return setting("features", "intent_plan", default=False, coerce=bool)
-
-
-def intent_tool_catalog_in_prompt() -> bool:
-    """已废弃：始终 False。Tool 语义只在 LangChain description。"""
-    return False
 
 
 def database_jdbc_url_override() -> str:

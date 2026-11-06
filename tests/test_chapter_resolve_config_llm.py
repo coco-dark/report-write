@@ -1,7 +1,7 @@
 import json
 
-from report_writing.chat.intent_chapter import resolve_chapter_config_patch
-from report_writing.chat.intent_chapter_config_llm import llm_extract_chapter_config_patch
+from report_writing.chat.chapter_resolve import resolve_chapter_config_patch
+from report_writing.chat.chapter_resolve_config_llm import llm_extract_chapter_config_patch
 from report_writing.domain.models import OutlineNode, OutlineTree, WritingTask
 
 

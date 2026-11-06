@@ -1,4 +1,4 @@
-from report_writing.chat.intent_chapter import (
+from report_writing.chat.chapter_resolve import (
     message_has_chapter_sequence,
     pick_awaiting_confirm_chapter_key,
     pick_focus_chapter_key,

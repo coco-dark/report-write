@@ -2349,6 +2349,89 @@ def begin_document_onboarding(
         except Exception:
             pass
 
+
+def message_wants_current_blueprint_copy(text: str) -> bool:
+    """本句是按「当前这份蓝本」再开一份写作文档。"""
+    compact = (text or "").replace(" ", "")
+    if not compact:
+        return False
+    return any(
+        k in compact
+        for k in (
+            "这个蓝本",
+            "该蓝本",
+            "这份蓝本",
+            "根据这个蓝本",
+            "根据该蓝本",
+            "照这个蓝本",
+            "用这个蓝本",
+            "按这个蓝本",
+            "再根据这个",
+        )
+    )
+
+
+def apply_explicit_new_document_turn(
+    session: ChatSession,
+    home: Path | None,
+    message: str,
+    *,
+    emit=None,
+) -> bool:
+    """已有焦点文档时，用户明确另开/再写一份：立刻 mint 新槽（可同时定名、沿用当前蓝本）。
+
+    不要把「名字叫 X」当成给旧文档改名，也不要只口头确认「是不是两份」。
+    """
+    msg = (message or "").strip()
+    if not msg or home is None:
+        return False
+    if not message_wants_new_document_strong(msg):
+        return False
+    if not is_writing_document_named(session) and not focus_has_active_writing_context(
+        session
+    ):
+        return False
+    prev_bid = str(getattr(session, "blueprint_id", "") or "").strip()
+    prev_tid = str(getattr(session, "task_id", "") or "").strip()
+    prev_key = focus_document_key(session)
+    title = explicit_doc_title_from_message(msg)
+    if not title:
+        title = clean_document_display_title(quick_title_from_write_message(msg))
+    begin_document_onboarding(
+        session,
+        home,
+        message=msg,
+        title_hint=title,
+        force_new=True,
+        emit=emit,
+    )
+    new_tid = str(getattr(session, "task_id", "") or "").strip()
+    if prev_tid and new_tid and new_tid == prev_tid:
+        return False
+    if title:
+        confirm_writing_document_name(session, title, home=home, message=msg)
+    keep_bp = prev_bid and message_wants_current_blueprint_copy(msg)
+    if keep_bp:
+        from report_writing.chat.actions import _action_select_blueprint
+
+        _action_select_blueprint(home, session, {"blueprint_id": prev_bid})
+        if emit:
+            try:
+                nk = focus_document_key(session)
+                emit(
+                    focus_document_event(
+                        session,
+                        nk,
+                        title=title or document_title_for_key(session, nk),
+                    )
+                )
+            except Exception:
+                pass
+    return bool(new_tid and new_tid != prev_tid) or bool(
+        focus_document_key(session) != prev_key
+    )
+
+
 def confirm_writing_document_name(
     session: ChatSession,
     title: str,
@@ -2962,24 +3045,36 @@ def filter_pending_by_task(
             out.append(row)
     return out
 
-def _norm_title(text: str) -> str:
+_TITLE_PUNCT = ("「", "」", "《", "》", '"', "'", " ", "\t", "　", "-", "—", "_", "·")
+_TITLE_GENERIC = ("文档", "蓝本", "报告")
+
+
+def _norm_title(text: str, *, keep_doc_words: bool = False) -> str:
     t = (text or "").strip().casefold()
-    for ch in ("「", "」", "《", "》", '"', "'", " ", "\t", "　", "文档", "蓝本", "报告", "-", "—", "_", "·"):
+    for ch in _TITLE_PUNCT:
         t = t.replace(ch, "")
+    if not keep_doc_words:
+        for ch in _TITLE_GENERIC:
+            t = t.replace(ch, "")
     return t
 
 def _title_match_cores(title: str) -> list[str]:
-    """标题全文 + 去后缀核心（「安全预评价-A」→「安全预评价」），便于口语点名。"""
+    """标题全文 + 去后缀核心（「安全预评价-A」→「安全预评价」），便于口语点名。
+
+    「报告」会另留一档：否则「切换到我的季度报告」对不上标题「我的季度报告」。
+    """
     raw = (title or "").strip()
     cores: list[str] = []
-    full = _norm_title(raw)
-    if full:
-        cores.append(full)
+    for keep in (False, True):
+        full = _norm_title(raw, keep_doc_words=keep)
+        if full and full not in cores:
+            cores.append(full)
     for sep in ("-", "—", "_", "·", "（", "("):
         if sep in raw:
-            head = _norm_title(raw.split(sep, 1)[0])
-            if head and head not in cores:
-                cores.append(head)
+            for keep in (False, True):
+                head = _norm_title(raw.split(sep, 1)[0], keep_doc_words=keep)
+                if head and head not in cores:
+                    cores.append(head)
             break
     return cores
 
@@ -3010,8 +3105,14 @@ def match_session_document(
         return None
     text = (message or "").strip()
     hint = (title_hint or "").strip()
-    norm_msg = _norm_title(text)
-    norm_hint = _norm_title(hint)
+    norm_msgs = (
+        _norm_title(text),
+        _norm_title(text, keep_doc_words=True),
+    )
+    norm_hints = (
+        _norm_title(hint),
+        _norm_title(hint, keep_doc_words=True),
+    )
     best: tuple[int, str, dict[str, Any]] | None = None
     for key, meta in docs.items():
         title = str(meta.get("title") or "").strip()
@@ -3024,14 +3125,14 @@ def match_session_document(
         for nt in cores:
             if len(nt) < 2:
                 continue
-            if norm_hint and (nt in norm_hint or norm_hint in nt):
+            if any(h and (nt in h or h in nt) for h in norm_hints if h):
                 score = max(score, 100 + len(nt))
-            if nt in norm_msg:
+            if any(nt in m for m in norm_msgs if m):
                 score = max(score, 80 + len(nt))
             # 「那份安全预评价」类：标题前缀弱匹配
             if score < 40 and len(nt) >= 4:
                 prefix = nt[: min(6, len(nt))]
-                if prefix and prefix in norm_msg:
+                if prefix and any(prefix in m for m in norm_msgs if m):
                     score = max(score, 40 + len(prefix))
         if score <= 0:
             continue
@@ -3099,7 +3200,7 @@ def focus_bound_blueprint_id(session: ChatSession) -> str:
         meta.get("writing_task_id") or meta.get("task_id") or session.task_id or ""
     ).strip()
     try:
-        from report_writing.chat.intent_router import active_blueprint_wizard
+        from report_writing.chat.session_state import active_blueprint_wizard
 
         wiz = dict(active_blueprint_wizard(session) or {})
     except Exception:
@@ -3288,7 +3389,7 @@ def rebind_session_to_focus_document(
     session: ChatSession, home: Path | None = None
 ) -> None:
     """切焦点/切文档 tab：对齐 writing_path、题目、goal，避免线路与向导串台。"""
-    from report_writing.chat.intent_router import (
+    from report_writing.chat.session_state import (
         WRITING_PATH_BLUEPRINT,
         WRITING_PATH_FREEFORM,
         lock_writing_path,
@@ -3699,6 +3800,10 @@ _STRONG_NEW_DOC_HINTS = (
     "新开一个文档",
     "新写一份",
     "新写一个",
+    "一份新的",
+    "写一份新的",
+    "帮我写一份新",
+    "再写一份新",
 )
 
 # 弱「重写」：已定名焦点上禁止静默 continue，应追问新开/整份重写当前/继续
@@ -3950,6 +4055,10 @@ def ensure_write_onboarding_started(
     if wiz_step in {"upload", "outline", "outline_confirm", "upload_done", "study"}:
         return False
     if is_writing_document_named(session) or focus_has_active_writing_context(session):
+        if message_wants_new_document_strong(msg):
+            return apply_explicit_new_document_turn(
+                session, home, msg, emit=emit
+            )
         blocked = silent_rename_blocked_topic(session, msg)
         if blocked:
             return False
@@ -4034,6 +4143,15 @@ def resolve_write_subject_vs_focus(
     if not msg:
         return {"action": "noop", "topic": "", "reason": "empty_message"}
     explicit = explicit_doc_title_from_message(msg)
+    if message_wants_new_document_strong(msg):
+        topic = explicit or tip or clean_document_display_title(
+            quick_title_from_write_message(msg)
+        )
+        return {
+            "action": "force_new",
+            "topic": topic,
+            "reason": "strong_new_document",
+        }
     if explicit:
         return {"action": "rename_ok", "topic": explicit, "reason": "explicit_doc_title"}
     topic = tip or clean_document_display_title(quick_title_from_write_message(msg))
@@ -4135,8 +4253,8 @@ def resolve_document_scope(
         }
     if invoke is not None and msg:
         try:
-            from report_writing.chat.intent_context import pack_classifier_context
-            from report_writing.chat.intent_llm import (
+            from report_writing.chat.classifier_context import pack_classifier_context
+            from report_writing.chat.clarify_llm import (
                 classify_document_scope_llm,
                 extract_write_subject_title_llm,
             )

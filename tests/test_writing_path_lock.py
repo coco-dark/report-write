@@ -1,12 +1,12 @@
 import json
 
-from report_writing.chat.intent_router import (
+from report_writing.chat.session_state import (
     WRITING_PATH_FREEFORM,
     get_writing_path,
     lock_writing_path,
     user_chose_skip_blueprint,
-    user_wants_path_correction_to_freeform,
 )
+from report_writing.chat.entry_intent import user_wants_path_correction_to_freeform
 
 
 def _invoke(system: str, user: str) -> str:
@@ -24,7 +24,7 @@ def test_lock_writing_path_makes_skip_persistent():
 
 
 def test_lock_freeform_clears_stale_blueprint_wizard():
-    from report_writing.chat.intent_router import active_blueprint_wizard
+    from report_writing.chat.session_state import active_blueprint_wizard
 
     session = ChatSession(
         id="s_ff",

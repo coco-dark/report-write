@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from report_writing.chat.clarify_flow import build_entry_path_clarify
 from report_writing.chat.tool_dispatch import execute_dispatch_tool
-from report_writing.chat.intent_turn_plan import TurnPlan, apply_declared_slots
 from report_writing.chat.session_documents import (
     begin_document_onboarding,
     confirm_writing_document_name,
@@ -13,6 +13,7 @@ from report_writing.chat.session_documents import (
     focus_onboarding,
     is_writing_document_named,
     mark_focus_entry_path,
+    mark_focus_freeform_mode,
     stash_focus_preferred_entry_path,
     upsert_session_document,
 )
@@ -162,24 +163,34 @@ def test_force_new_does_not_inherit_previous_template_path(tmp_path: Path):
     assert "lzb述职报告" in str(ob.get("clarify_residual") or "") or True
 
 
-def test_apply_declared_slots_does_not_lock_path_when_unnamed(tmp_path: Path):
+def test_preferred_freeform_does_not_lock_path_when_unnamed(tmp_path: Path):
     (tmp_path / "tasks").mkdir(parents=True)
     session = ChatSession(id="iso_slots", phase=ChatPhase.INTENT.value)
     _seed_named_doc(tmp_path, session, tid="w_old", title="环境报告")
     begin_document_onboarding(
         session, tmp_path, message="再写一份述职报告", title_hint="述职报告", force_new=True
     )
-    plan = TurnPlan(
-        confidence=0.9,
-        slots={"writing_path": "freeform", "freeform_mode": "auto_outline"},
-        missing=["doc_name"],
+    stash_focus_preferred_entry_path(
+        session, "freeform", residual="再写一份述职报告，自动生成大纲"
     )
-    apply_declared_slots(
-        session, plan, home=tmp_path, message="再写一份述职报告，自动生成大纲"
-    )
+    mark_focus_freeform_mode(session, "auto_outline")
     ob = focus_onboarding(session)
     assert str(ob.get("preferred_entry_path") or "") == "freeform"
     assert str(ob.get("entry_path") or "") == ""
+    assert focus_needs_doc_name(session)
+
+    build_entry_path_clarify(
+        session,
+        message="再写一份述职报告，自动生成大纲",
+        title_hint="述职报告",
+        invoke=None,
+        home=tmp_path,
+        after_doc_name_confirm=False,
+        apply_plan=False,
+    )
+    ob2 = focus_onboarding(session)
+    assert str(ob2.get("preferred_entry_path") or "") == "freeform"
+    assert str(ob2.get("entry_path") or "") == ""
     assert focus_needs_doc_name(session)
 
 

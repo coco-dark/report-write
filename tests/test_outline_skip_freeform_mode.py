@@ -9,12 +9,13 @@ from report_writing.chat.clarify_flow import (
     execute_clarify_spec,
     get_pending,
 )
-from report_writing.chat.intent_turn_plan import TurnPlan, apply_declared_slots
 from report_writing.chat.session_documents import (
     confirm_writing_document_name,
     focus_needs_freeform_mode,
     focus_onboarding,
     is_writing_document_named,
+    mark_focus_entry_path,
+    mark_focus_freeform_mode,
     peek_pending_entry,
     stash_focus_preferred_entry_path,
     stash_pending_entry,
@@ -112,17 +113,11 @@ def test_without_blueprint_with_stashed_freeform_skips_second_card(tmp_path: Pat
     )
 
 
-def test_apply_declared_slots_freeform_mode_auto_outline(tmp_path: Path):
+def test_mark_freeform_auto_outline_skips_mode_gate(tmp_path: Path):
     (tmp_path / "tasks").mkdir(parents=True)
     session = ChatSession(id="ol4", phase=ChatPhase.INTENT.value)
     confirm_writing_document_name(session, "述职", home=tmp_path)
-    plan = TurnPlan(
-        confidence=0.9,
-        uncertain=False,
-        slots={"writing_path": "without_blueprint", "freeform_mode": "auto_outline"},
-        tools=[],
-        missing=[],
-    )
-    apply_declared_slots(session, plan, home=tmp_path, message=FULL_LINE)
+    mark_focus_entry_path(session, "freeform")
+    mark_focus_freeform_mode(session, "auto_outline")
     assert focus_onboarding(session).get("entry_path") == "freeform"
     assert not focus_needs_freeform_mode(session)

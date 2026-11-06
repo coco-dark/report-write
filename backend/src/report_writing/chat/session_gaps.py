@@ -13,7 +13,7 @@ from report_writing.domain.models import ChatPhase, ChatSession
 
 InvokeFn = Callable[[str, str], str] | None
 
-# 与 intent_turn_plan.ALLOWED_MISSING 对齐（观察层 vocabulary）
+# 允许的缺口名（观察层 vocabulary；与 clarify / Tool 前置槽一致）
 _CANON_MISSING = (
     "doc_name",
     "writing_path",

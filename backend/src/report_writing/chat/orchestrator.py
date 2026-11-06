@@ -56,7 +56,7 @@ def handle_chat(
     stream_model: StreamModelFn | None = None,
     model: Any = None,
     chat_model: Any = None,
-    intent_model: Any = None,
+    clarify_model: Any = None,
 ) -> ChatResponse:
     """对话总控 Agent：按需调 Tool / 子流程。emit 推送 token/process；model 为总控 ReAct。"""
     from report_writing.chat.actions import _action_start_writing
@@ -170,6 +170,12 @@ def handle_chat(
         from report_writing.chat.writing_brief import ingest_user_turn
 
         ingest_user_turn(session, raw_message, invoke=invoke)
+        if not (action or "").strip():
+            from report_writing.chat.session_documents import apply_explicit_new_document_turn
+
+            apply_explicit_new_document_turn(
+                session, home, raw_message, emit=out
+            )
     elif action:
         session.messages.append(
             ChatMessage(
@@ -210,19 +216,19 @@ def handle_chat(
         cards = []
         _emit_process(out, "还没接上写作助手")
     else:
-        from report_writing.chat.intent_invoke import intent_invoke_fn
+        from report_writing.chat.clarify_invoke import clarify_invoke_fn
 
         state = ChatControlState(
             home=home,
             session=session,
             robot=robot,
             invoke=invoke,
-            intent_invoke=intent_invoke_fn(invoke, model=intent_model),
+            clarify_invoke=clarify_invoke_fn(invoke, model=clarify_model),
             emit=out,
             user_action=action,
             control_model=ctrl_model,
             chat_model=chat_model,
-            intent_model=intent_model,
+            clarify_model=clarify_model,
         )
         user_text = build_agent_user_text(
             action=action,
@@ -420,7 +426,11 @@ def handle_chat(
             wizard.pop("trigger_outline_extract", None)
             wizard.pop("pending_wizard_command", None)
         session.freeform = {**(session.freeform or {}), "blueprint_wizard": wizard}
-    from report_writing.chat.session_runtime import reconcile_chat_session, runtime_public_view
+    from report_writing.chat.session_runtime import (
+        attach_turn_study_kick,
+        reconcile_chat_session,
+        runtime_public_view,
+    )
 
     reconcile_chat_session(home, session)
 
@@ -544,6 +554,13 @@ def handle_chat(
         wizard_step=wiz_step,
     )
     runtime_view = runtime_public_view(session, home)
+    live_wiz = dict((session.freeform or {}).get("blueprint_wizard") or {})
+    done_wiz = attach_turn_study_kick(runtime_view.get("blueprint_wizard"), live_wiz)
+    wf_pub = dict(runtime_view.get("workflows") or {})
+    wf_pub["blueprint_wizard"] = attach_turn_study_kick(
+        wf_pub.get("blueprint_wizard"), live_wiz
+    )
+    runtime_view = {**runtime_view, "workflows": wf_pub, "blueprint_wizard": done_wiz}
 
     response = ChatResponse(
         reply=reply,
@@ -557,7 +574,7 @@ def handle_chat(
         task_id=session.task_id or "",
         events=events,
         runtime=runtime_view,
-        blueprint_wizard=dict(runtime_view.get("blueprint_wizard") or {}),
+        blueprint_wizard=done_wiz,
     )
     _emit(
         out,

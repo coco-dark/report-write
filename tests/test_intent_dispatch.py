@@ -8,8 +8,8 @@ import json
 from pathlib import Path
 
 from report_writing.chat.clarify_flow import execute_clarify_spec, try_handle_pending_message
-from report_writing.chat.tool_dispatch import execute_intent_plan
-from report_writing.chat.intent_llm import resolve_wizard_action
+from report_writing.chat.tool_dispatch import dispatch_inner, execute_dispatch_tool
+from report_writing.chat.clarify_llm import resolve_wizard_action
 from report_writing.controller import ensure_task
 from report_writing.domain.models import ChatPhase, ChatSession, OutlineNode, OutlineTree
 from report_writing.services.store import TaskStore
@@ -18,7 +18,12 @@ from report_writing.services.store import TaskStore
 def _dispatch(home, session, message, plan, *, invoke=None):
     if not plan:
         return None
-    return execute_intent_plan(home, session, plan, message, invoke=invoke)
+    last = None
+    for step in plan:
+        last = execute_dispatch_tool(home, session, step, message, invoke=invoke)
+        if last is None:
+            return None
+    return last
 
 
 def _seed(home: Path) -> str:
@@ -94,21 +99,23 @@ def test_dispatch_add_element_keeps_wizard(tmp_path: Path):
     bid = _seed(tmp_path)
     session = _session(bid)
     msg = "为建设规模添加知识库要素 关联知识库 检索词为建设规模 站址 工程投资"
-    reply, cards, _ = _dispatch(
-        tmp_path,
-        session,
-        msg,
-        [
-            {
-                "tool": "add_chapter_element",
-                "args": {
-                    "kind": "rag_search",
-                    "chapter_key_hint": "建设规模",
-                    "query": "建设规模 站址 工程投资",
-                },
-            }
-        ],
-    )
+    with dispatch_inner():
+        reply, cards, _ = _dispatch(
+            tmp_path,
+            session,
+            msg,
+            [
+                {
+                    "tool": "add_chapter_element",
+                    "args": {
+                        "kind": "rag_search",
+                        "chapter_key_hint": "建设规模",
+                        "name": "建设规模",
+                        "query": "建设规模 站址 工程投资",
+                    },
+                }
+            ],
+        )
     assert "建设规模" in (reply or "")
     assert any(getattr(c, "type", "") == "element_configure_pending" for c in cards)
     assert ((session.freeform or {}).get("blueprint_wizard") or {}).get("step") == "study"
@@ -120,21 +127,23 @@ def test_dispatch_add_element_when_llm_selects_add(tmp_path: Path):
     bid = _seed(tmp_path)
     session = _session(bid)
     msg = "为2.2添加知识库要素 关联安全 检索词为建设规模、站址、工程总投资"
-    reply, cards, _ = _dispatch(
-        tmp_path,
-        session,
-        msg,
-        [
-            {
-                "tool": "add_chapter_element",
-                "args": {
-                    "kind": "rag_search",
-                    "chapter_key_hint": "2.2",
-                    "query": "建设规模、站址、工程总投资",
-                },
-            }
-        ],
-    )
+    with dispatch_inner():
+        reply, cards, _ = _dispatch(
+            tmp_path,
+            session,
+            msg,
+            [
+                {
+                    "tool": "add_chapter_element",
+                    "args": {
+                        "kind": "rag_search",
+                        "chapter_key_hint": "2.2",
+                        "name": "安全",
+                        "query": "建设规模、站址、工程总投资",
+                    },
+                }
+            ],
+        )
     assert "整章" not in (reply or "")
     assert not ((session.freeform or {}).get("blueprint_wizard") or {}).get("trigger_chapter_study")
     assert any(getattr(c, "type", "") == "element_configure_pending" for c in cards)

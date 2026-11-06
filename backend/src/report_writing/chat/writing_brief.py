@@ -179,30 +179,14 @@ def writing_brief_prompt_block(session: ChatSession, *, home: Path | None = None
     task = view.get("task")
     if isinstance(task, dict) and (task.get("title") or task.get("category")):
         lines.append(f"当前任务：{task.get('category') or '—'}｜{task.get('title') or '—'}")
-    snap = view.get("session") or {}
     lines.append(
         "用户可用对话或点卡片，二者等价：确认大纲、生成要点、选节奏、开写、改章、导出。"
     )
-    lines.append(
-        "开写前若缺写作要点：先问是否要生成；用户说「好/是/生成」再 generate_freeform_points，然后 start_writing。"
-    )
-    from report_writing.chat.next_step import next_step_prompt_line
     from report_writing.chat.session_documents import focus_document_brief
 
     fdb = focus_document_brief(session)
     if "onboarding=" in fdb:
         lines.append(f"焦点文档：{fdb}")
-        if "待定名" in fdb:
-            lines.append("下一步：先 ask_entry_path 引导用户确认文档名称（定名卡），勿静默 set_session_meta。")
-        elif "待选线路" in fdb:
-            lines.append(
-                "下一步：ask_entry_path — 有蓝本 / 无蓝本（无蓝本再选模版或自动大纲），"
-                "勿直接说「生成目录」。"
-            )
-
-    ns = next_step_prompt_line(session, home=home)
-    if ns:
-        lines.append(ns)
     return "\n".join(lines)
 
 

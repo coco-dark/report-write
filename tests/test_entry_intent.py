@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from report_writing.chat.intent_router import (
+from report_writing.chat.entry_intent import (
     allows_agent_blueprint_select,
     message_explicitly_requests_blueprint,
     pick_auto_blueprint_id,

@@ -103,15 +103,15 @@ def _action_select_blueprint(home: Path, session: ChatSession, payload: ChatPayl
     if robot and robot.blueprint_ids and blueprint_id not in robot.blueprint_ids:
         raise ValueError("该蓝本不在当前机器人绑定范围内")
     task = _load_task(home, blueprint_id)
-    from report_writing.chat.intent_router import lock_writing_path, WRITING_PATH_BLUEPRINT
+    from report_writing.chat.session_state import (
+        lock_writing_path,
+        WRITING_PATH_BLUEPRINT,
+    )
 
     session.blueprint_id = blueprint_id
     _clear_blueprint_wizard_state(session)
     session.freeform = {**(session.freeform or {}), "write_chapter_keys": []}
-    # 换蓝本后不得沿用上一份写作 clone，否则文档窗/配置会串到旧任务
     prev_tid = str(getattr(session, "task_id", "") or "").strip()
-    if prev_tid and prev_tid != blueprint_id:
-        session.task_id = ""
     lock_writing_path(session, WRITING_PATH_BLUEPRINT)
     from report_writing.chat.session_documents import (
         is_writing_document_named,
@@ -135,9 +135,11 @@ def _action_select_blueprint(home: Path, session: ChatSession, payload: ChatPayl
     # 一份文档一份写作副本：库蓝本可共享，登记槽按文档隔离
     from report_writing.chat.session_documents import (
         clean_document_display_title,
+        focus_document_key,
         session_documents_map,
         _titles_conflict,
     )
+    from report_writing.services.task_ids import is_writing_task_id
     import secrets
 
     docs = session_documents_map(session)
@@ -146,9 +148,36 @@ def _action_select_blueprint(home: Path, session: ChatSession, payload: ChatPayl
     prev_wid = str(existing.get("writing_task_id") or "").strip()
     prev_title = clean_document_display_title(str(existing.get("title") or ""))
     cur_title = clean_document_display_title(title)
+    focus_key = str(focus_document_key(session) or "").strip()
+    focus_entry = dict(docs.get(focus_key) or {}) if focus_key else {}
+    focus_wid = str(
+        focus_entry.get("writing_task_id")
+        or focus_entry.get("task_id")
+        or prev_tid
+        or ""
+    ).strip()
+    if focus_wid and not is_writing_task_id(focus_wid):
+        focus_wid = ""
+    # force_new 空壳 / 另一份写作文档：即使同名也不得复用 bp: 上旧副本
+    isolate_focus = bool(
+        focus_wid
+        and focus_wid != prev_wid
+        and focus_key
+        and not focus_key.startswith("bp:")
+    )
+    if prev_tid and prev_tid != blueprint_id and not isolate_focus:
+        session.task_id = ""
+    elif isolate_focus:
+        session.task_id = focus_wid
     reg_key = ""
     reuse_wid = ""
-    if prev_wid and prev_title and cur_title and not _titles_conflict(prev_title, cur_title):
+    if isolate_focus:
+        reuse_wid = focus_wid
+        if focus_key.startswith(("task:", "doc:")):
+            reg_key = focus_key
+        else:
+            reg_key = f"doc:{secrets.token_hex(4)}"
+    elif prev_wid and prev_title and cur_title and not _titles_conflict(prev_title, cur_title):
         # 回到同一文档：复用其写作副本
         reuse_wid = prev_wid
     elif prev_wid and cur_title and (not prev_title or _titles_conflict(prev_title, cur_title)):
@@ -410,7 +439,7 @@ def _action_skip_blueprint(
     extra_message: str = "",
     path_setup_only: bool = False,
 ) -> tuple[str, list[ChatCard]]:
-    from report_writing.chat.intent_router import (
+    from report_writing.chat.session_state import (
         lock_writing_path,
         touch_session_plan,
         WRITING_PATH_FREEFORM,
@@ -1381,7 +1410,7 @@ def _action_configure_chapter(
         writing_task_id=task_id if source_bp else None,
         title=str(getattr(task, "title", "") or ""),
     )
-    from report_writing.chat.intent_router import active_blueprint_wizard
+    from report_writing.chat.session_state import active_blueprint_wizard
 
     if not active_blueprint_wizard(session):
         session.phase = ChatPhase.CONFIRM_EXPORT.value
@@ -1470,7 +1499,7 @@ def _action_add_chapter_element(home: Path, session: ChatSession, payload: ChatP
         writing_task_id=task_id if source_bp else None,
         title=str(getattr(task, "title", "") or ""),
     )
-    from report_writing.chat.intent_router import active_blueprint_wizard
+    from report_writing.chat.session_state import active_blueprint_wizard
 
     if not active_blueprint_wizard(session):
         session.phase = ChatPhase.CONFIRM_EXPORT.value
@@ -2024,7 +2053,7 @@ def _collect_freeform_meta(
 ) -> tuple[str, list[ChatCard]]:
     from report_writing.chat.freeform_intent import utterance_mentions_generate_outline
     from report_writing.chat.helpers import is_vague_freeform_meta
-    from report_writing.chat.intent_router import infer_freeform_meta_from_messages
+    from report_writing.chat.entry_intent import infer_freeform_meta_from_messages
     from report_writing.chat.session_documents import (
         explicit_doc_title_from_message,
         quick_title_from_write_message,
@@ -2116,7 +2145,7 @@ def _collect_freeform_meta(
         parts = text.split(" / ", 1)
         category, title = parts[0].strip(), parts[1].strip()
     else:
-        from report_writing.chat.intent_router import infer_freeform_meta_from_messages
+        from report_writing.chat.entry_intent import infer_freeform_meta_from_messages
 
         inferred = infer_freeform_meta_from_messages(session, text, invoke=invoke)
         if inferred and title_contains_action_clause(str(inferred[1] or "")):

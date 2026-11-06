@@ -10,7 +10,7 @@ from langchain_core.messages import AIMessage, BaseMessage
 from report_writing.agents.chat_control import ChatControlScriptModel, ChatControlState, run_chat_control
 from report_writing.agents.scripted import ScriptedChatModel
 from report_writing.chat.agent_chain_log import session_invoked_tools
-from report_writing.chat_orchestrator import handle_chat
+from report_writing.chat import handle_chat
 from report_writing.controller import ensure_task
 from report_writing.domain.models import (
     ChatPhase,

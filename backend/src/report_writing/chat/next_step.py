@@ -19,7 +19,7 @@ def infer_suggested_next_step(
     ff = dict(session.freeform or {})
     blueprint_id = (session.blueprint_id or "").strip()
     task_id = (session.task_id or "").strip()
-    from report_writing.chat.intent_router import user_chose_skip_blueprint
+    from report_writing.chat.session_state import user_chose_skip_blueprint
 
     out: dict[str, Any] = {
         "label": "",
@@ -201,7 +201,7 @@ def _writing_step(
         task = _load_task(home, tid)
 
     if task is not None:
-        from report_writing.chat.intent_chapter import pick_awaiting_confirm_chapter_key, pick_focus_chapter_key
+        from report_writing.chat.chapter_resolve import pick_awaiting_confirm_chapter_key, pick_focus_chapter_key
 
         focus = pick_focus_chapter_key(task, message) or pick_awaiting_confirm_chapter_key(task)
         awaiting = pick_awaiting_confirm_chapter_key(task)
@@ -274,12 +274,3 @@ def _fill(
     out["ui_action"] = (ui_action or "").strip()
     out["confidence"] = confidence
     return out
-
-
-def next_step_prompt_line(session: ChatSession, *, home: Path | None = None, message: str = "") -> str:
-    step = infer_suggested_next_step(session, home=home, message=message)
-    if not step.get("label"):
-        return ""
-    tools = step.get("priority_tools") or []
-    tool_bit = f"优先工具：{', '.join(tools[:4])}" if tools else ""
-    return f"【推测下一步】{step['label']}。{step.get('detail') or ''} {tool_bit}".strip()

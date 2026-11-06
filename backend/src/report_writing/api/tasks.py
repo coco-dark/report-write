@@ -839,7 +839,7 @@ def get_doc_outline(
 @router.get("/api/writing/tasks/{task_id}/chapter-picker")
 def get_chapter_picker(task_id: str) -> dict:
     """对话勾选树：按蓝本/任务返回可写章节扁平列表（前端组树）。"""
-    from report_writing.chat_orchestrator import (
+    from report_writing.chat import (
         _chapter_picker_payload,
         _outline_chapter_picker_items,
         partition_blueprint_chapters,

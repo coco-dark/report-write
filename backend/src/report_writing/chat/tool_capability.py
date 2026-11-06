@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 from report_writing.domain.models import ChatSession
 
@@ -83,37 +82,3 @@ def capability_reply_hint(missing: list[str]) -> str:
     if "writing_path" in missing:
         return "可以匹配蓝本、用自己的模版，或让我按题目生成目录。"
     return "还缺一点信息，我先问你。"
-
-
-def capability_observation(tool: str, missing: list[str]) -> str:
-    miss = ",".join(missing) if missing else "—"
-    return f"{tool} 能力检查未过：missing={miss}。只补这一项，不要重走开场流水线。"
-
-
-def filter_plan_missing(
-    session: ChatSession,
-    missing: list[str],
-    *,
-    tools: list[dict[str, Any]] | None = None,
-) -> list[str]:
-    """计划 JSON 里的 missing 只保留当前 Tool 真正需要的槽。"""
-    names = {str(s.get("tool") or "").strip() for s in (tools or [])}
-    keep: list[str] = []
-    seen: set[str] = set()
-    pathish = {"writing_path", "freeform_mode", "entry_path", "entry_branch"}
-    for key in missing or []:
-        k = str(key or "").strip()
-        if not k or k in seen:
-            continue
-        if k in pathish:
-            continue
-        if k == "doc_name":
-            if not names.intersection(FORMAL_NAME_TOOLS):
-                continue
-            from report_writing.chat.session_documents import focus_needs_doc_name
-
-            if not focus_needs_doc_name(session):
-                continue
-        seen.add(k)
-        keep.append(k)
-    return keep

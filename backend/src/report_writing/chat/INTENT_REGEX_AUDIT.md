@@ -11,7 +11,7 @@
 | 蓝本能力执行 | `blueprint_actions.run_blueprint_action`（与 UI action 同名） |
 | 无蓝本：目录/要点/托管起草 | ReAct → `submit_outline` / `generate_freeform_points` / `start_writing`（`wants_*` 仅测试别名） |
 | 写作中：要素/关联/查看库/记目标 | ReAct Tool；执行复用 `apply_writing_control_classification` |
-| 统一调度（非口语主路径） | `execute_intent_plan` / `execute_dispatch_tool`（UI·clarify·单测；**禁止** `message_wants_*` 改写 plan） |
+| 统一调度（非口语主路径） | `execute_dispatch_tool`（UI·clarify·单测；**禁止** `message_wants_*` 改写 tool） |
 | 澄清回复（全部 source） | `classify_clarify_reply_llm` / `classify_doc_name_reply_llm` → `clarify_flow.try_handle_pending_message` |
 
 **原则**：口语「用户要做什么」禁止正则短切；LLM 失败或 `none` → clarify / 总控 ReAct，不用正则猜工具。一切澄清口语（定名 / 改名 / 资料包名 / 学习范围 / 入口路径 / 写作确认等）必须结合对话上下文走模型；精确 UI 点选与「类型｜标题」等结构行除外。禁止把短句字面或短语别名当主判决。
@@ -22,7 +22,7 @@
 - `session_snapshot.looks_like_freeform_meta_line`：一行「类型｜标题」结构（入口可直接 skip_blueprint；定名澄清亦可）
 - `session_goal._META_SPLIT_RE`：已存 summary 字段拆分，非路由
 - `helpers.is_vague_freeform_meta`：防止把路径意图词误存为文档标题（字段校验）
-- `intent_chapter` / `study_chapter_resolve.parse_study_sequences_from_message` / `write_chapter_intent.parse_write_sequences_from_message`：章序号从正文抽取（分类器已选工具后补全）
+- `chapter_resolve` / `study_chapter_resolve.parse_study_sequences_from_message` / `write_chapter_intent.parse_write_sequences_from_message`：章序号从正文抽取（分类器已选工具后补全）
 - `session_snapshot.assistant_asked_for_freeform_meta`：助手上一轮是否在要 meta（语境，非用户意图路由）
 - `message_wants_new_document_strong` / `quick_title_from_write_message` / `explicit_doc_title_from_message`：另开文档结构提示 / 标题候选；显式定名结构仅 **invoke=None 离线兜底**（有模型时以计划 JSON `slots.doc_name` 为准）
 - `progress_continue.is_progress_continue_message`：短句「继续」结构判断（非抢路由）
@@ -51,8 +51,8 @@
 详见 `chat/AGENT_ARCHITECTURE.md`（**没有意图层**）。
 
 - `run_chat_control`：pending 选择卡 / UI 之后 → `run_react`（`create_agent` + middleware + Tool description）
-- JSON 计划（`try_run_oral_multi_intent` / `apply_turn_plan`）**不在**口语主路径；生产 `clarify_flow` 也不再调用 `apply_turn_plan`
-- 单测 / 卡片执行层：`execute_dispatch_tool` / `execute_intent_plan` / `apply_*` / clarify 构建器
+- 整轮 oral JSON 计划（`intent_multi_plan` / `apply_turn_plan`）**已删除**；口语仅 `create_agent`
+- 单测 / 卡片执行层：`execute_dispatch_tool` / `apply_*` / clarify 构建器
 - Chat Tool 统一 `ok` / `reply_hint` / `observation` / `missing_slots`
 - 开写硬门闩：`start_writing` / `select_write_chapters` / `write_analyzed_only` 要求 `writing_doc_named`
 
@@ -75,12 +75,12 @@
 | `focus_has_active_writing_context` | 已选蓝本 / w* 副本 / 写作·导出 phase 等（宽于 `writing_doc_named`） |
 | `resolve_write_subject_vs_focus` | 写题材 vs 焦点：clarify / force_new / continue / rename_ok |
 | `write_subject_on_active_doc_should_clarify` | 为 true 时禁止 `confirm_writing_document_name` 静默落盘 |
-| `apply_turn_plan` | scope 门闩：`is_writing_document_named \|\| focus_has_active_writing_context` |
+| `build_document_scope_clarify` / `resolve_document_scope` | 异题新写：多轮澄清；不靠第二套 turn-plan JSON |
 | `resolve_document_scope` 启发式 | 活跃焦点 + 异题 + 无强新开词 → `ask`（非直办 force_new） |
 
 **原则**：题材 ≠ 文档名；在已有写作焦点上异题新写，默认多轮 `document_scope` 澄清，除非用户显式另开/改名。
 
 ## 配置
 
-窄 JSON（澄清/槽位）可用 `live_intent_model()` / `intent-model-name`（配置名历史遗留）。
-口语主路径 **忽略** `features.intent_plan`。`intent_tool_catalog_in_prompt` 已废弃（恒 false）。
+窄 JSON（澄清/槽位）可用 `live_clarify_model()` / `intent-model-name`（配置名历史遗留）。
+整轮 `intent_plan` 配置与对应 helper 已删除。`intent_tool_catalog_in_prompt` 已废弃（恒 false）。

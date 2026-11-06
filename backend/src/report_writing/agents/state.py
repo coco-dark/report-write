@@ -19,7 +19,7 @@ class ChatControlState:
     session: ChatSession
     robot: Any = None
     invoke: InvokeFn | None = None
-    intent_invoke: InvokeFn | None = None  # 窄 JSON（澄清/槽位）；不是口语路由
+    clarify_invoke: InvokeFn | None = None  # 窄 JSON（澄清/槽位）；不是口语路由
     emit: EmitFn | None = None
     cards: list[ChatCard] = field(default_factory=list)
     events: list[dict[str, Any]] = field(default_factory=list)
@@ -28,6 +28,6 @@ class ChatControlState:
     last_user_message: str = ""
     control_model: BaseChatModel | None = None
     chat_model: BaseChatModel | None = None  # 写作/润色/要点
-    intent_model: BaseChatModel | None = None  # 窄 JSON 槽位
+    clarify_model: BaseChatModel | None = None  # 窄 JSON 槽位
     turn_context: Any = None  # WritingTurnContext | None
     did_invoke_tool: bool = False

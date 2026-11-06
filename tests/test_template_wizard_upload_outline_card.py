@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from report_writing.chat.intent_router import WRITING_PATH_FREEFORM, lock_writing_path
+from report_writing.chat.session_state import (
+    WRITING_PATH_FREEFORM,
+    lock_writing_path,
+)
 from report_writing.chat.orchestrator import handle_chat
 from report_writing.chat.resource_actions import _create_freeform_sample_document
 from report_writing.chat.wizard_state import WIZARD_MODE_FREEFORM_SAMPLE

@@ -1,4 +1,4 @@
-"""多意图 / 多工具：解析分类器 JSON、按领域流水线与依赖重排、串行执行。"""
+"""分类器多动作：解析 JSON、按领域流水线与依赖重排、串行执行。"""
 
 from __future__ import annotations
 
@@ -78,8 +78,8 @@ FREEFORM_POLICY = ActionOrderPolicy(
     ),
 )
 
-# 对话总控 ReAct / 计划短路：选型 → 选章 → 开写；无蓝本目录 → 要点 → 开写
-CHAT_CONTROL_PLAN_POLICY = ActionOrderPolicy(
+# 分类器多动作顺序：选型 → 选章 → 开写；无蓝本目录 → 要点 → 开写
+CLASSIFIER_ACTION_POLICY = ActionOrderPolicy(
     pipeline_rank={
         "remember_writing_goal": 5,
         "set_session_meta": 8,

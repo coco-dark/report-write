@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from report_writing.chat.entry_sample import guess_report_title_from_message, user_brings_own_sample_document
-from report_writing.chat.intent_llm import classify_entry_routing_llm
+from report_writing.chat.clarify_llm import classify_entry_routing_llm
 
 
 def _sample_invoke(system: str, user: str) -> str:
