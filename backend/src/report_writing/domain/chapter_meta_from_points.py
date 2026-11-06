@@ -166,6 +166,7 @@ def apply_meta_from_points_to_node(
     *,
     category: str = "报告",
     parent_title: str = "",
+    model=None,
 ) -> bool:
     """若 node 有可写要点，则重写 describes / aux_prompt。返回是否已更新。"""
     if bool(getattr(node, "structure_only", False)):
@@ -182,6 +183,7 @@ def apply_meta_from_points_to_node(
         category=category,
         parent_title=parent_title,
         point_items=items if items else [{"text": p} for p in points],
+        model=model,
     )
     node.describes = describes
     node.aux_prompt = aux

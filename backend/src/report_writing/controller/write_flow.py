@@ -81,6 +81,7 @@ def write_from_study(task_dir: Path, dataset_dir: Path, on_event=None, model=Non
             home=home,
             task_id=task.id,
             biz_type=normalize_biz_type(task.biz_type or "002"),
+            model=model,
         )
     managed = run_supervisor(
         phase="write",

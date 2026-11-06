@@ -1340,7 +1340,9 @@ def build_chat_tools(state: ChatControlState) -> list:
                     "请从用户原话或 turn_context 填入章节 key 后再次调用。"
                 ),
             )
-        reply, cards = _action_configure_chapter(state.home, state.session, payload)
+        reply, cards = _action_configure_chapter(
+            state.home, state.session, payload, model=state.chat_model
+        )
         _set_cards(state, cards)
         return _dump(
             {

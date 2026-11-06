@@ -80,9 +80,11 @@ def analyze_template(
         task.refresh_status()
         TaskStore(task_dir).save(task)
         return task
-    task = generate_outline(source, task_dir, biz_type, on_event=on_event)
+    task = generate_outline(source, task_dir, biz_type, on_event=on_event, model=model)
     task = confirm_outline(task_dir)
-    return study_from_outline(task_dir, cache_dir, force_study=force_study, on_event=on_event)
+    return study_from_outline(
+        task_dir, cache_dir, force_study=force_study, on_event=on_event, model=model
+    )
 
 
 def _lock_brief_to_outline(brief, tree: OutlineTree) -> None:

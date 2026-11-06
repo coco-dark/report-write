@@ -234,6 +234,7 @@ async def analyze_stream(
             material_type,
             learn_again,
             emit,
+            model=writing_model(),
         )
         emit({"type": "task", "task": task.to_dict()})
 

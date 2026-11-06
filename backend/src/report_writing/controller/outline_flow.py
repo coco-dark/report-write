@@ -526,7 +526,7 @@ def outline_from_pasted_text(
     if use_llm:
         tree = _outline_with_llm(cleaned, model=model)
     else:
-        tree = _outline_from_plain_lines(cleaned)
+        tree = _outline_from_plain_lines(cleaned, model=model)
     if biz_type.strip():
         task.biz_type = normalize_biz_type(biz_type)
     task.outline = tree
@@ -687,7 +687,7 @@ def chapters_match_report(tree: OutlineTree, text: str) -> list[dict]:
     return chapters_from_outline(tree, text)
 
 
-def _outline_from_plain_lines(text: str) -> OutlineTree:
+def _outline_from_plain_lines(text: str, *, model=None) -> OutlineTree:
     nodes = []
     for line in text.splitlines():
         raw = line.rstrip()
@@ -707,7 +707,7 @@ def _outline_from_plain_lines(text: str) -> OutlineTree:
             )
         else:
             nodes.append(OutlineNode(sequence="", title=body, level=level))
-    return finalize_outline(nodes)
+    return finalize_outline(nodes, model=model)
 
 
 def _merge_outline_prefer_primary(primary: OutlineTree, secondary: OutlineTree) -> OutlineTree:
@@ -766,7 +766,7 @@ def _outline_polish_with_llm(tree: OutlineTree, toc_slice: str, *, model=None) -
             return None
         if len(parsed) > int(len(sent) * 1.2) + 5:
             return None
-        polished = outline_from_payload(parsed)
+        polished = outline_from_payload(parsed, model=model)
         if outline_tree_quality(polished) >= outline_tree_quality(tree) * 0.95:
             return polished
         return None
@@ -808,7 +808,7 @@ def _outline_with_llm_chunks(text: str, *, max_chunk: int = 9000, model=None) ->
 def _outline_with_llm(text: str, *, model=None) -> OutlineTree:
     model = or_live_model(model)
     if model is None:
-        return _outline_from_plain_lines(text)
+        return _outline_from_plain_lines(text, model=model)
     # 已是目录切片时仍限长，防止异常切片过大
     clipped = (text or "")[:24000]
     prompt = (
@@ -825,12 +825,12 @@ def _outline_with_llm(text: str, *, model=None) -> OutlineTree:
         payload = json.loads(match.group(0) if match else content)
         if not isinstance(payload, list):
             raise ValueError("模型没有返回数组")
-        return outline_from_payload(payload)
+        return outline_from_payload(payload, model=model)
     except Exception as error:
         _log.warning("模型整理目录失败，改用规则解析：%s", error)
         try:
             return outline_from_text(text)
         except Exception:
-            return _outline_from_plain_lines(text)
+            return _outline_from_plain_lines(text, model=model)
 
 

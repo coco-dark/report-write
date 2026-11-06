@@ -187,6 +187,7 @@ def run_chapters(
                 home=home,
                 task_id=task.id,
                 biz_type=normalize_biz_type(task.biz_type or "002"),
+                model=model,
             )
 
     if search_only:

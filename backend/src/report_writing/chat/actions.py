@@ -1323,7 +1323,9 @@ def _action_dismiss_writing_supplement(
     return "已从待补充列表移除；对应章节不再关联该要素。", cards
 
 
-def _action_configure_chapter(home: Path, session: ChatSession, payload: dict) -> tuple[str, list[ChatCard]]:
+def _action_configure_chapter(
+    home: Path, session: ChatSession, payload: dict, *, model=None
+) -> tuple[str, list[ChatCard]]:
     from report_writing.chat.cards import _progress_and_confirm_cards
     from report_writing.chat.session_documents import bind_session_focus_to_task, resolve_task_id
     from report_writing.chat.writing import _apply_chapter_config, _session_writing_pace
@@ -1336,7 +1338,7 @@ def _action_configure_chapter(home: Path, session: ChatSession, payload: dict) -
     store = TaskStore(path)
     task = store.load()
     before_ids = {str(e.id or "").strip() for e in (task.element_nodes or []) if str(e.id or "").strip()}
-    _apply_chapter_config(task, chapter_key, payload)
+    _apply_chapter_config(task, chapter_key, payload, model=model)
     store.save(task)
     from report_writing.chat.writing_supplement_check import mark_gaps_filled_for_element, mark_resolved_gaps_in_registry
 
@@ -1567,7 +1569,7 @@ def _action_retry_chapter(
         "elements",
     )
     if not already_persisted and any(key in payload for key in configure_fields):
-        _apply_chapter_config(task, chapter_key, payload)
+        _apply_chapter_config(task, chapter_key, payload, model=model)
         store.save(task)
         from report_writing.chat.writing_supplement_check import reset_supplement_gate_for_scope
 
@@ -1759,7 +1761,7 @@ def _action_retry_search_chapter(
             "elements",
         )
     ):
-        _apply_chapter_config(task, chapter_key, payload)
+        _apply_chapter_config(task, chapter_key, payload, model=model)
         store.save(task)
 
     title = next((c.title for c in (task.chapters or []) if c.key == chapter_key), chapter_key)

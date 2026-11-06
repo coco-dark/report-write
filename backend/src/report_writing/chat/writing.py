@@ -461,7 +461,7 @@ def _writing_chapter_keys(task: WritingTask) -> list[str]:
     return [k for k in base if k in scope_set]
 
 
-def _apply_chapter_config(task: WritingTask, chapter_key: str, payload: dict) -> None:
+def _apply_chapter_config(task: WritingTask, chapter_key: str, payload: dict, *, model=None) -> None:
     from report_writing.chat.helpers import _split_lines
     if task.outline is None:
         raise ValueError("任务没有大纲，无法配置章节")
@@ -551,7 +551,9 @@ def _apply_chapter_config(task: WritingTask, chapter_key: str, payload: dict) ->
         from report_writing.domain.chapter_meta_from_points import apply_meta_from_points_to_node
 
         category = str(getattr(task, "category", "") or "报告").strip() or "报告"
-        apply_meta_from_points_to_node(node, category=category, parent_title=parent_title)
+        apply_meta_from_points_to_node(
+            node, category=category, parent_title=parent_title, model=model
+        )
 
     for ch in task.chapters or []:
         if ch.key == chapter_key:
