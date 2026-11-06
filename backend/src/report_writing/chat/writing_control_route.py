@@ -256,7 +256,10 @@ def _resolve_associate_chapter_key(
     raw = str(payload.get("chapter_key") or "").strip()
     if task is not None and raw and _chapter_key_on_task(task, raw):
         return raw
-    return _resolve_chapter_key(home, session, message, payload)
+    # 未点名章节时不要落到大纲第一章，缺槽挂 intent_clarify（与加要素一致）
+    return _resolve_chapter_key(
+        home, session, message, payload, allow_outline_default=False
+    )
 
 def _action_associate_elements(
     home: Path,

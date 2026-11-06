@@ -68,7 +68,7 @@ handle_chat → run_chat_control
 - **A**：registry 审计、`chat_prompt` lint、`oral_route` 日志
 - **C1/C3 部分**：主路径去掉 JSON 计划；删除「唯一大脑」超长 catalog prompt；分类器不再贴 Tool 表
 
-### Phase B（进行中）
+### Phase B（已完成）
 
 | 项 | 做什么 | 状态 |
 |----|--------|------|
@@ -104,7 +104,7 @@ handle_chat → run_chat_control
 
 P1 必须覆盖：口语「写一份…」→ 生成目录；点选自动大纲 / 用模版 / 创建蓝本；「再写一份」隔离后由 Agent hop；shortcut 在零 ToolMessage 时仍保 UX。
 
-P0–P6 与 Phase D/E 已落地。`wants_*` 只作测试别名；选择卡/执行器在 `clarify_flow` / `tool_dispatch`。`run_react` 经 LangChain middleware 写链路日志并限制模型调用次数。`intent_turn_plan` / `intent_multi_plan` 夹具仍保留。
+P0–P6 与 Phase D/E 已落地。`wants_*` 只作测试别名；选择卡/执行器在 `clarify_flow` / `tool_dispatch`。`run_react` 经 LangChain middleware 写链路日志并限制模型调用次数。`intent_turn_plan` / `intent_multi_plan` 夹具仍保留（仅单测直接调用）。生产 `clarify_flow` 不再调用 `apply_turn_plan`。
 
 ### Phase C
 
@@ -120,6 +120,8 @@ P0–P6 与 Phase D/E 已落地。`wants_*` 只作测试别名；选择卡/执�
 | D1 | 选择卡实现迁到 `clarify_flow.py` | 已做 |
 | D2 | 执行器实现迁到 `tool_dispatch.py` | 已做 |
 | E | `create_agent` middleware（链路日志 + 模型调用上限）；删除 `intent_clarify` / `intent_dispatch` shim；`intent_turn_plan` / `intent_multi_plan` 夹具仍保留 | 已做 |
+| F1 | `associate_elements` 未点名章节时不落到大纲第一章，挂 `intent_clarify`（source=action_slots） | 已做 |
+| F2 | 生产 `clarify_flow` 去掉 `apply_turn_plan` 调用；夹具模块仍保留给单测 | 已做 |
 
 ## 不做的事
 

@@ -51,7 +51,7 @@
 详见 `chat/AGENT_ARCHITECTURE.md`（**没有意图层**）。
 
 - `run_chat_control`：pending 选择卡 / UI 之后 → `run_react`（`create_agent` + middleware + Tool description）
-- JSON 计划（`try_run_oral_multi_intent` / `apply_turn_plan`）**不在**口语主路径
+- JSON 计划（`try_run_oral_multi_intent` / `apply_turn_plan`）**不在**口语主路径；生产 `clarify_flow` 也不再调用 `apply_turn_plan`
 - 单测 / 卡片执行层：`execute_dispatch_tool` / `execute_intent_plan` / `apply_*` / clarify 构建器
 - Chat Tool 统一 `ok` / `reply_hint` / `observation` / `missing_slots`
 - 开写硬门闩：`start_writing` / `select_write_chapters` / `write_analyzed_only` 要求 `writing_doc_named`

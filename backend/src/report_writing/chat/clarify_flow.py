@@ -2484,8 +2484,6 @@ def build_entry_path_clarify(
                 session, home, message=msg, title_hint=tip, force_new=True, emit=emit
             )
     explicit = ""
-    # 本轮刚 force_new：禁止再用原写句 apply_turn_plan（会 focus_document 切回旧文档）
-    skip_apply_after_new = False
     # 已定名后又来新写句：先判作用域（追问 / 强制新开），勿把题材当续写当前。
     # 只缺选路时（生成目录 / 用模版）不要整段重开 document_scope。
     if (
@@ -2519,7 +2517,6 @@ def build_entry_path_clarify(
                 emit=emit,
             )
             tip = str(scope.get("title") or tip or "").strip() or tip
-            skip_apply_after_new = True
             # 已清 named，下面按未定名新开继续
         else:
             obvious = ambiguous_named_doc_new_topic(session, msg, title_hint=tip)
@@ -2533,7 +2530,6 @@ def build_entry_path_clarify(
                     emit=emit,
                 )
                 tip = obvious or tip
-                skip_apply_after_new = True
     # 已定名，或定名刚成功（after_doc_name_confirm）：勿用旧 write 句再 force_new / 清 named / 重挂 doc_name
     already_named = bool(is_writing_document_named(session) or after_doc_name_confirm)
     if already_named:
@@ -2603,7 +2599,6 @@ def build_entry_path_clarify(
                 force_new=True,
                 emit=emit,
             )
-            skip_apply_after_new = True
             if invoke is not None and msg:
                 route_hit = _clear_entry_tool_from_message(msg, session=session, invoke=invoke)
                 if route_hit == "begin_blueprint_wizard":
@@ -2660,29 +2655,7 @@ def build_entry_path_clarify(
         prepare_observed_onboarding,
     )
 
-    if (
-        apply_plan
-        and not skip_apply_after_new
-        and invoke is not None
-        and home is not None
-        and (probe_msg or tip)
-        # 仍缺选路：禁止 generate_outline / begin_wizard 等静默锁路径，必须先挂入口卡
-        and not focus_needs_entry_path(session)
-    ):
-        from report_writing.chat.intent_turn_plan import apply_turn_plan
-
-        hit = apply_turn_plan(
-            home,
-            session,
-            probe_msg or tip,
-            invoke=invoke,
-            emit=emit,
-        )
-        if hit is not None:
-            reply, cards, _ = hit
-            # 本轮若已挂澄清卡，必须保留 pending；仅清「已定名却仍卡在起名」的陈旧 pending
-            _clear_stale_doc_name_pending_if_safe(session, cards)
-            return reply, list(cards or [])
+    # 生产路径禁止 apply_turn_plan。apply_plan=True 仅遗留链式 suggested 观察，不跑 JSON 计划。
 
     prepare_observed_onboarding(
         session,

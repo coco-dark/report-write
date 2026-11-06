@@ -72,6 +72,7 @@ def test_associate_elements_missing_chapter_clarify(tmp_path: Path):
     assert cards[0].type == "intent_clarify"
     pending = get_pending(session)
     assert pending["candidate"]["name"] == "associate_elements"
+    assert pending["source"] == ACTION_SLOT_SOURCE
 
 
 def test_configure_chapter_missing_clarify(tmp_path: Path):

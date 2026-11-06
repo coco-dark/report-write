@@ -427,6 +427,15 @@ def test_clarify_llm_reexports_narrow_classifiers():
     assert not hasattr(clarify_llm, "classify_turn_plan_llm")
 
 
+def test_clarify_flow_does_not_import_apply_turn_plan():
+    import inspect
+
+    from report_writing.chat import clarify_flow
+
+    source = inspect.getsource(clarify_flow)
+    assert "intent_turn_plan import apply_turn_plan" not in source
+
+
 def test_clarify_flow_and_tool_dispatch_have_no_legacy_shims():
     import importlib.util
 
