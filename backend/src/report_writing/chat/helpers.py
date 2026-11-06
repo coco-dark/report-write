@@ -21,6 +21,7 @@ from report_writing.controller import (
 )
 from report_writing.domain.models import (
     ChapterStatus,
+    ChatActionPayload,
     ChatCard,
     ChatMessage,
     ChatPhase,
@@ -29,7 +30,9 @@ from report_writing.domain.models import (
     ChatSession,
     HumanDecision,
     OutlineNode,
+    WritingPace,
     WritingTask,
+    action_payload_dict,
 )
 from report_writing.services.robots import (
     DEFAULT_CHAT_PROMPT,
@@ -112,8 +115,8 @@ def is_vague_freeform_meta(text: str, *, field: bool = False) -> bool:
     return False
 
 
-WRITING_PACE_BATCH = "batch"
-WRITING_PACE_STEP = "step"
+WRITING_PACE_BATCH = WritingPace.BATCH.value
+WRITING_PACE_STEP = WritingPace.STEP.value
 _ACTION_USER_LABELS = {
     "select_blueprint": "选用蓝本",
     "skip_blueprint": "跳过蓝本，自己定大纲",
@@ -184,8 +187,8 @@ _WIZARD_COMMAND_USER_LABELS = {
 }
 
 
-def blueprint_wizard_user_label(payload: dict | None) -> str:
-    data = payload or {}
+def blueprint_wizard_user_label(payload: ChatActionPayload | dict | None) -> str:
+    data = action_payload_dict(payload)
     command = str(data.get("wizard_command") or "").strip()
     if command and command in _WIZARD_COMMAND_USER_LABELS:
         return _WIZARD_COMMAND_USER_LABELS[command]
@@ -225,10 +228,10 @@ _TASK_STATUS_LABEL = {
 }
 
 
-def _user_action_label(action: str, payload: dict | None = None) -> str:
+def _user_action_label(action: str, payload: ChatActionPayload | dict | None = None) -> str:
     key = (action or "").strip()
     label = _ACTION_USER_LABELS.get(key, "继续")
-    payload = payload or {}
+    payload = ChatActionPayload.parse(payload)
     if key == "select_blueprint":
         title = str(payload.get("title") or payload.get("blueprint_title") or "").strip()
         return f"选用「{title}」" if title else label

@@ -99,8 +99,11 @@ def handle_chat(
     raw_message = (body.message or "").strip()
     message = _plain_message(raw_message)
     action = (body.action or "").strip()
-    payload = dict(body.action_payload or {})
-    card_key = str(payload.pop("card_key", "") or "").strip()
+    from report_writing.domain.models import ChatActionPayload, action_payload_dict
+
+    data = action_payload_dict(body.action_payload)
+    card_key = str(data.pop("card_key", "") or "").strip()
+    payload = ChatActionPayload.parse(data)
     from report_writing.services.chat_session import _mark_card_used, apply_chat_ui_state
 
     sync_raw = dict(getattr(body, "client_sync", None) or {})
@@ -223,7 +226,7 @@ def handle_chat(
         )
         user_text = build_agent_user_text(
             action=action,
-            payload=payload,
+            payload=payload.as_dict(),
             message=message,
             session=session,
             home=home,
@@ -243,7 +246,7 @@ def handle_chat(
             else:
                 from report_writing.chat.user_process import emit_action_process
 
-                emit_action_process(out, act, payload)
+                emit_action_process(out, act, payload.as_dict())
             reply = run_chat_control(
                 model=ctrl_model,
                 state=state,

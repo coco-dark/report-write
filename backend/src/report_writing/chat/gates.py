@@ -21,6 +21,7 @@ from report_writing.controller import (
 )
 from report_writing.domain.models import (
     ChapterStatus,
+    ChatActionPayload,
     ChatCard,
     ChatMessage,
     ChatPhase,
@@ -220,7 +221,10 @@ def _ensure_analysis_choice_cards(
     return cleaned + list(gate_cards or [_doc_window_hint_card(session, blueprint_id=blueprint_id)])
 
 
-def _parse_chapter_keys(payload: dict) -> list[str]:
+def _parse_chapter_keys(payload: ChatActionPayload | dict | None) -> list[str]:
+    from report_writing.domain.models import ChatActionPayload
+
+    payload = ChatActionPayload.parse(payload)
     raw = payload.get("chapter_keys")
     if raw is None:
         raw = payload.get("write_chapter_keys")

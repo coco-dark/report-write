@@ -79,7 +79,7 @@ def build_writing_turn_context(
         expanded_message=expanded,
         dialogue_tail=format_full_dialogue(session, max_turns=8, focus_only=True),
         session_snapshot=dict(session_turn_snapshot(session)),
-        session_goal=dict(goal),
+        session_goal=goal.to_dict(),
         session_goal_brief=session_goal_brief(session),
         focus_document=dict(focus_doc),
     )

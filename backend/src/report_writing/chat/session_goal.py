@@ -7,7 +7,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from report_writing.domain.models import ChatSession
+from report_writing.domain.models import ChatSession, SessionGoal
 
 InvokeFn = Callable[[str, str], str]
 
@@ -15,21 +15,22 @@ _META_SPLIT_RE = re.compile(r"[｜|]")
 _GOAL_AUX_MARKER = "【会话写作背景】"
 
 
-def get_session_goal(session: ChatSession) -> dict[str, Any]:
+def get_session_goal(session: ChatSession) -> SessionGoal:
     raw = dict((session.freeform or {}).get("session_goal") or {})
-    return {
-        "summary": str(raw.get("summary") or "").strip(),
-        "doc_category": str(raw.get("doc_category") or "").strip(),
-        "doc_title": str(raw.get("doc_title") or "").strip(),
-        "project": str(raw.get("project") or "").strip(),
-        "notes": str(raw.get("notes") or "").strip(),
-        "updated_at": str(raw.get("updated_at") or "").strip(),
-    }
+    return SessionGoal(
+        summary=str(raw.get("summary") or "").strip(),
+        doc_category=str(raw.get("doc_category") or "").strip(),
+        doc_title=str(raw.get("doc_title") or "").strip(),
+        project=str(raw.get("project") or "").strip(),
+        notes=str(raw.get("notes") or "").strip(),
+        updated_at=str(raw.get("updated_at") or "").strip(),
+    )
 
 
-def merge_session_goal(session: ChatSession, patch: dict[str, Any]) -> dict[str, Any]:
-    goal = get_session_goal(session)
-    for key, value in (patch or {}).items():
+def merge_session_goal(session: ChatSession, patch: dict[str, Any] | SessionGoal) -> SessionGoal:
+    goal = get_session_goal(session).to_dict()
+    patch_data = patch.to_dict() if isinstance(patch, SessionGoal) else dict(patch or {})
+    for key, value in patch_data.items():
         if value is None:
             continue
         text = str(value).strip()
@@ -63,7 +64,7 @@ def merge_session_goal(session: ChatSession, patch: dict[str, Any]) -> dict[str,
         doc_category=goal.get("doc_category") or "",
         doc_title=goal.get("doc_title") or "",
     )
-    return goal
+    return SessionGoal.model_validate(goal)
 
 
 def session_goal_brief(session: ChatSession) -> str:
@@ -376,7 +377,7 @@ def _llm_extract_goal_patch(
     payload = {
         "dialogue": format_full_dialogue(session, max_turns=10),
         "message": message[:1500],
-        "existing": get_session_goal(session),
+        "existing": get_session_goal(session).to_dict(),
     }
     try:
         raw = str(invoke(system, json.dumps(payload, ensure_ascii=False)) or "").strip()

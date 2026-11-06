@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Iterator, Mapping
 from enum import Enum
 from typing import Any
 
@@ -732,6 +734,211 @@ class RenderTemplateSummary(Entity):
     header: str = ""
 
 
+class WritingPace(str, Enum):
+    BATCH = "batch"
+    STEP = "step"
+
+
+class SessionGoal(Entity, Mapping[str, Any]):
+    """会话级写作目标（类型 / 标题 / 项目 / 备注）。"""
+
+    summary: str = ""
+    doc_category: str = ""
+    doc_title: str = ""
+    project: str = ""
+    notes: str = ""
+    updated_at: str = ""
+
+    def get(self, key: str, default: Any = None) -> Any:
+        if key in type(self).model_fields:
+            value = getattr(self, key)
+            return default if value in (None, "") and default is not None else value
+        return default
+
+    def __getitem__(self, key: str) -> Any:
+        data = self.to_dict()
+        if key in data:
+            return data[key]
+        raise KeyError(key)
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.to_dict())
+
+    def __len__(self) -> int:
+        return len(self.to_dict())
+
+
+class ChatActionPayload(Entity, Mapping[str, Any]):
+    """对话 action / Tool 入参。点选、口语 Tool、调度层共用，避免散落的 dict[str]。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    q: str = ""
+    message: str = ""
+    text: str = ""
+    notes: str = ""
+    user_message: str = ""
+    task_id: str = ""
+    blueprint_id: str = ""
+    card_key: str = ""
+    chapter_key: str = ""
+    chapter_key_hint: str = ""
+    focus_chapter_key: str = ""
+    chapter_keys: list[str] = Field(default_factory=list)
+    write_chapter_keys: list[str] = Field(default_factory=list)
+    chapter_sequences: list[str] = Field(default_factory=list)
+    writing_pace: str = ""
+    decision: str = ""
+    comment: str = ""
+    pause_after: bool = False
+    skip_empty: bool = True
+    confirm: bool = False
+    regenerate: bool = False
+    reopen_edit: bool = False
+    outline_text: str = ""
+    revision_instructions: str = ""
+    title: str = ""
+    category: str = ""
+    gap_id: str = ""
+    hint: str = ""
+    user_note: str = ""
+    slot: str = ""
+    slot_label: str = ""
+    name: str = ""
+    already_persisted: bool = False
+    from_doc_window: bool = False
+    skip_supplement_check: bool = False
+    aux_prompt: str = ""
+    describes: str = ""
+    reference_text: str = ""
+    points_text: str = ""
+    keywords_text: str = ""
+    pack_id: str = ""
+    option_id: str = ""
+    option_label: str = ""
+    explicit_create: bool = False
+    force_new: bool = False
+    dismiss: bool = False
+    project_folder_label: str = ""
+    project_folder_ids: list[str] = Field(default_factory=list)
+    element_ids: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    writing_task_id: str = ""
+    sequence: str = ""
+    chapter_title: str = ""
+    kind: str = ""
+    element_id: str = ""
+    element_name: str = ""
+    points: Any = None
+    keywords: Any = None
+    point_items: list[Any] = Field(default_factory=list)
+    elements: list[Any] = Field(default_factory=list)
+    chapters: list[Any] = Field(default_factory=list)
+    point_index: Any = None
+    fixed_output: bool = False
+    search_terms_separate: bool = False
+    structure_only: bool = False
+    preserve_chapter_meta: bool = False
+
+    @classmethod
+    def parse(cls, raw: Any = None) -> ChatActionPayload:
+        if isinstance(raw, cls):
+            return raw
+        if raw is None or raw == "":
+            return cls()
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except json.JSONDecodeError:
+                return cls()
+        if not isinstance(raw, dict):
+            if hasattr(raw, "model_dump"):
+                raw = raw.model_dump()
+            else:
+                return cls()
+        data = dict(raw)
+        if data.get("chapter_keys_json") and not data.get("chapter_keys"):
+            data["chapter_keys"] = data.get("chapter_keys_json")
+        for key in ("chapter_keys", "write_chapter_keys", "chapter_sequences", "element_ids", "tags", "project_folder_ids"):
+            if key in data:
+                data[key] = _as_str_list(data.get(key))
+        if data.get("_skip_supplement_check") and not data.get("skip_supplement_check"):
+            data["skip_supplement_check"] = bool(data.get("_skip_supplement_check"))
+        return cls.model_validate(data)
+
+    def as_dict(self) -> dict[str, Any]:
+        return self.model_dump(exclude_unset=True)
+
+    def with_updates(self, **kwargs: Any) -> ChatActionPayload:
+        data = self.as_dict()
+        data.update(kwargs)
+        return ChatActionPayload.parse(data)
+
+    def __getitem__(self, key: str) -> Any:
+        extra = self.model_extra or {}
+        if key in extra:
+            return extra[key]
+        if key in self.model_fields_set:
+            return getattr(self, key)
+        raise KeyError(key)
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.as_dict())
+
+    def __len__(self) -> int:
+        return len(self.as_dict())
+
+    def get(self, key: str, default: Any = None) -> Any:
+        extra = self.model_extra or {}
+        if key in extra:
+            return extra[key]
+        if key in self.model_fields_set:
+            return getattr(self, key)
+        return default
+
+    def __contains__(self, key: object) -> bool:
+        if not isinstance(key, str):
+            return False
+        return key in self.model_fields_set or key in (self.model_extra or {})
+
+    def pop(self, key: str, default: Any = None) -> Any:
+        extra = self.model_extra
+        if extra is not None and key in extra:
+            return extra.pop(key, default)
+        if key in self.model_fields_set:
+            value = getattr(self, key)
+            field = type(self).model_fields[key]
+            if field.default_factory is not None:
+                setattr(self, key, field.default_factory())
+            else:
+                setattr(self, key, field.default)
+            self.model_fields_set.discard(key)
+            return value
+        return default
+
+
+def _as_str_list(value: Any) -> list[str]:
+    if value is None or value == "":
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("["):
+            try:
+                value = json.loads(text)
+            except json.JSONDecodeError:
+                value = [text]
+        else:
+            value = [part.strip() for part in text.replace("，", ",").split(",") if part.strip()]
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def action_payload_dict(payload: Any = None) -> dict[str, Any]:
+    """把 Tool/点选入参收成普通 dict（仅已填字段），给仍走 dict 的旧调用。"""
+    return ChatActionPayload.parse(payload).as_dict()
+
+
 class ChatPhase(str, Enum):
     INTENT = "intent"
     BLUEPRINT_SELECT = "blueprint_select"
@@ -821,7 +1028,7 @@ class ChatRequest(Entity):
     robot_id: str = ""
     session_id: str = ""
     action: str = ""  # select_blueprint | skip_blueprint | resume | confirm_chapter | start_writing | ...
-    action_payload: dict[str, Any] = Field(default_factory=dict)
+    action_payload: ChatActionPayload = Field(default_factory=ChatActionPayload)
     client_sync: dict[str, Any] = Field(default_factory=dict)
 
 

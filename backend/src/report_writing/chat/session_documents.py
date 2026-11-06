@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from report_writing.domain.models import ChatPhase, ChatSession
+from report_writing.domain.models import ChatActionPayload, ChatPhase, ChatSession
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -2799,7 +2799,7 @@ def _writing_copy_id_for_blueprint(session: ChatSession, blueprint_id: str) -> s
 
 def resolve_task_id(
     session: ChatSession,
-    payload: dict[str, Any] | None = None,
+    payload: ChatActionPayload | dict[str, Any] | None = None,
     *,
     require: bool = False,
 ) -> str:
@@ -2810,7 +2810,7 @@ def resolve_task_id(
     """
     from report_writing.services.task_ids import is_blueprint_task_id, is_writing_task_id
 
-    body = dict(payload or {})
+    body = ChatActionPayload.parse(payload).as_dict()
     payload_wid = str(body.get("writing_task_id") or "").strip()
     if payload_wid and is_writing_task_id(payload_wid):
         return payload_wid

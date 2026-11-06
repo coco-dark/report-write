@@ -121,7 +121,7 @@ def build_writing_brief_view(session: ChatSession, *, home: Path | None = None) 
     goal = get_session_goal(session)
     view: dict[str, Any] = {
         "brief": brief,
-        "session_goal": goal,
+        "session_goal": goal.to_dict(),
         "session_goal_brief": session_goal_brief(session),
         "session": snap,
         "task_id": (session.task_id or "").strip(),

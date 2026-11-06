@@ -17,7 +17,7 @@ from report_writing.agents.state import ChatControlState, EmitFn, InvokeFn
 
 # 兼容旧 import
 __all__ = ["ChatControlState", "run_chat_control", "build_chat_tools", "ChatControlScriptModel"]
-from report_writing.domain.models import ChatCard, ChatPhase, ChatSession
+from report_writing.domain.models import ChatActionPayload, ChatCard, ChatPhase, ChatSession
 
 _log = logging.getLogger(__name__)
 
@@ -492,12 +492,7 @@ def _bind_payload_json_tools(state: ChatControlState, names: list[str]) -> list:
 
         def _run(payload_json: str = "{}", *, _name: str = name) -> str:
             _tool_begin(state, _name)
-            try:
-                payload = json.loads(payload_json or "{}")
-            except json.JSONDecodeError:
-                payload = {}
-            if not isinstance(payload, dict):
-                payload = {}
+            payload = ChatActionPayload.parse(payload_json).as_dict()
             if _name in MATERIALS_PACK_ACTIONS:
                 try:
                     reply, cards = apply_materials_pack_choice(
@@ -1323,12 +1318,7 @@ def build_chat_tools(state: ChatControlState) -> list:
         """保存单章配置。payload_json：task_id、chapter_key、points_text、keywords_text、describes、aux_prompt、reference_text 等（由你从用户话提取）。"""
         from report_writing.chat_orchestrator import _action_configure_chapter
 
-        try:
-            payload = json.loads(payload_json or "{}")
-        except json.JSONDecodeError:
-            payload = {}
-        if not isinstance(payload, dict):
-            payload = {}
+        payload = ChatActionPayload.parse(payload_json).as_dict()
         ck = str(payload.get("chapter_key") or payload.get("chapter_key_hint") or "").strip()
         ui = (state.user_action or "").strip() == "configure_chapter"
         if not ck and not ui:
@@ -1357,12 +1347,7 @@ def build_chat_tools(state: ChatControlState) -> list:
         """为本章生成要素草稿（用户卡片确认后写入）。须从用户原话填全：task_id、chapter_key、kind、name、category、tags、purpose；kv 填 kv_pairs 或 key+value/content；file 填 query；file_slot 填槽位；fixed 填 value；llm_generate 填 prompt；node_ref 填 ref_element_name。用户只需在卡片里确认，不要留空让用户手填。"""
         from report_writing.chat_orchestrator import _action_add_chapter_element
 
-        try:
-            payload = json.loads(payload_json or "{}")
-        except json.JSONDecodeError:
-            payload = {}
-        if not isinstance(payload, dict):
-            payload = {}
+        payload = ChatActionPayload.parse(payload_json).as_dict()
         hint = str(state.last_user_message or payload.get("hint") or payload.get("user_note") or "").strip()
         hop = _hop_if_other_writing_control(state, "add_chapter_element", hint)
         if hop:
@@ -1428,12 +1413,7 @@ def build_chat_tools(state: ChatControlState) -> list:
         """打开「关联要素」会话操作：把已有要素勾到某章。payload 含 task_id、chapter_key。"""
         from report_writing.chat.writing_control_route import apply_writing_control_classification
 
-        try:
-            payload = json.loads(payload_json or "{}")
-        except json.JSONDecodeError:
-            payload = {}
-        if not isinstance(payload, dict):
-            payload = {}
+        payload = ChatActionPayload.parse(payload_json).as_dict()
         hint = str(state.last_user_message or payload.get("hint") or "").strip()
         hop = _hop_if_other_writing_control(state, "associate_elements", hint)
         if hop:
@@ -1471,12 +1451,7 @@ def build_chat_tools(state: ChatControlState) -> list:
         """取消某章与要素的关联（不删要素节点、不删要素库）。payload 可含 chapter_key、element_id、element_name。"""
         from report_writing.chat.writing_control_route import apply_writing_control_classification
 
-        try:
-            payload = json.loads(payload_json or "{}")
-        except json.JSONDecodeError:
-            payload = {}
-        if not isinstance(payload, dict):
-            payload = {}
+        payload = ChatActionPayload.parse(payload_json).as_dict()
         hint = str(state.last_user_message or payload.get("hint") or "").strip()
         hop = _hop_if_other_writing_control(state, "dissociate_chapter_element", hint)
         if hop:
@@ -1507,12 +1482,7 @@ def build_chat_tools(state: ChatControlState) -> list:
         """从当前写作文档删除要素（去掉各章关联与节点）；绝不删除个人要素库条目。"""
         from report_writing.chat.writing_control_route import apply_writing_control_classification
 
-        try:
-            payload = json.loads(payload_json or "{}")
-        except json.JSONDecodeError:
-            payload = {}
-        if not isinstance(payload, dict):
-            payload = {}
+        payload = ChatActionPayload.parse(payload_json).as_dict()
         hint = str(state.last_user_message or payload.get("hint") or "").strip()
         hop = _hop_if_other_writing_control(state, "remove_document_element", hint)
         if hop:
@@ -1543,12 +1513,7 @@ def build_chat_tools(state: ChatControlState) -> list:
         """把本文档已有要素收入个人要素库（不是新建章节要素，也不是打开要素库浏览）。"""
         from report_writing.chat.writing_control_route import apply_writing_control_classification
 
-        try:
-            payload = json.loads(payload_json or "{}")
-        except json.JSONDecodeError:
-            payload = {}
-        if not isinstance(payload, dict):
-            payload = {}
+        payload = ChatActionPayload.parse(payload_json).as_dict()
         hint = str(state.last_user_message or payload.get("hint") or "").strip()
         hop = _hop_if_other_writing_control(state, "collect_to_element_library", hint)
         if hop:
@@ -1671,12 +1636,7 @@ def build_chat_tools(state: ChatControlState) -> list:
                 ),
                 task_id=state.session.task_id or "",
             )
-        try:
-            payload = json.loads(payload_json or "{}")
-        except json.JSONDecodeError:
-            payload = {}
-        if not isinstance(payload, dict):
-            payload = {}
+        payload = ChatActionPayload.parse(payload_json).as_dict()
         reply, cards, events = _action_retry_chapter(
             state.home,
             state.session,
@@ -1701,12 +1661,7 @@ def build_chat_tools(state: ChatControlState) -> list:
                     "reply_hint": "仅检索需点「仅重试检索」按钮，不要与「保存并重试本章」混用。",
                 }
             )
-        try:
-            payload = json.loads(payload_json or "{}")
-        except json.JSONDecodeError:
-            payload = {}
-        if not isinstance(payload, dict):
-            payload = {}
+        payload = ChatActionPayload.parse(payload_json).as_dict()
         reply, cards, events = _action_retry_search_chapter(
             state.home, state.session, payload, emit=state.emit, model=state.chat_model
         )
@@ -2390,12 +2345,7 @@ def build_chat_tools(state: ChatControlState) -> list:
         from report_writing.chat.wizard_loop_guard import normalized_wizard_step
         from report_writing.chat.wizard_state import wizard_step_index
 
-        try:
-            payload = json.loads(payload_json or "{}")
-        except json.JSONDecodeError:
-            payload = {}
-        if not isinstance(payload, dict):
-            payload = {}
+        payload = ChatActionPayload.parse(payload_json).as_dict()
         step_in = str(payload.get("step") or "").strip()
         title_in = str(payload.get("title") or "").strip()
         wizard_cmd = str(payload.get("wizard_command") or "").strip()
@@ -2446,12 +2396,7 @@ def build_chat_tools(state: ChatControlState) -> list:
         """渲染模版 / Word 样式配置向导。"""
         from report_writing.chat.resource_actions import _action_template_wizard
 
-        try:
-            payload = json.loads(payload_json or "{}")
-        except json.JSONDecodeError:
-            payload = {}
-        if not isinstance(payload, dict):
-            payload = {}
+        payload = ChatActionPayload.parse(payload_json).as_dict()
         _tool_begin(state, "template_wizard")
         reply, cards = _action_template_wizard(state.session, payload)
         _set_cards(state, cards)
@@ -3216,7 +3161,7 @@ def run_ui_action_shortcut(
 def build_agent_user_text(
     *,
     action: str,
-    payload: dict[str, Any],
+    payload: ChatActionPayload | dict[str, Any] | Any,
     message: str,
     session: ChatSession,
     home: Path | None = None,
@@ -3229,7 +3174,11 @@ def build_agent_user_text(
 
     body: dict[str, Any] = {
         "action": action,
-        "payload": payload or {},
+        "payload": (
+            payload.as_dict()
+            if hasattr(payload, "as_dict")
+            else (payload or {})
+        ),
         "message": message or ("你好" if not action else ""),
         "session": {
             **session_turn_snapshot(session, message),
@@ -3250,7 +3199,7 @@ def build_agent_user_text(
         body["dialogue_full"] = dialogue_full
     goal = get_session_goal(session)
     if any(str(goal.get(k) or "").strip() for k in ("summary", "doc_category", "doc_title", "project")):
-        body["session_goal"] = goal
+        body["session_goal"] = goal.to_dict()
     from report_writing.chat.session_documents import (
         focus_document_brief,
         focus_document_meta,
@@ -3430,7 +3379,7 @@ def _agent_user_text_for_message(state: ChatControlState, message: str) -> str:
 
     goal = get_session_goal(state.session)
     if any(str(goal.get(k) or "").strip() for k in ("summary", "doc_category", "doc_title", "project")):
-        body["session_goal"] = goal
+        body["session_goal"] = goal.to_dict()
     snap = session_turn_snapshot(state.session, message)
     if snap.get("skip_blueprint_path") or snap.get("dialogue_skipped_blueprint"):
         body["hint"] = (

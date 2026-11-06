@@ -601,7 +601,7 @@ def runtime_public_view(session: ChatSession, home: Path | None = None) -> dict[
         ),
         "composer_save_blueprint": composer_save,
         "blueprint_wizard": bp,
-        "session_goal": goal,
+        "session_goal": goal.to_dict(),
         "session_goal_brief": session_goal_brief(session),
         "writing_brief": brief,
         "writing_brief_prompt_preview": writing_brief_prompt_block(session)[:500],
