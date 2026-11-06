@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from report_writing.domain.models import ChatSession, WritingTask
+from report_writing.domain.models import ChatActionPayload, ChatPayload, ChatSession, WritingTask
 
 # 向导止于学习分析；历史 step=done 由 alias 归一到 study
 _WIZARD_STEP_ORDER = ("meta", "upload", "outline", "outline_confirm", "study")
@@ -530,9 +530,10 @@ def latest_blueprint_wizard_card_from_session(session: ChatSession):
     return None
 
 
-def _payload_wizard_step_index(payload: dict[str, Any]) -> int:
+def _payload_wizard_step_index(payload: ChatPayload) -> int:
     from report_writing.chat.wizard_loop_guard import normalized_wizard_step
 
+    payload = ChatActionPayload.parse(payload)
     return wizard_step_index(normalized_wizard_step(str(payload.get("step") or "")))
 
 

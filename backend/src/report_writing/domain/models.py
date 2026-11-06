@@ -839,6 +839,23 @@ class ChatActionPayload(Entity, Mapping[str, Any]):
     search_terms_separate: bool = False
     structure_only: bool = False
     preserve_chapter_meta: bool = False
+    wizard_command: str = ""
+    step: str = ""
+    resource: str = ""
+    accept: bool = False
+    title_hint: str = ""
+    clarify_id: str = ""
+    blueprint_title: str = ""
+    chapter_label: str = ""
+    slot_no: int = 0
+    no: int = 0
+    materials_pack_id: str = ""
+    sequences: list[str] = Field(default_factory=list)
+    working_task_id: str = ""
+    item_id: str = ""
+    document_title: str = ""
+    doc_title: str = ""
+    target_document: str = ""
 
     @classmethod
     def parse(cls, raw: Any = None) -> ChatActionPayload:
@@ -859,7 +876,15 @@ class ChatActionPayload(Entity, Mapping[str, Any]):
         data = dict(raw)
         if data.get("chapter_keys_json") and not data.get("chapter_keys"):
             data["chapter_keys"] = data.get("chapter_keys_json")
-        for key in ("chapter_keys", "write_chapter_keys", "chapter_sequences", "element_ids", "tags", "project_folder_ids"):
+        for key in (
+            "chapter_keys",
+            "write_chapter_keys",
+            "chapter_sequences",
+            "element_ids",
+            "tags",
+            "project_folder_ids",
+            "sequences",
+        ):
             if key in data:
                 data[key] = _as_str_list(data.get(key))
         if data.get("_skip_supplement_check") and not data.get("skip_supplement_check"):
@@ -937,6 +962,9 @@ def _as_str_list(value: Any) -> list[str]:
 def action_payload_dict(payload: Any = None) -> dict[str, Any]:
     """把 Tool/点选入参收成普通 dict（仅已填字段），给仍走 dict 的旧调用。"""
     return ChatActionPayload.parse(payload).as_dict()
+
+
+ChatPayload = ChatActionPayload | dict[str, Any] | None
 
 
 class ChatPhase(str, Enum):

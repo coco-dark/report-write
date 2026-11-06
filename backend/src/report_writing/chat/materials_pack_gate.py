@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
-from report_writing.domain.models import ChatCard, ChatSession, WritingTask
+from report_writing.domain.models import ChatActionPayload, ChatCard, ChatPayload, ChatSession, WritingTask
 
 EmitFn = Callable[[dict[str, Any]], None]
 InvokeFn = Callable[[str, str], str]
@@ -563,7 +563,7 @@ def apply_materials_pack_choice(
     home: Path,
     session: ChatSession,
     action: str,
-    payload: dict[str, Any] | None = None,
+    payload: ChatPayload = None,
     *,
     emit: EmitFn | None = None,
 ) -> tuple[str, list[ChatCard]]:
@@ -579,7 +579,7 @@ def apply_materials_pack_choice(
     from report_writing.services.store import TaskStore
     from report_writing.services.writing_task_catalog import save_writing_task
 
-    body = dict(payload or {})
+    body = ChatActionPayload.parse(payload).as_dict()
     key = (action or "").strip()
     tid = str(body.get("task_id") or session.task_id or "").strip()
     task = _load_task(home, tid) if tid else None

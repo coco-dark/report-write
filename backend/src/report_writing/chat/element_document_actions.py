@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from report_writing.domain.models import ChatSession, ElementNode, WritingTask
+from report_writing.domain.models import ChatActionPayload, ChatPayload, ChatSession, ElementNode, WritingTask
 
 
 def extract_element_name_hint(text: str) -> str:
@@ -142,7 +142,7 @@ def dissociate_chapter_element(
     home: Path,
     session: ChatSession,
     message: str,
-    payload: dict[str, Any] | None = None,
+    payload: ChatPayload = None,
     *,
     invoke=None,
 ) -> tuple[str, list[Any]]:
@@ -151,7 +151,7 @@ def dissociate_chapter_element(
     from report_writing.chat.writing import _apply_dissociate_chapter_element
     from report_writing.services.store import TaskStore
 
-    body = dict(payload or {})
+    body = ChatActionPayload.parse(payload).as_dict()
     task_id = str(body.get("task_id") or getattr(session, "task_id", "") or "").strip()
     if not task_id:
         return "还没有写作任务，先选定蓝本或确认大纲后再改要素。", []
@@ -256,7 +256,7 @@ def remove_document_element(
     home: Path,
     session: ChatSession,
     message: str,
-    payload: dict[str, Any] | None = None,
+    payload: ChatPayload = None,
     *,
     invoke=None,
 ) -> tuple[str, list[Any]]:
@@ -266,7 +266,7 @@ def remove_document_element(
     from report_writing.chat.writing import _apply_remove_document_element
     from report_writing.services.store import TaskStore
 
-    body = dict(payload or {})
+    body = ChatActionPayload.parse(payload).as_dict()
     task_id = str(body.get("task_id") or getattr(session, "task_id", "") or "").strip()
     if not task_id:
         return "还没有写作任务，先选定蓝本或确认大纲后再删要素。", []

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from report_writing.domain.models import ChatCard, ChatSession
+from report_writing.domain.models import ChatActionPayload, ChatCard, ChatPayload, ChatSession
 
 ACTION_SLOT_SOURCE = "action_slots"
 
@@ -92,14 +92,14 @@ def _chapter_elements(task: Any, chapter_key: str, *, limit: int = 6) -> list[tu
 
 def missing_action_slots(
     tool: str,
-    payload: dict[str, Any] | None,
+    payload: ChatPayload,
     *,
     session: ChatSession | None = None,
     task: Any = None,
 ) -> list[str]:
     """返回仍缺的必填槽位名。导航类返回空。"""
     name = str(tool or "").strip()
-    body = dict(payload or {})
+    body = ChatActionPayload.parse(payload).as_dict()
     required = _REQUIRED_SLOTS.get(name)
     if not required:
         return []
@@ -146,7 +146,7 @@ def missing_action_slots(
 def build_action_slot_clarify(
     session: ChatSession,
     tool: str,
-    payload: dict[str, Any] | None,
+    payload: ChatPayload,
     missing: list[str],
     *,
     task: Any = None,
@@ -157,7 +157,7 @@ def build_action_slot_clarify(
     from report_writing.chat.clarify_flow import begin_clarify
 
     name = str(tool or "").strip()
-    body = dict(payload or {})
+    body = ChatActionPayload.parse(payload).as_dict()
     task_id = str(body.get("task_id") or getattr(session, "task_id", "") or "").strip()
     if task_id:
         body.setdefault("task_id", task_id)

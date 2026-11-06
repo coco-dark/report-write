@@ -17,7 +17,7 @@ from report_writing.agents.state import ChatControlState, EmitFn, InvokeFn
 
 # 兼容旧 import
 __all__ = ["ChatControlState", "run_chat_control", "build_chat_tools", "ChatControlScriptModel"]
-from report_writing.domain.models import ChatActionPayload, ChatCard, ChatPhase, ChatSession
+from report_writing.domain.models import ChatActionPayload, ChatCard, ChatPayload, ChatPhase, ChatSession
 
 _log = logging.getLogger(__name__)
 
@@ -139,10 +139,10 @@ def _obs_fail(
 
 
 def _suggested_args_for_tool(
-    tool: str, payload: dict[str, Any], message: str
+    tool: str, payload: ChatPayload, message: str
 ) -> dict[str, Any]:
     key = (tool or "").strip()
-    body = dict(payload or {})
+    body = ChatActionPayload.parse(payload).as_dict()
     if key in {
         "add_chapter_element",
         "associate_elements",
@@ -2845,16 +2845,16 @@ def _parse_agent_body(user_text: str) -> tuple[str, dict[str, Any], str]:
         return "", {}, (user_text or "").strip()
     if not isinstance(body, dict):
         return "", {}, (user_text or "").strip()
-    payload = body.get("payload") if isinstance(body.get("payload"), dict) else {}
+    payload = ChatActionPayload.parse(body.get("payload")).as_dict()
     return (
         str(body.get("action") or "").strip(),
-        dict(payload or {}),
+        payload,
         str(body.get("message") or "").strip(),
     )
 
 
-def _tool_args_for_ui_action(action: str, payload: dict[str, Any]) -> dict[str, Any]:
-    payload = dict(payload or {})
+def _tool_args_for_ui_action(action: str, payload: ChatPayload) -> dict[str, Any]:
+    payload = ChatActionPayload.parse(payload).as_dict()
     if action == "select_blueprint":
         return {"blueprint_id": str(payload.get("blueprint_id") or "").strip()}
     if action == "skip_blueprint":
@@ -3018,7 +3018,7 @@ def apply_resolve_intent_clarify(
     session: ChatSession,
     invoke: InvokeFn | None,
     emit: EmitFn | None,
-    payload: dict[str, Any],
+    payload: ChatPayload,
     message: str,
 ) -> tuple[str, list[Any], list[dict]]:
     """执行澄清点选（卡片按钮或 Agent Tool）。"""
@@ -3028,8 +3028,9 @@ def apply_resolve_intent_clarify(
         try_handle_pending_message,
     )
 
-    option_id = str((payload or {}).get("option_id") or "").strip()
-    option_label = str((payload or {}).get("option_label") or "").strip()
+    payload = ChatActionPayload.parse(payload)
+    option_id = str(payload.get("option_id") or "").strip()
+    option_label = str(payload.get("option_label") or "").strip()
     hit = None
     if option_id:
         hit = resolve_clarify(session, option_id)
@@ -3066,7 +3067,7 @@ def run_ui_action_shortcut(
     invoke: InvokeFn,
     emit: EmitFn | None,
     action: str,
-    payload: dict[str, Any],
+    payload: ChatPayload,
     message: str,
 ) -> tuple[str, list[Any], list[dict]] | None:
     """已知 UI action：执行同名工具（Agent 未调 Tool 时的兜底，以及资料包等未绑定 Tool）。"""
@@ -3089,7 +3090,7 @@ def run_ui_action_shortcut(
 
         try:
             reply, cards = apply_materials_pack_choice(
-                home, session, key, dict(payload or {}), emit=emit
+                home, session, key, payload, emit=emit
             )
         except ValueError as error:
             return str(error), [], []

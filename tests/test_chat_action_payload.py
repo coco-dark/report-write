@@ -38,6 +38,19 @@ def test_chat_request_coerces_payload_dict():
     assert req.action_payload.blueprint_id == "bp9"
 
 
+def test_parse_wizard_and_pack_fields():
+    payload = ChatActionPayload.parse(
+        {"wizard_command": "go_study", "step": "study", "pack_id": "p1", "slot_no": 2}
+    )
+    assert payload.wizard_command == "go_study"
+    assert payload.step == "study"
+    assert payload.pack_id == "p1"
+    assert payload.slot_no == 2
+    dumped = payload.as_dict()
+    assert dumped["wizard_command"] == "go_study"
+    assert "confirm" not in dumped
+
+
 def test_session_goal_entity_roundtrip():
     session = ChatSession(id="s1")
     merge_session_goal(session, SessionGoal(doc_title="年报", doc_category="报告"))

@@ -21,7 +21,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from report_writing.domain.models import ChapterStatus, ChatPhase, ChatSession
+from report_writing.domain.models import ChapterStatus, ChatActionPayload, ChatPayload, ChatPhase, ChatSession
 
 RUNTIME_VERSION = 1
 
@@ -70,7 +70,8 @@ def workflow_patch(session: ChatSession, name: str, patch: dict[str, Any]) -> di
     return merged
 
 
-def workflow_touch_template(session: ChatSession, payload: dict[str, Any]) -> None:
+def workflow_touch_template(session: ChatSession, payload: ChatPayload) -> None:
+    payload = ChatActionPayload.parse(payload)
     data = {
         "resource": str(payload.get("resource") or "").strip(),
         "step": str(payload.get("step") or "choose").strip(),

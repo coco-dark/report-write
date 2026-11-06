@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
-from report_writing.domain.models import ChatPhase, ChatSession
+from report_writing.domain.models import ChatActionPayload, ChatPayload, ChatPhase, ChatSession
 
 EmitFn = Callable[[dict[str, Any]], None]
 InvokeFn = Callable[[str, str], str]
@@ -87,13 +87,13 @@ def run_blueprint_action(
     home: Path,
     session: ChatSession,
     action: str,
-    payload: dict[str, Any] | None = None,
+    payload: ChatPayload = None,
     *,
     invoke: InvokeFn | None = None,
     emit: EmitFn | None = None,
 ) -> tuple[str, list[Any]]:
     key = (action or "").strip()
-    body = dict(payload or {})
+    body = ChatActionPayload.parse(payload)
     if key not in BLUEPRINT_ACTION_NAMES:
         raise ValueError(f"未知蓝本 action：{key}")
 

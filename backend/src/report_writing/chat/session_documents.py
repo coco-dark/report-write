@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from report_writing.domain.models import ChatActionPayload, ChatPhase, ChatSession
+from report_writing.domain.models import ChatActionPayload, ChatPayload, ChatPhase, ChatSession
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -2856,9 +2856,9 @@ def resolve_task_id(
 
 def resolve_blueprint_id(
     session: ChatSession,
-    payload: dict[str, Any] | None = None,
+    payload: ChatPayload = None,
 ) -> str:
-    body = dict(payload or {})
+    body = ChatActionPayload.parse(payload).as_dict()
     payload_bid = str(body.get("blueprint_id") or "").strip()
     if payload_bid:
         return payload_bid
@@ -3597,12 +3597,12 @@ def apply_matched_document_to_session(
 def enrich_payload_with_message_document(
     session: ChatSession,
     message: str,
-    payload: dict[str, Any] | None = None,
+    payload: ChatPayload = None,
     *,
     switch_focus: bool = True,
 ) -> dict[str, Any]:
     """若用户话点名了登记表中的文档，写入 task_id/blueprint_id；可切换焦点。"""
-    body = dict(payload or {})
+    body = ChatActionPayload.parse(payload).as_dict()
     if str(body.get("task_id") or "").strip() or str(body.get("blueprint_id") or "").strip():
         return body
     hint = str(

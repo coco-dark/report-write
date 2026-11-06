@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
-from report_writing.domain.models import ChatPhase, ChatSession
+from report_writing.domain.models import ChatActionPayload, ChatPayload, ChatPhase, ChatSession
 
 EmitFn = Callable[[dict[str, Any]], None]
 InvokeFn = Callable[[str, str], str]
@@ -21,7 +21,7 @@ def run_session_goal_action(
     home: Path,
     session: ChatSession,
     action: str,
-    payload: dict[str, Any] | None = None,
+    payload: ChatPayload = None,
     *,
     invoke: InvokeFn | None = None,
     emit: EmitFn | None = None,
@@ -30,7 +30,7 @@ def run_session_goal_action(
     key = (action or "").strip()
     if key not in SESSION_GOAL_ACTION_NAMES:
         raise ValueError(f"unknown session_goal action: {key}")
-    body = dict(payload or {})
+    body = ChatActionPayload.parse(payload)
 
     if key == "remember_writing_goal":
         return _remember_writing_goal(home, session, body, invoke=invoke, model=model)
@@ -51,7 +51,7 @@ def _intent_invoke(invoke: InvokeFn | None, *, model=None) -> InvokeFn | None:
 def _remember_writing_goal(
     home: Path,
     session: ChatSession,
-    payload: dict[str, Any],
+    payload: ChatPayload,
     *,
     invoke: InvokeFn | None,
     model=None,
@@ -59,6 +59,7 @@ def _remember_writing_goal(
     from report_writing.chat.session_goal import apply_session_goal_to_task, remember_from_user_message
     from report_writing.services.store import TaskStore
 
+    payload = ChatActionPayload.parse(payload)
     notes = str(payload.get("notes") or payload.get("message") or "").strip()
     llm = _intent_invoke(invoke, model=model)
     reply = remember_from_user_message(session, notes, invoke=llm)
@@ -86,7 +87,7 @@ def _freeform_outline_chapter_count(home: Path | None, session: ChatSession) -> 
     return len(list(task.outline.chapters or []))
 
 def _seed_meta_patch_from_payload(
-    payload: dict[str, Any],
+    payload: ChatPayload,
     message: str,
     *,
     invoke: InvokeFn | None,
@@ -96,6 +97,7 @@ def _seed_meta_patch_from_payload(
     from report_writing.chat.helpers import is_vague_freeform_meta
     from report_writing.chat.session_goal import parse_goal_patch_from_message
 
+    payload = ChatActionPayload.parse(payload)
     category = str(payload.get("category") or "").strip()
     title = str(payload.get("title") or "").strip()
     patch: dict[str, str] = {}
@@ -136,7 +138,7 @@ def _seed_meta_patch_from_payload(
 def _set_session_meta(
     home: Path,
     session: ChatSession,
-    payload: dict[str, Any],
+    payload: ChatPayload,
     *,
     invoke: InvokeFn | None,
     emit: EmitFn | None,
@@ -145,6 +147,7 @@ def _set_session_meta(
     from report_writing.chat.helpers import _emit_process
     from report_writing.chat.session_goal import merge_session_goal, sync_goal_into_freeform
 
+    payload = ChatActionPayload.parse(payload)
     category = str(payload.get("category") or "").strip()
     title = str(payload.get("title") or "").strip()
     message = str(payload.get("message") or "").strip()

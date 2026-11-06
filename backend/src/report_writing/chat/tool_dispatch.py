@@ -10,7 +10,7 @@ import logging
 from pathlib import Path
 from typing import Any, Callable
 
-from report_writing.domain.models import ChatSession
+from report_writing.domain.models import ChatActionPayload, ChatSession
 
 _log = logging.getLogger(__name__)
 
@@ -179,7 +179,7 @@ def execute_dispatch_tool(
     invoke: InvokeFn | None = None,
 ) -> tuple[str, list[Any], list[dict[str, Any]]] | None:
     name = str(step.get("tool") or "").strip()
-    args = dict(step.get("args") or step.get("payload") or {})
+    args = ChatActionPayload.parse(step.get("args") or step.get("payload")).as_dict()
     text = (message or "").strip()
     # 口语点名会话内已有文档 → 注入 task/blueprint，并切换焦点（写 A 时说「帮我写 B 那章」）
     # focus_document 自己切焦点，勿先 enrich 否则会误判「已是当前焦点」

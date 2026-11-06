@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from report_writing.domain.models import ChatCard, ChatPhase, ChatSession
+from report_writing.domain.models import ChatActionPayload, ChatCard, ChatPayload, ChatPhase, ChatSession
 from report_writing.services.robots import get_robot, update_robot
 
 
@@ -26,12 +26,12 @@ def _bind_robot_id(home: Path, session: ChatSession, field: str, item_id: str) -
 
 
 def _wizard_working_task_id(
-    session: ChatSession, blueprint_id: str = "", payload: dict | None = None
+    session: ChatSession, blueprint_id: str = "", payload: ChatPayload = None
 ) -> str:
     """向导落盘目标：优先文档副本 w*（无蓝本·样本 / 选用即 clone）。学习/写作禁止回落到库蓝本章节。"""
     from report_writing.services.task_ids import is_writing_task_id
 
-    body = dict(payload or {})
+    body = ChatActionPayload.parse(payload).as_dict()
     for key in ("working_task_id", "writing_task_id", "writingTaskId"):
         cand = str(body.get(key) or "").strip()
         if cand and is_writing_task_id(cand):
@@ -661,7 +661,7 @@ def _begin_blueprint_wizard(
 def _action_resource_choice(
     home: Path,
     session: ChatSession,
-    payload: dict[str, Any],
+    payload: ChatPayload,
     *,
     invoke=None,
     emit=None,
@@ -669,6 +669,7 @@ def _action_resource_choice(
     from report_writing.chat.actions import _action_skip_blueprint
     from report_writing.chat.cards import _blueprint_wizard_card, _template_wizard_card
 
+    payload = ChatActionPayload.parse(payload)
     resource = str(payload.get("resource") or "").strip()
     accept = bool(payload.get("accept"))
     if not accept:
@@ -774,12 +775,13 @@ def _resolve_meta_existing_blueprint(
     home: Path,
     session: ChatSession,
     wizard: dict[str, Any],
-    payload: dict[str, Any],
+    payload: ChatPayload,
 ) -> str:
     """meta 步是否沿用已有 task id；新文档/标题冲突时返回空以触发新建。"""
     from report_writing.chat.helpers import _load_task
     from report_writing.chat.session_documents import _titles_conflict, focus_document_meta
 
+    payload = ChatActionPayload.parse(payload)
     requested = str(payload.get("title") or wizard.get("title") or "").strip()
     wizard_bid = str(wizard.get("blueprint_id") or "").strip()
     session_bid = str(session.blueprint_id or "").strip()
@@ -810,7 +812,7 @@ def _resolve_meta_existing_blueprint(
 def _action_blueprint_wizard(
     home: Path,
     session: ChatSession,
-    payload: dict[str, Any],
+    payload: ChatPayload,
 ) -> tuple[str, list[ChatCard]]:
     from report_writing.chat.cards import _blueprint_wizard_card, _handoff_card
     from report_writing.chat.gates import is_blueprint_valid
@@ -829,6 +831,7 @@ def _action_blueprint_wizard(
     from report_writing.chat.wizard_state import WIZARD_MODE_FREEFORM_SAMPLE
     from report_writing.services.task_ids import is_writing_task_id
 
+    payload = ChatActionPayload.parse(payload)
     wizard = dict((session.freeform or {}).get("blueprint_wizard") or {})
     step = str(payload.get("step") or wizard.get("step") or "meta").strip()
     payload_bid = str(payload.get("blueprint_id") or "").strip()
@@ -1761,11 +1764,12 @@ def open_template_wizard_choose(
 
 def _action_template_wizard(
     session: ChatSession,
-    payload: dict[str, Any],
+    payload: ChatPayload,
 ) -> tuple[str, list[ChatCard]]:
     from report_writing.chat.cards import _template_wizard_card
     from report_writing.chat.session_runtime import workflow_touch_template
 
+    payload = ChatActionPayload.parse(payload)
     resource = str(payload.get("resource") or "").strip()
     step = str(payload.get("step") or "choose").strip()
     item_id = str(payload.get("item_id") or "").strip()
