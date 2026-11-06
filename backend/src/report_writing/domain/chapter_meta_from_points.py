@@ -89,6 +89,7 @@ def derive_chapter_meta_from_points(
     category: str = "报告",
     parent_title: str = "",
     point_items: list[Any] | None,
+    model=None,
 ) -> tuple[str, str]:
     """返回 (describes, aux_prompt)。无要点时返回空字符串对。"""
     items = [x for x in list(point_items or []) if isinstance(x, dict)]
@@ -107,9 +108,9 @@ def derive_chapter_meta_from_points(
     aux_fb = _aux_from_points(items)
 
     try:
-        from report_writing.infra.llm import live_model
+        from report_writing.infra.llm import or_live_model
 
-        model = live_model()
+        model = or_live_model(model)
     except Exception:
         model = None
 

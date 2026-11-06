@@ -12,18 +12,23 @@ from typing import Callable
 InvokeFn = Callable[[str, str], str]
 
 
-def invoke_intent_llm(system: str, user: str, *, fallback: InvokeFn | None = None) -> str:
-    """优先 live_intent_model；未配置独立模型时仍走 intent 通道（同对话模型 + 更小 max_tokens）。"""
+def invoke_intent_llm(
+    system: str,
+    user: str,
+    *,
+    model=None,
+    fallback: InvokeFn | None = None,
+) -> str:
+    """优先传入的 intent model；未传则 live_intent_model；再回落 fallback / chat_invoke。"""
     from report_writing.infra.llm import live_intent_model
+    from report_writing.infra.llm_invoke import invoke_prompt
 
-    model = live_intent_model()
-    if model is not None:
-        from langchain_core.messages import HumanMessage, SystemMessage
+    chosen = model if model is not None else live_intent_model()
+    if chosen is not None:
         from report_writing.infra.llm_errors import is_rate_limit_error
-        from report_writing.infra.llm_invoke import invoke_messages
 
         try:
-            return invoke_messages(model, [SystemMessage(content=system), HumanMessage(content=user)])
+            return invoke_prompt(chosen, system, user)
         except Exception as error:
             if is_rate_limit_error(error) and fallback is not None:
                 return fallback(system, user)
@@ -35,10 +40,10 @@ def invoke_intent_llm(system: str, user: str, *, fallback: InvokeFn | None = Non
     return chat_invoke(system, user)
 
 
-def intent_invoke_fn(fallback: InvokeFn | None = None) -> InvokeFn:
-    """绑定 fallback 的意图 invoke（供总控 state 注入）。"""
+def intent_invoke_fn(fallback: InvokeFn | None = None, *, model=None) -> InvokeFn:
+    """绑定 fallback / model 的意图 invoke（供总控 state 注入）。"""
 
     def _invoke(system: str, user: str) -> str:
-        return invoke_intent_llm(system, user, fallback=fallback)
+        return invoke_intent_llm(system, user, model=model, fallback=fallback)
 
     return _invoke

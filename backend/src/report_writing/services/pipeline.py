@@ -7,7 +7,7 @@ from typing import Any
 
 from report_writing.agents.supervisor import run_supervisor
 from report_writing.services.corpus import load_task_corpus, load_template, normalize_biz_type, open_corpus
-from report_writing.infra.llm import live_model
+from report_writing.infra.llm import or_live_model
 from report_writing.infra.postgres import attach_materials
 from report_writing.domain.models import (
     ChapterState,
@@ -28,6 +28,7 @@ def run_task(
     biz_type: str,
     force_study: bool = False,
     on_event=None,
+    model=None,
 ) -> WritingTask:
     template = load_template(template_path)
     material_type = normalize_biz_type(biz_type)
@@ -36,7 +37,7 @@ def run_task(
         template=template,
         corpus=attach_materials(dataset_dir, open_corpus(dataset_dir, material_type)),
         cache=BriefCache(cache_dir),
-        model=live_model(),
+        model=or_live_model(model),
         force_study=force_study,
         on_event=on_event,
     )
@@ -72,7 +73,13 @@ def update_points(task_dir: Path, cache_dir: Path, chapter_key: str, points: lis
     return task
 
 
-def rerun_chapter(task_dir: Path, template_path: Path, dataset_dir: Path | None = None, on_event=None) -> WritingTask:
+def rerun_chapter(
+    task_dir: Path,
+    template_path: Path,
+    dataset_dir: Path | None = None,
+    on_event=None,
+    model=None,
+) -> WritingTask:
     store = TaskStore(task_dir)
     task = store.load()
     if task.brief is None:
@@ -84,7 +91,7 @@ def rerun_chapter(task_dir: Path, template_path: Path, dataset_dir: Path | None 
         template=template,
         corpus=corpus,
         cache=BriefCache(task_dir / "unused-cache"),
-        model=live_model(),
+        model=or_live_model(model),
         brief=task.brief,
         chapters=task.chapters,
         on_event=on_event,
@@ -105,6 +112,7 @@ def run_chapters(
     robot_id: str = "",
     on_event=None,
     search_only: bool = False,
+    model=None,
 ) -> WritingTask:
     """运行指定章节；父节点默认带子树。"""
     from report_writing.domain.elements import chapter_subtree_keys, resolve_elements_for_chapter, sync_brief_from_outline
@@ -185,7 +193,7 @@ def run_chapters(
         from report_writing.agents.supervisor import execute_chapter_search
         from report_writing.domain.models import StepEvent
 
-        model = live_model()
+        model = or_live_model(model)
         new_steps: list[StepEvent] = []
 
         def on_step(step: str, status: str, chapter: str = "", title: str = "", payload: dict | None = None) -> None:
@@ -223,7 +231,7 @@ def run_chapters(
         template=template,
         corpus=corpus,
         cache=BriefCache(task_dir / "unused-cache"),
-        model=live_model(),
+        model=or_live_model(model),
         brief=task.brief,
         chapters=selected,
         on_event=on_event,
@@ -353,6 +361,7 @@ def confirm_chapter(
     decision: HumanDecision,
     text: str = "",
     comment: str = "",
+    model=None,
 ) -> WritingTask:
     store = TaskStore(task_dir)
     task = store.load()
@@ -386,7 +395,7 @@ def confirm_chapter(
             _return_comment(chapter, comment or "请按人工意见修改本章")
         )
         chapter.status = ChapterStatus.WRITING
-        _rewrite(task, chapter, template_path, dataset_dir)
+        _rewrite(task, chapter, template_path, dataset_dir, model=model)
     task.refresh_status()
     store.save(task)
     if decision in {HumanDecision.APPROVE, HumanDecision.EDIT}:
@@ -406,14 +415,21 @@ def export_confirmed(task: WritingTask) -> dict[str, Any]:
     return {"template_id": task.template_id, "template_version": task.template_version, "chapters": chapters}
 
 
-def _rewrite(task: WritingTask, chapter: ChapterState, template_path: Path, dataset_dir: Path) -> None:
+def _rewrite(
+    task: WritingTask,
+    chapter: ChapterState,
+    template_path: Path,
+    dataset_dir: Path,
+    *,
+    model=None,
+) -> None:
     template = load_template(template_path)
     managed = run_supervisor(
         phase="revise",
         template=template,
         corpus=attach_materials(dataset_dir, open_corpus(dataset_dir, normalize_biz_type(task.biz_type))),
         cache=BriefCache(Path(template_path).parent / ".unused"),
-        model=live_model(),
+        model=or_live_model(model),
         brief=task.brief,
         chapters=[chapter],
     )

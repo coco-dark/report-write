@@ -632,11 +632,28 @@ def list_word_styles_for_robot(home: Path, robot_id: str):
     return scoped_word_styles(home, robot_id)
 
 
-def chat(home: Path, body: ChatRequest, *, invoke) -> ChatResponse:
+def chat(
+    home: Path,
+    body: ChatRequest,
+    *,
+    invoke,
+    model=None,
+    chat_model=None,
+    intent_model=None,
+    stream_model=None,
+) -> ChatResponse:
     """兼容入口：委托有状态编排器。"""
     from report_writing.chat_orchestrator import handle_chat
 
-    return handle_chat(home, body, invoke=invoke)
+    return handle_chat(
+        home,
+        body,
+        invoke=invoke,
+        model=model,
+        chat_model=chat_model,
+        intent_model=intent_model,
+        stream_model=stream_model,
+    )
 
 
 def generate_prompts(body: GenerateRobotPromptsRequest, *, invoke) -> GenerateRobotPromptsResponse:

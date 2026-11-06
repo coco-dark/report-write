@@ -21,6 +21,16 @@ from report_writing.domain.models import ChatCard, ChatPhase, ChatSession
 
 _log = logging.getLogger(__name__)
 
+
+def _state_intent_llm(state: ChatControlState) -> InvokeFn | None:
+    if state.intent_invoke is not None:
+        return state.intent_invoke
+    from report_writing.chat.intent_invoke import intent_invoke_fn
+
+    if state.invoke is None and state.intent_model is None:
+        return None
+    return intent_invoke_fn(state.invoke, model=state.intent_model)
+
 CONTROL_INSTRUCTIONS = """你是「智能文档协作」对话写文档总控（角色：小墨）。
 职责：根据 writing_brief、dialogue_full、session_goal、用户原话与界面 action，选择并调用 Tool 推进写作。禁止靠关键词表猜意图；禁止编造蓝本名称或工具未返回的事实。
 
@@ -164,11 +174,7 @@ def _hop_if_other_writing_control(
         return None
     from report_writing.chat.writing_control_route import suggest_other_writing_control_tool
 
-    intent_llm = state.intent_invoke
-    if intent_llm is None:
-        from report_writing.chat.intent_invoke import intent_invoke_fn
-
-        intent_llm = intent_invoke_fn(state.invoke)
+    intent_llm = _state_intent_llm(state)
     suggestion = suggest_other_writing_control_tool(
         state.home,
         state.session,
@@ -348,7 +354,7 @@ def _hang_entry_path_after_named(
     """已定名缺入口：挂有蓝本/无蓝本（或模版/自动大纲）澄清卡。"""
     from report_writing.chat.clarify_flow import build_entry_path_clarify
 
-    intent_fn = state.intent_invoke if state.intent_invoke is not None else state.invoke
+    intent_fn = _state_intent_llm(state) or state.invoke
     return build_entry_path_clarify(
         state.session,
         message=(message or state.last_user_message or "").strip(),
@@ -375,7 +381,7 @@ def _ask_path_after_no_blueprint_match(state: ChatControlState, message: str) ->
     reply, cards = reply_ask_write_path(
         state.session,
         msg,
-        invoke=state.intent_invoke or state.invoke,
+        invoke=_state_intent_llm(state) or state.invoke,
     )
     _set_cards(state, cards)
     hint = (reply or "").strip() or (
@@ -433,7 +439,7 @@ def _finish_blueprint_match(
             message=message or msg,
             reply=hint.strip(),
             cards=cards,
-            invoke=state.intent_invoke or state.invoke,
+            invoke=_state_intent_llm(state) or state.invoke,
         )
         _set_cards(state, cards)
         touch_session_plan(
@@ -562,16 +568,12 @@ def build_chat_tools(state: ChatControlState) -> list:
         msg = (message or state.last_user_message or "").strip()
         tip = (title_hint or "").strip()
         _tool_begin(state, "ask_entry_path")
-        intent_fn = state.intent_invoke
-        if intent_fn is None and state.invoke is not None:
-            from report_writing.chat.intent_invoke import intent_invoke_fn
-
-            intent_fn = intent_invoke_fn(state.invoke)
+        intent_fn = _state_intent_llm(state) or state.invoke
         reply, cards = build_entry_path_clarify(
             state.session,
             message=msg,
             title_hint=tip,
-            invoke=intent_fn if intent_fn is not None else state.invoke,
+            invoke=intent_fn,
             home=state.home,
             emit=state.emit,
             apply_plan=False,
@@ -938,7 +940,7 @@ def build_chat_tools(state: ChatControlState) -> list:
                 state.home,
                 state.session,
                 state.last_user_message or "",
-                invoke=state.intent_invoke or state.invoke,
+                invoke=_state_intent_llm(state) or state.invoke,
             )
             _set_cards(state, cards)
             return _dump(
@@ -1039,7 +1041,7 @@ def build_chat_tools(state: ChatControlState) -> list:
                 "confirmed_create": bool(confirmed_create),
                 "from_entry_path": bool(from_entry_path),
             },
-            invoke=state.intent_invoke or state.invoke,
+            invoke=_state_intent_llm(state) or state.invoke,
             emit=state.emit,
         )
         _set_cards(state, cards)
@@ -1149,6 +1151,7 @@ def build_chat_tools(state: ChatControlState) -> list:
             writing_pace=pace,
             chapter_keys=keys,
             invoke=state.invoke,
+            model=state.chat_model,
         )
         state.events.extend(events or [])
         _set_cards(state, cards)
@@ -1272,7 +1275,7 @@ def build_chat_tools(state: ChatControlState) -> list:
             "user_message": msg,
         }
         reply, cards, events = _action_confirm_chapter(
-            state.home, state.session, payload, emit=state.emit
+            state.home, state.session, payload, emit=state.emit, model=state.chat_model
         )
         state.events.extend(events or [])
         _set_cards(state, cards)
@@ -1375,11 +1378,7 @@ def build_chat_tools(state: ChatControlState) -> list:
             from report_writing.chat.intent_llm import infer_element_payload_llm
             from report_writing.chat.helpers import _load_task
 
-            intent_llm = state.intent_invoke
-            if intent_llm is None:
-                from report_writing.chat.intent_invoke import intent_invoke_fn
-
-                intent_llm = intent_invoke_fn(state.invoke)
+            intent_llm = _state_intent_llm(state)
             inferred = infer_element_payload_llm(
                 hint,
                 dialogue_tail=format_full_dialogue(state.session, max_turns=8),
@@ -1682,6 +1681,7 @@ def build_chat_tools(state: ChatControlState) -> list:
             payload,
             emit=state.emit,
             invoke=state.invoke,
+            model=state.chat_model,
         )
         state.events.extend(events or [])
         _set_cards(state, cards)
@@ -1706,7 +1706,7 @@ def build_chat_tools(state: ChatControlState) -> list:
         if not isinstance(payload, dict):
             payload = {}
         reply, cards, events = _action_retry_search_chapter(
-            state.home, state.session, payload, emit=state.emit
+            state.home, state.session, payload, emit=state.emit, model=state.chat_model
         )
         state.events.extend(events or [])
         _set_cards(state, cards)
@@ -1874,8 +1874,9 @@ def build_chat_tools(state: ChatControlState) -> list:
             state.session,
             "set_session_meta",
             {"message": msg, "category": cat, "title": tip},
-            invoke=state.invoke,
+            invoke=_state_intent_llm(state) or state.invoke,
             emit=state.emit,
+            model=state.intent_model,
         )
         _set_cards(state, cards)
         brief = tip or cat or msg
@@ -2108,7 +2109,7 @@ def build_chat_tools(state: ChatControlState) -> list:
                 confirm=confirm,
                 regenerate=regenerate,
                 session=state.session,
-                invoke=state.intent_invoke or state.invoke,
+                invoke=_state_intent_llm(state) or state.invoke,
             )
 
         if regenerate:
@@ -2208,11 +2209,7 @@ def build_chat_tools(state: ChatControlState) -> list:
         from report_writing.chat_orchestrator import _collect_freeform_points
 
         msg = message or state.last_user_message or ""
-        intent_llm = state.intent_invoke
-        if intent_llm is None:
-            from report_writing.chat.intent_invoke import intent_invoke_fn
-
-            intent_llm = intent_invoke_fn(state.invoke)
+        intent_llm = _state_intent_llm(state)
         suggestion = suggest_tool_instead_of_submit_points(
             state.home,
             state.session,
@@ -2320,6 +2317,7 @@ def build_chat_tools(state: ChatControlState) -> list:
             payload,
             invoke=state.invoke,
             emit=state.emit,
+            model=state.chat_model,
         )
         _tool_done(state, "generate_freeform_points")
         _set_cards(state, cards)
@@ -2598,8 +2596,9 @@ def build_chat_tools(state: ChatControlState) -> list:
             state.session,
             "remember_writing_goal",
             {"notes": body},
-            invoke=state.invoke,
+            invoke=_state_intent_llm(state) or state.invoke,
             emit=state.emit,
+            model=state.intent_model,
         )
         write_like = any(
             k in body
@@ -2675,7 +2674,7 @@ def build_chat_tools(state: ChatControlState) -> list:
         reply, cards, events = apply_resolve_intent_clarify(
             home=state.home,
             session=state.session,
-            invoke=state.intent_invoke or state.invoke,
+            invoke=_state_intent_llm(state) or state.invoke,
             emit=state.emit,
             payload=payload,
             message=(message or option_label or state.last_user_message or "").strip(),
@@ -3495,7 +3494,7 @@ def run_langchain_chat_control(
     if not (action or state.user_action) and message:
         from report_writing.chat.session_gaps import refresh_session_gaps
 
-        intent_llm = state.intent_invoke or state.invoke
+        intent_llm = _state_intent_llm(state) or state.invoke
         refresh_session_gaps(
             state.session,
             message=message,
@@ -3541,11 +3540,7 @@ def run_chat_control(
 
     ensure_control_state_context(state, message)
 
-    intent_llm = state.intent_invoke
-    if intent_llm is None and state.invoke is not None:
-        from report_writing.chat.intent_invoke import intent_invoke_fn
-
-        intent_llm = intent_invoke_fn(state.invoke)
+    intent_llm = _state_intent_llm(state)
 
     state.agent_may_select_blueprint = (state.user_action or action or "").strip() == (
         "select_blueprint"

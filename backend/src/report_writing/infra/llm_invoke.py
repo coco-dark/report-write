@@ -15,6 +15,12 @@ _MAX_RETRIES = 2
 _BASE_SLEEP = 1.2
 
 
+def invoke_prompt(model: BaseChatModel, system: str, user: str) -> str:
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    return invoke_messages(model, [SystemMessage(content=system), HumanMessage(content=user)])
+
+
 def invoke_messages(model: BaseChatModel, messages: list[BaseMessage]) -> str:
     from report_writing.infra.llm_errors import is_rate_limit_error
 

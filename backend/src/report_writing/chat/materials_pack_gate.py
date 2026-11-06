@@ -349,6 +349,7 @@ def remind_slot_upload_before_write(
     *,
     invoke: InvokeFn | None = None,
     emit: EmitFn | None = None,
+    model=None,
 ) -> str:
     """若本轮章节有未齐的资料包槽位引用，用 LLM 拟人化提醒；不阻断开写。返回提醒正文或空串。"""
     gaps = collect_write_slot_gaps(home, task, chapter_keys)
@@ -361,26 +362,24 @@ def remind_slot_upload_before_write(
     llm = invoke
     if llm is None:
         try:
-            from langchain_core.messages import HumanMessage, SystemMessage
-            from report_writing.infra.llm import live_model
-            from report_writing.infra.llm_invoke import invoke_messages
+            from report_writing.infra.llm import or_live_model
+            from report_writing.infra.llm_invoke import invoke_prompt
 
-            model = live_model()
+            chosen = or_live_model(model)
 
             def _live(system: str, user: str) -> str:
-                if model is None:
+                if chosen is None:
                     return ""
-                return invoke_messages(
-                    model, [SystemMessage(content=system), HumanMessage(content=user)]
-                )
+                return invoke_prompt(chosen, system, user)
 
-            llm = _live if model is not None else None
+            llm = _live if chosen is not None else None
         except Exception:
             llm = None
     from report_writing.chat.helpers import _emit_tokens, polish_chat_reply
 
     reminder = polish_chat_reply(
         invoke=llm,
+        model=model,
         user_message="开始写作",
         draft=draft,
         phase=str(getattr(session, "phase", "") or ""),

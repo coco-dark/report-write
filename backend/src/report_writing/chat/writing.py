@@ -144,6 +144,7 @@ def _run_writing_keys(
     keys: list[str],
     *,
     emit: EmitFn | None = None,
+    model=None,
 ) -> tuple[WritingTask, list[dict]]:
     from report_writing.chat.cards import _chapter_progress_row, _progress_and_confirm_cards
     from report_writing.chat.helpers import WRITING_PACE_STEP, _STEP_LABEL, _emit, _emit_process
@@ -238,6 +239,7 @@ def _run_writing_keys(
                 chapter_keys=[key],
                 robot_id=session.robot_id or "",
                 on_event=on_event,
+                model=model,
             )
             # 兜底：写完仍停在待确认/待人工时，有正文则直接落库为已确认
             try:
@@ -384,6 +386,7 @@ def _maybe_continue_step_writing(
     *,
     emit: EmitFn | None = None,
     prefix: str = "",
+    model=None,
 ) -> tuple[str, list[ChatCard], list[dict]]:
     """逐步模式下，确认当前章后自动写下一章。"""
     from report_writing.chat.cards import _progress_and_confirm_cards
@@ -410,7 +413,9 @@ def _maybe_continue_step_writing(
 
     session.phase = ChatPhase.WRITING.value
     _emit_process(emit, f"你已确认上一章，开始写下一章「{_chapter_write_label(task, pending[0])}」…")
-    writing, events = _run_writing_keys(home, session, task, pending[:1], emit=emit)
+    writing, events = _run_writing_keys(
+        home, session, task, pending[:1], emit=emit, model=model
+    )
     reply, cards, events = _finish_writing_round(home, session, writing, events, pace=WRITING_PACE_STEP)
     if prefix:
         reply = f"{prefix}{reply}"

@@ -55,8 +55,10 @@ def handle_chat(
     emit: EmitFn | None = None,
     stream_model: StreamModelFn | None = None,
     model: Any = None,
+    chat_model: Any = None,
+    intent_model: Any = None,
 ) -> ChatResponse:
-    """对话总控 Agent：按需调 Tool / 子流程。emit 推送 token/process；model 可注入（单测脚本模型）。"""
+    """对话总控 Agent：按需调 Tool / 子流程。emit 推送 token/process；model 为总控 ReAct。"""
     from report_writing.chat.actions import _action_start_writing
     from report_writing.chat.gates import _ensure_analysis_choice_cards
     from report_writing.chat.helpers import (
@@ -212,9 +214,12 @@ def handle_chat(
             session=session,
             robot=robot,
             invoke=invoke,
-            intent_invoke=intent_invoke_fn(invoke),
+            intent_invoke=intent_invoke_fn(invoke, model=intent_model),
             emit=out,
             user_action=action,
+            control_model=ctrl_model,
+            chat_model=chat_model,
+            intent_model=intent_model,
         )
         user_text = build_agent_user_text(
             action=action,
@@ -265,6 +270,7 @@ def handle_chat(
     user_ctx = message or (_user_action_label(action, payload) if action else "")
     reply = polish_chat_reply(
         invoke=invoke,
+        model=chat_model,
         user_message=user_ctx,
         draft=reply,
         phase=str(session.phase or ""),

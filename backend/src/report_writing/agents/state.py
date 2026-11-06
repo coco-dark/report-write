@@ -27,5 +27,7 @@ class ChatControlState:
     agent_may_select_blueprint: bool = False
     last_user_message: str = ""
     control_model: BaseChatModel | None = None
+    chat_model: BaseChatModel | None = None  # 写作/润色/要点
+    intent_model: BaseChatModel | None = None  # 窄 JSON 槽位
     turn_context: Any = None  # WritingTurnContext | None
     did_invoke_tool: bool = False

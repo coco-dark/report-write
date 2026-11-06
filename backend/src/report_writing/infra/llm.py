@@ -43,6 +43,23 @@ def live_model(*, label: str = "chat") -> BaseChatModel | None:
     return wrap_token_tracking(model, label=label)
 
 
+def or_live_model(model: BaseChatModel | None = None, *, label: str = "chat") -> BaseChatModel | None:
+    """调用方已有 model 则用它；否则才取 live_model。"""
+    return model if model is not None else live_model(label=label)
+
+
+def model_invoke_fn(model: BaseChatModel | None):
+    """把 ChatModel 收成 (system, user) -> str；model 为空则返回 None。"""
+    if model is None:
+        return None
+    from report_writing.infra.llm_invoke import invoke_prompt
+
+    def _fn(system: str, user: str) -> str:
+        return invoke_prompt(model, system, user)
+
+    return _fn
+
+
 def live_control_model(*, label: str = "control") -> BaseChatModel | None:
     if llm_mode() == "scripted":
         return None
@@ -95,4 +112,10 @@ def live_intent_model(*, label: str = "intent") -> BaseChatModel | None:
         return None
 
 
-__all__ = ["live_model", "live_control_model", "live_intent_model"]
+__all__ = [
+    "live_model",
+    "live_control_model",
+    "live_intent_model",
+    "or_live_model",
+    "model_invoke_fn",
+]

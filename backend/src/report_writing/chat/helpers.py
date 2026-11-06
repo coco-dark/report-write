@@ -454,6 +454,7 @@ def polish_chat_reply(
     session: ChatSession | None = None,
     cards: list | None = None,
     force: bool = False,
+    model=None,
 ) -> str:
     """将工具/模板草稿改写成自然口语；失败则返回草稿。单测与脚本模式默认跳过。
 
@@ -464,6 +465,12 @@ def polish_chat_reply(
         return draft or ""
     if not force and should_skip_reply_polish(session, cards, action=action):
         return text
+    if invoke is None and model is not None:
+        from report_writing.infra.llm_invoke import invoke_prompt
+
+        def invoke(system: str, user: str) -> str:
+            return invoke_prompt(model, system, user)
+
     if not invoke:
         return text
     system = (

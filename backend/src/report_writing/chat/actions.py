@@ -688,6 +688,7 @@ def _action_start_writing(
     chapter_keys: list[str] | None = None,
     payload: dict | None = None,
     invoke=None,
+    model=None,
 ) -> tuple[str, list[ChatCard], list[dict]]:
     # 前端节奏卡片可能再次带上 chapter_keys，优先写入会话，避免丢勾选
     from report_writing.chat.cards import _offer_chapter_picker_cards, _progress_and_confirm_cards
@@ -1010,6 +1011,7 @@ def _action_start_writing(
         keys_to_run,
         invoke=invoke,
         emit=emit,
+        model=model,
     )
 
     from report_writing.services.writing_cancel import clear_writing_cancel
@@ -1023,7 +1025,9 @@ def _action_start_writing(
         task_id=writing.id,
     )
 
-    writing, run_events = _run_writing_keys(home, session, writing, keys_to_run, emit=emit)
+    writing, run_events = _run_writing_keys(
+        home, session, writing, keys_to_run, emit=emit, model=model
+    )
     events.extend(run_events)
     reply, cards, events = _finish_writing_round(home, session, writing, events, pace=pace)
     if slot_reminder:
@@ -1071,6 +1075,7 @@ def _action_confirm_chapter(
     payload: dict,
     *,
     emit: EmitFn | None = None,
+    model=None,
 ) -> tuple[str, list[ChatCard], list[dict]]:
     from report_writing.chat.cards import _progress_and_confirm_cards
     from report_writing.chat.helpers import _load_task
@@ -1109,6 +1114,7 @@ def _action_confirm_chapter(
         decision,
         text=text,
         comment=comment,
+        model=model,
     )
     source_bp = str(getattr(updated, "source_blueprint_id", "") or "").strip()
     bind_session_focus_to_task(
@@ -1144,7 +1150,9 @@ def _action_confirm_chapter(
             [],
         )
 
-    return _maybe_continue_step_writing(home, session, updated, emit=emit, prefix=prefix)
+    return _maybe_continue_step_writing(
+        home, session, updated, emit=emit, prefix=prefix, model=model
+    )
 
 
 def _action_confirm_all_chapters(
@@ -1523,6 +1531,7 @@ def _action_retry_chapter(
     *,
     emit: EmitFn | None = None,
     invoke=None,
+    model=None,
 ) -> tuple[str, list[ChatCard], list[dict]]:
     from report_writing.chat.cards import _progress_and_confirm_cards
     from report_writing.chat.helpers import _STEP_LABEL, _emit, _emit_process
@@ -1645,6 +1654,7 @@ def _action_retry_chapter(
             include_children=False,
             robot_id=session.robot_id or "",
             on_event=on_event,
+            model=model,
         )
         _emit_process(emit, f"「{title}」重试完成")
     except Exception as error:
@@ -1718,6 +1728,7 @@ def _action_retry_search_chapter(
     payload: dict,
     *,
     emit: EmitFn | None = None,
+    model=None,
 ) -> tuple[str, list[ChatCard], list[dict]]:
     from report_writing.chat.helpers import _emit
     from report_writing.chat.session_documents import bind_session_focus_to_task, resolve_task_id
@@ -1784,6 +1795,7 @@ def _action_retry_search_chapter(
             robot_id=session.robot_id or "",
             on_event=on_event,
             search_only=True,
+            model=model,
         )
     except Exception as error:
         _log.warning("retry_search_chapter from chat: %s", error)
@@ -2769,6 +2781,7 @@ def _collect_freeform_points(
     skip: bool = False,
     emit=None,
     payload: dict | None = None,
+    model=None,
 ) -> tuple[str, list[ChatCard]]:
     from report_writing.chat.freeform_points import (
         finish_points_phase_cards,
@@ -2835,7 +2848,7 @@ def _collect_freeform_points(
             )
         want = set(target_keys) if target_keys else None
         chapters = llm_draft_chapter_points(
-            session, task, invoke=invoke, emit=emit, target_keys=want
+            session, task, invoke=invoke, emit=emit, target_keys=want, model=model
         )
         from report_writing.chat.freeform_points import apply_generated_points
 
@@ -2913,6 +2926,7 @@ def _action_generate_freeform_points(
     *,
     invoke=None,
     emit=None,
+    model=None,
 ) -> tuple[str, list[ChatCard]]:
     pl = dict(payload or {})
     # tool 可能以 chapter_keys_json 传入
@@ -2927,6 +2941,7 @@ def _action_generate_freeform_points(
         generate=True,
         emit=emit,
         payload=pl,
+        model=model,
     )
 
 

@@ -25,6 +25,7 @@ def run_session_goal_action(
     *,
     invoke: InvokeFn | None = None,
     emit: EmitFn | None = None,
+    model=None,
 ) -> tuple[str, list[Any]]:
     key = (action or "").strip()
     if key not in SESSION_GOAL_ACTION_NAMES:
@@ -32,11 +33,15 @@ def run_session_goal_action(
     body = dict(payload or {})
 
     if key == "remember_writing_goal":
-        return _remember_writing_goal(home, session, body, invoke=invoke)
+        return _remember_writing_goal(home, session, body, invoke=invoke, model=model)
 
-    return _set_session_meta(home, session, body, invoke=invoke, emit=emit)
+    return _set_session_meta(home, session, body, invoke=invoke, emit=emit, model=model)
 
-def _intent_invoke(invoke: InvokeFn | None) -> InvokeFn | None:
+def _intent_invoke(invoke: InvokeFn | None, *, model=None) -> InvokeFn | None:
+    if model is not None:
+        from report_writing.chat.intent_invoke import intent_invoke_fn
+
+        return intent_invoke_fn(invoke, model=model)
     if invoke is None:
         return None
     from report_writing.chat.intent_invoke import intent_invoke_fn
@@ -49,12 +54,13 @@ def _remember_writing_goal(
     payload: dict[str, Any],
     *,
     invoke: InvokeFn | None,
+    model=None,
 ) -> tuple[str, list[Any]]:
     from report_writing.chat.session_goal import apply_session_goal_to_task, remember_from_user_message
     from report_writing.services.store import TaskStore
 
     notes = str(payload.get("notes") or payload.get("message") or "").strip()
-    llm = _intent_invoke(invoke)
+    llm = _intent_invoke(invoke, model=model)
     reply = remember_from_user_message(session, notes, invoke=llm)
     tid = (session.task_id or "").strip()
     if tid and home:
@@ -134,6 +140,7 @@ def _set_session_meta(
     *,
     invoke: InvokeFn | None,
     emit: EmitFn | None,
+    model=None,
 ) -> tuple[str, list[Any]]:
     from report_writing.chat.helpers import _emit_process
     from report_writing.chat.session_goal import merge_session_goal, sync_goal_into_freeform
@@ -165,7 +172,7 @@ def _set_session_meta(
     if not message:
         return "跟我说一下文档叫什么、写哪一类就行（口语或「类型｜标题」都可以）。", []
 
-    llm = _intent_invoke(invoke)
+    llm = _intent_invoke(invoke, model=model)
 
     from report_writing.chat.session_documents import (
         focus_has_active_writing_context,

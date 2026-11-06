@@ -10,7 +10,7 @@ from pathlib import Path
 
 from report_writing.agents.supervisor import run_supervisor
 from report_writing.services.corpus import load_template, normalize_biz_type
-from report_writing.infra.llm import live_model
+from report_writing.infra.llm import or_live_model
 from report_writing.domain.models import (
     ChapterRequirement,
     ChapterState,
@@ -88,6 +88,7 @@ def generate_outline(
     use_llm: bool = False,
     text: str | None = None,
     on_event=None,
+    model=None,
 ) -> WritingTask:
     """上传文件 → RAG/本地解析全文 → 抽取目录树（可选用模型整理），等待人工确认。"""
     material_type = normalize_biz_type(biz_type)
@@ -177,7 +178,7 @@ def generate_outline(
         llm_source = (toc_slice or (text or "")[:llm_cap])[:llm_cap]
         _log.info("目录分块模型整理 chars=%s", len(llm_source))
         try:
-            llm_tree = _outline_with_llm_chunks(llm_source)
+            llm_tree = _outline_with_llm_chunks(llm_source, model=model)
             if llm_tree and llm_tree.chapters:
                 if tree is None:
                     tree = llm_tree
@@ -189,7 +190,9 @@ def generate_outline(
             _log.warning("分块模型整理目录失败：%s", error)
     if run_llm and tree is not None and (toc_slice or text):
         try:
-            polished = _outline_polish_with_llm(tree, toc_slice or (text or "")[:60000])
+            polished = _outline_polish_with_llm(
+                tree, toc_slice or (text or "")[:60000], model=model
+            )
             if polished and polished.chapters and outline_tree_quality(polished) >= outline_tree_quality(tree) * 0.95:
                 tree = polished
         except Exception as error:
@@ -214,6 +217,7 @@ def generate_outline(
             use_llm=bool(use_llm),
             max_chars_per_chapter=outline_chapter_scan_max_chars(),
             on_event=on_event,
+            model=model,
         )
     if tree is None:
         raise rule_error or ValueError("无法从文档提取目录")
@@ -510,6 +514,7 @@ def outline_from_pasted_text(
     *,
     use_llm: bool = False,
     biz_type: str = "",
+    model=None,
 ) -> WritingTask:
     from report_writing.controller.write_flow import ensure_task
 
@@ -519,7 +524,7 @@ def outline_from_pasted_text(
     if not cleaned:
         raise RuntimeError("请粘贴目录文本")
     if use_llm:
-        tree = _outline_with_llm(cleaned)
+        tree = _outline_with_llm(cleaned, model=model)
     else:
         tree = _outline_from_plain_lines(cleaned)
     if biz_type.strip():
@@ -578,6 +583,7 @@ def generate_outline_from_sample(
     *,
     use_llm: bool = False,
     on_event=None,
+    model=None,
 ) -> WritingTask:
     """用蓝本已解析样本生成目录大纲。"""
     from report_writing.controller.blueprint import resolve_sample_path, resolve_sample_text
@@ -597,6 +603,7 @@ def generate_outline_from_sample(
         use_llm=use_llm,
         text=text,
         on_event=on_event,
+        model=model,
     )
 
 
@@ -606,6 +613,7 @@ def study_from_outline(
     *,
     force_study: bool = False,
     on_event=None,
+    model=None,
 ) -> WritingTask:
     """目录确认后，按树回原文切章并学习。"""
     from report_writing.controller.study_flow import _lock_brief_to_outline
@@ -652,7 +660,7 @@ def study_from_outline(
         phase="study",
         template=template,
         cache=BriefCache(cache_dir),
-        model=live_model(),
+        model=or_live_model(model),
         force_study=force_study,
         on_event=on_event,
     )
@@ -722,9 +730,9 @@ def _merge_outline_prefer_primary(primary: OutlineTree, secondary: OutlineTree) 
     return finalize_outline(list(by_seq.values()))
 
 
-def _outline_polish_with_llm(tree: OutlineTree, toc_slice: str) -> OutlineTree | None:
+def _outline_polish_with_llm(tree: OutlineTree, toc_slice: str, *, model=None) -> OutlineTree | None:
     """用目录区原文校对规则/合并结果，删掉误抽条目。"""
-    model = live_model()
+    model = or_live_model(model)
     if model is None or not tree.chapters:
         return None
     if len(tree.chapters) > 200:
@@ -767,7 +775,7 @@ def _outline_polish_with_llm(tree: OutlineTree, toc_slice: str) -> OutlineTree |
         return None
 
 
-def _outline_with_llm_chunks(text: str, *, max_chunk: int = 9000) -> OutlineTree | None:
+def _outline_with_llm_chunks(text: str, *, max_chunk: int = 9000, model=None) -> OutlineTree | None:
     """长目录分块送模型，按序号合并（避免单次 12k 截断漏章）。"""
     raw = (text or "").strip()
     if not raw:
@@ -789,7 +797,7 @@ def _outline_with_llm_chunks(text: str, *, max_chunk: int = 9000) -> OutlineTree
         return None
     merged: OutlineTree | None = None
     for index, chunk in enumerate(chunks):
-        part = _outline_with_llm(chunk)
+        part = _outline_with_llm(chunk, model=model)
         if not part.chapters:
             continue
         merged = part if merged is None else _merge_outline_prefer_primary(merged, part)
@@ -797,8 +805,8 @@ def _outline_with_llm_chunks(text: str, *, max_chunk: int = 9000) -> OutlineTree
     return merged
 
 
-def _outline_with_llm(text: str) -> OutlineTree:
-    model = live_model()
+def _outline_with_llm(text: str, *, model=None) -> OutlineTree:
+    model = or_live_model(model)
     if model is None:
         return _outline_from_plain_lines(text)
     # 已是目录切片时仍限长，防止异常切片过大

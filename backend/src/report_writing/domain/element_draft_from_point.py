@@ -91,6 +91,7 @@ def derive_element_draft_from_point(
     point_text: str = "",
     slot: str = "",
     task_elements: list | None = None,
+    model=None,
 ) -> tuple[dict[str, Any], bool]:
     """返回 (draft 字段 dict, used_llm)。"""
     from report_writing.chat.element_configure_pending import payload_to_draft_enriched
@@ -107,11 +108,11 @@ def derive_element_draft_from_point(
     )
 
     try:
-        from report_writing.infra.llm import live_model
+        from report_writing.infra.llm import or_live_model
         from report_writing.infra.llm_invoke import invoke_messages
         from langchain_core.messages import HumanMessage, SystemMessage
 
-        model = live_model(label="element_draft")
+        model = or_live_model(model, label="element_draft")
     except Exception:
         model = None
 
