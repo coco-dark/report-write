@@ -518,10 +518,11 @@ def _bound_pack_card(task: WritingTask | None, pack, *, created: bool = False) -
     )
 
 
-def _resolve_bound_pack(home: Path, session: ChatSession, body: dict[str, Any], task: WritingTask | None):
+def _resolve_bound_pack(home: Path, session: ChatSession, body: ChatPayload, task: WritingTask | None):
     from report_writing.services.materials_pack import get_pack
 
-    pack_id = str(body.get("pack_id") or body.get("materials_pack_id") or "").strip()
+    payload = ChatActionPayload.parse(body)
+    pack_id = str(payload.get("pack_id") or payload.get("materials_pack_id") or "").strip()
     if not pack_id and task is not None:
         pack_id = str(getattr(task, "materials_pack_id", "") or "").strip()
     if not pack_id:
@@ -533,12 +534,14 @@ def _clarify_pick_pack(
     home: Path,
     session: ChatSession,
     tool: str,
-    body: dict[str, Any],
+    body: ChatPayload,
     *,
     message: str = "",
 ) -> tuple[str, list[ChatCard]]:
     """缺 pack_id 时挂多轮澄清，列出可点资料包。"""
     from report_writing.chat.action_slots import build_action_slot_clarify
+
+    body = ChatActionPayload.parse(body).as_dict()
 
     library = _session_packs(home, session, in_library=True)
     pending = _session_packs(home, session, in_library=False)

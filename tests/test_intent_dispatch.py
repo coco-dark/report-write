@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import json
 from pathlib import Path
 
@@ -282,7 +284,7 @@ def test_dispatch_unclear_starts_multiturn(tmp_path: Path):
     assert pending.get("source") == "control"
 
     hit = try_handle_pending_message(session, "不用蓝本自己定大纲")
-    assert isinstance(hit, dict)
+    assert isinstance(hit, Mapping)
     assert hit["slots"].get("tool") == "skip_blueprint"
     follow_reply, follow_cards, _ = execute_clarify_spec(
         tmp_path, session, hit, message="不用蓝本自己定大纲"

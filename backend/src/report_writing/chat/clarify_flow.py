@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 import secrets
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +17,10 @@ from report_writing.domain.models import (
     ChatCard,
     ChatPhase,
     ChatSession,
+    ClarifyCandidate,
+    ClarifyOption,
     ClarifyPending,
+    ClarifySpec,
 )
 
 FREEFORM_KEY = "intent_clarify"
@@ -179,8 +183,8 @@ def begin_clarify(
     *,
     source: str,
     question: str,
-    options: list[dict[str, Any]],
-    candidate: dict[str, Any],
+    options: list[ClarifyOption | dict[str, Any]],
+    candidate: ClarifyCandidate | dict[str, Any],
     phase_hint: str = "",
 ) -> tuple[str, list[ChatCard]]:
     """挂起澄清并返回追问回复 + 选项卡片。"""
@@ -497,7 +501,8 @@ def split_doc_name_answer(message: str) -> tuple[str, str] | None:
     return title, residual
 
 
-def _doc_name_suggested_tip(pending: dict[str, Any]) -> str:
+def _doc_name_suggested_tip(pending: ClarifyPending | dict[str, Any]) -> str:
+    pending = ClarifyPending.from_any(pending)
     tip = str(((pending.get("candidate") or {}).get("payload") or {}).get("title") or "").strip()
     if tip:
         return tip
@@ -510,25 +515,26 @@ def _doc_name_suggested_tip(pending: dict[str, Any]) -> str:
 
 
 def _spec_apply_doc_title(
-    pending: dict[str, Any],
+    pending: ClarifyPending | dict[str, Any],
     *,
     title: str,
     option_id: str = "typed_doc_name",
-) -> dict[str, Any]:
+) -> ClarifySpec:
+    pending = ClarifyPending.from_any(pending)
     tip = (title or "").strip()[:160]
-    return {
-        "candidate": dict(pending.get("candidate") or {})
-        or {"kind": "doc_name", "name": "confirm_document_name", "payload": {}},
-        "slots": {
+    candidate = pending.candidate if pending.candidate.kind or pending.candidate.name else ClarifyCandidate(
+        kind="doc_name", name="confirm_document_name"
+    )
+    return ClarifySpec(
+        candidate=candidate,
+        slots={
             "doc_name_action": "apply",
             "title": tip,
             "message": tip[:500],
         },
-        "option_id": option_id,
-        "defaulted": False,
-        "note": "",
-        "source": str(pending.get("source") or "doc_name"),
-    }
+        option_id=option_id,
+        source=str(pending.source or "doc_name"),
+    )
 
 
 def _doc_name_message_blocks_suggestion(message: str) -> bool:
@@ -549,7 +555,7 @@ def _doc_name_message_blocks_suggestion(message: str) -> bool:
 
 def _accept_doc_name_pending_answer(
     session: ChatSession,
-    pending: dict[str, Any],
+    pending: ClarifyPending | dict[str, Any],
     message: str,
     *,
     allow_plain: bool = False,
@@ -671,27 +677,29 @@ def enrich_control_option_slots(
     return out
 
 
-def _spec_from_option(pending: dict[str, Any], opt: dict[str, Any]) -> dict[str, Any]:
-    slots = {**(pending.get("slots") or {}), **dict(opt.get("slots") or {})}
-    source = str(pending.get("source") or "")
-    oid = str(opt.get("id") or "")
-    label = str(opt.get("label") or "")
+def _spec_from_option(
+    pending: ClarifyPending | dict[str, Any], opt: ClarifyOption | dict[str, Any]
+) -> ClarifySpec:
+    pending = ClarifyPending.from_any(pending)
+    opt = opt if isinstance(opt, ClarifyOption) else ClarifyOption.model_validate(opt or {})
+    slots = {**(pending.slots or {}), **dict(opt.slots or {})}
+    source = str(pending.source or "")
+    oid = str(opt.id or "")
+    label = str(opt.label or "")
     if source in {"control", "entry", "entry_branch", "entry_freeform_mode"}:
         slots = enrich_control_option_slots(oid, label, slots)
-    return {
-        "candidate": dict(pending.get("candidate") or {}),
-        "slots": slots,
-        "option_id": oid,
-        "defaulted": False,
-        "note": "",
-        "source": source,
-    }
+    return ClarifySpec(
+        candidate=pending.candidate,
+        slots=slots,
+        option_id=oid,
+        source=source,
+    )
 
 
 def resolve_clarify(
     session: ChatSession,
     message: str,
-) -> dict[str, Any] | None:
+) -> ClarifySpec | None:
     """若命中 pending 选项，返回可执行 spec；否则 None（调用方决定是否丢弃）。
 
     返回：
@@ -714,7 +722,7 @@ def resolve_clarify(
     return _spec_from_option(pending, opt)
 
 
-def apply_safe_default(session: ChatSession, *, message: str = "") -> dict[str, Any] | None:
+def apply_safe_default(session: ChatSession, *, message: str = "") -> ClarifySpec | None:
     """一轮仍不清：按候选 source 给安全默认并清 pending。
 
     文档名这一问：用户刚打出的具体名字优先于建议名。
@@ -764,35 +772,35 @@ def apply_safe_default(session: ChatSession, *, message: str = "") -> dict[str, 
     elif source == "document_scope":
         # 禁止静默猜新开/改名/继续
         clear_pending(session)
-        return {
+        return ClarifySpec.parse({
             "candidate": {"kind": "document_scope", "name": "document_scope", "payload": {}},
             "slots": {},
             "option_id": "",
             "defaulted": True,
             "note": "还是没听准：是新开一份、改当前文档名，还是继续写当前这份？请点选或再说一次。",
             "source": source,
-        }
+        })
     elif source == "action_slots":
         # 禁止静默默认章/要素：清 pending，不执行原 Tool
         clear_pending(session)
-        return {
+        return ClarifySpec.parse({
             "candidate": {"kind": "control_tool", "name": "", "payload": {}},
             "slots": {},
             "option_id": "",
             "defaulted": True,
             "note": "还是没对上要操作的章节或要素，请再说一次序号，或点选项。",
             "source": source,
-        }
+        })
     elif source == "materials_name":
         clear_pending(session)
-        return {
+        return ClarifySpec.parse({
             "candidate": {"kind": "control_tool", "name": "", "payload": {}},
             "slots": {},
             "option_id": "",
             "defaulted": True,
             "note": "还没听清新名称，你再说一次想叫什么就行。",
             "source": source,
-        }
+        })
     elif source == "doc_name":
         parsed = split_doc_name_answer(message) if message else None
         if parsed:
@@ -819,63 +827,62 @@ def apply_safe_default(session: ChatSession, *, message: str = "") -> dict[str, 
             note = f"我先按「{tip}」作为文档名；要改直接说新名字就行。"
         else:
             clear_pending(session)
-            return {
+            return ClarifySpec.parse({
                 "candidate": {"kind": "control_tool", "name": "", "payload": {}},
                 "slots": {},
                 "option_id": "",
                 "defaulted": True,
                 "note": "还没听清文档名，你再说一次想叫什么就行。",
                 "source": source,
-            }
+            })
     elif source == "session_meta":
         slots.setdefault("meta_action", "keep")
         note = "我先保持现有文档名；要改名直接发「类型｜标题」就行。"
     clear_pending(session)
-    return {
+    return ClarifySpec.parse({
         "candidate": candidate,
         "slots": slots,
         "option_id": "",
         "defaulted": True,
         "note": note,
         "source": source,
-    }
+    })
 
 
-def _spec_apply_session_meta_title(pending: dict[str, Any], *, text: str) -> dict[str, Any]:
-    return {
-        "candidate": dict(pending.get("candidate") or {})
-        or {"kind": "session_meta", "name": "set_session_meta", "payload": {}},
-        "slots": {"meta_action": "apply", "message": (text or "")[:500]},
-        "option_id": "typed_meta",
-        "defaulted": False,
-        "note": "",
-        "source": str(pending.get("source") or "session_meta"),
-    }
+def _spec_apply_session_meta_title(pending: ClarifyPending | dict[str, Any], *, text: str) -> ClarifySpec:
+    pending = ClarifyPending.from_any(pending)
+    candidate = pending.candidate if pending.candidate.kind or pending.candidate.name else ClarifyCandidate(
+        kind="session_meta", name="set_session_meta"
+    )
+    return ClarifySpec(
+        candidate=candidate,
+        slots={"meta_action": "apply", "message": (text or "")[:500]},
+        option_id="typed_meta",
+        source=str(pending.source or "session_meta"),
+    )
 
 
-def _spec_apply_materials_name(pending: dict[str, Any], *, name: str) -> dict[str, Any]:
-    candidate = dict(pending.get("candidate") or {})
-    tool = str(candidate.get("name") or "").strip()
-    base = dict(candidate.get("payload") or {})
+def _spec_apply_materials_name(pending: ClarifyPending | dict[str, Any], *, name: str) -> ClarifySpec:
+    pending = ClarifyPending.from_any(pending)
+    candidate = pending.candidate
+    tool = str(candidate.name or "").strip()
+    base = candidate.payload.as_dict()
     text = (name or "").strip()[:80]
     args = {**base, "name": text, "pack_name": text, "slot_name": text}
-    return {
-        "candidate": candidate,
-        "slots": {"tool": tool, "args": args},
-        "option_id": "typed_materials_name",
-        "defaulted": False,
-        "note": "",
-        "source": str(pending.get("source") or "materials_name"),
-    }
+    return ClarifySpec(
+        candidate=candidate,
+        slots={"tool": tool, "args": args},
+        option_id="typed_materials_name",
+        source=str(pending.source or "materials_name"),
+    )
 
 
-def _attach_residual(spec: dict[str, Any], residual: str) -> dict[str, Any]:
+def _attach_residual(spec: ClarifySpec | dict[str, Any], residual: str) -> ClarifySpec:
+    spec = ClarifySpec.parse(spec)
     text = (residual or "").strip()[:500]
     if not text:
         return spec
-    slots = dict(spec.get("slots") or {})
-    slots["residual_message"] = text
-    return {**spec, "slots": slots}
+    return spec.with_slots(residual_message=text)
 
 
 def _apply_freeform_clarify_title(
@@ -884,7 +891,7 @@ def _apply_freeform_clarify_title(
     source: str,
     title: str,
     residual: str = "",
-) -> dict[str, Any] | None:
+) -> ClarifySpec | None:
     tip = (title or "").strip()
     if not tip:
         return None
@@ -3062,17 +3069,18 @@ def _consume_clarify_residual(
         return reply, cards
     session.freeform = ff
     follow = try_handle_pending_message(session, residual, invoke=invoke, home=home)
-    if isinstance(follow, dict):
+    if isinstance(follow, Mapping):
+        stored = follow.to_dict() if isinstance(follow, ClarifySpec) else dict(follow)
         if home is not None:
             reply2, cards2, _ = execute_clarify_spec(
-                home, session, follow, message=residual, emit=emit, invoke=invoke
+                home, session, stored, message=residual, emit=emit, invoke=invoke
             )
             if reply2:
                 reply = f"{reply}\n{reply2}".strip()
             return reply, list(cards or []) + list(cards2 or [])
         # 无 home 时：把 follow 暂存，由 ask_entry_path / 上层执行
         ff2 = {**(session.freeform or {})}
-        ff2["clarify_follow_spec"] = follow
+        ff2["clarify_follow_spec"] = stored
         session.freeform = ff2
         return reply, cards
     if isinstance(follow, str) and follow.strip():
@@ -3296,7 +3304,7 @@ def merge_study_message_with_scope(study_message: str, scope: str) -> str:
 def execute_clarify_spec(
     home,
     session: ChatSession,
-    spec: dict[str, Any],
+    spec: ClarifySpec | dict[str, Any],
     *,
     message: str = "",
     emit=None,
@@ -3305,6 +3313,7 @@ def execute_clarify_spec(
     """把消歧结果落到具体命令/动作。"""
     from report_writing.chat.helpers import _emit_process
 
+    spec = ClarifySpec.parse(spec)
     candidate = dict(spec.get("candidate") or {})
     slots = dict(spec.get("slots") or {})
     note = str(spec.get("note") or "").strip()

@@ -21,6 +21,7 @@ from report_writing.controller import (
 )
 from report_writing.domain.models import (
     ChapterStatus,
+    ChatActionPayload,
     ChatCard,
     ChatMessage,
     ChatPhase,
@@ -287,17 +288,20 @@ def _offer_writing_pace_cards(session: ChatSession, *, extra: dict[str, Any] | N
     """兼容旧调用名：不再出节奏二选一，改为「开始写作」(batch 依次写、章间不确认)。"""
     from report_writing.chat.helpers import WRITING_PACE_BATCH
 
-    payload: dict[str, Any] = dict(extra or {})
+    payload = ChatActionPayload.parse(extra)
+    updates: dict[str, Any] = {}
     if session.blueprint_id and "blueprint_id" not in payload:
-        payload["blueprint_id"] = session.blueprint_id
+        updates["blueprint_id"] = session.blueprint_id
     if session.task_id and "task_id" not in payload:
-        payload["task_id"] = session.task_id
+        updates["task_id"] = session.task_id
     keys = list((session.freeform or {}).get("write_chapter_keys") or [])
     if keys and "write_chapter_keys" not in payload:
-        payload["write_chapter_keys"] = keys
-        payload["analyzed_only"] = True
-        payload.setdefault("chapter_count", len(keys))
-    payload["writing_pace"] = WRITING_PACE_BATCH
+        updates["write_chapter_keys"] = keys
+        updates["analyzed_only"] = True
+        if "chapter_count" not in payload:
+            updates["chapter_count"] = len(keys)
+    updates["writing_pace"] = WRITING_PACE_BATCH
+    payload = payload.with_updates(**updates)
     return [
         ChatCard(
             type="start_writing",
@@ -880,17 +884,18 @@ def _blueprint_wizard_card(
         {"id": "outline_confirm", "label": "确认目录"},
         {"id": "study", "label": "分析要点"},
     ]
-    payload: dict[str, Any] = {
-        "blueprint_id": blueprint_id,
-        "step": step,
-        "steps": list(SELECTED_WIZARD_STEPS) if selected else create_steps,
-    }
+    payload = ChatActionPayload.parse(
+        {
+            "blueprint_id": blueprint_id,
+            "step": step,
+            "steps": list(SELECTED_WIZARD_STEPS) if selected else create_steps,
+        }
+    )
     if extra:
-        payload.update({k: v for k, v in extra.items() if k != "steps"})
+        payload = payload.with_updates(**{k: v for k, v in extra.items() if k != "steps"})
     if selected:
-        payload["mode"] = WIZARD_MODE_SELECTED
-        payload["steps"] = list(SELECTED_WIZARD_STEPS)
-    payload["blueprint_id"] = blueprint_id or str(payload.get("blueprint_id") or "")
+        payload = payload.with_updates(mode=WIZARD_MODE_SELECTED, steps=list(SELECTED_WIZARD_STEPS))
+    payload = payload.with_updates(blueprint_id=blueprint_id or str(payload.get("blueprint_id") or ""))
     pinned = (step or "").strip() or ("outline_confirm" if selected else "meta")
     # 已有蓝本 id 后不得再发「填写名称」卡（会与「已建好」文案打架并形成步骤回退）
     if payload["blueprint_id"] and pinned in {"", "meta"}:
@@ -905,7 +910,7 @@ def _blueprint_wizard_card(
         or title in {"在对话中创建蓝本", "蓝本创建向导"}
     ):
         title = _wizard_card_title(pinned, mode=WIZARD_MODE_SELECTED)
-    payload["step"] = pinned
+    payload = payload.with_updates(step=pinned)
     return stamp_chat_card(ChatCard(type="blueprint_wizard", title=title, payload=payload))
 
 

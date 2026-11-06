@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import json
 from pathlib import Path
 
@@ -55,7 +57,7 @@ def test_confirm_suggested_name_then_entry_path(tmp_path: Path):
         )
 
     hit = try_handle_pending_message(session, "就叫「安全报告」", invoke=_invoke)
-    assert isinstance(hit, dict)
+    assert isinstance(hit, Mapping)
     reply, cards, _ = execute_clarify_spec(
         tmp_path, session, hit, message="就叫「安全报告」"
     )
@@ -81,7 +83,7 @@ def test_typed_name_during_doc_name_clarify(tmp_path: Path):
         )
 
     hit = try_handle_pending_message(session, "2026年度安全报告", invoke=_invoke)
-    assert isinstance(hit, dict)
+    assert isinstance(hit, Mapping)
     assert hit.get("slots", {}).get("doc_name_action") == "apply"
     assert hit.get("slots", {}).get("title") == "2026年度安全报告"
     reply, _cards, _ = execute_clarify_spec(
@@ -114,7 +116,7 @@ def test_confirm_name_does_not_reopen_doc_name_with_old_write_message(tmp_path: 
         )
 
     hit = try_handle_pending_message(session, "2026季度述职", invoke=_invoke)
-    assert isinstance(hit, dict)
+    assert isinstance(hit, Mapping)
     reply, cards, _ = execute_clarify_spec(
         tmp_path, session, hit, message="2026季度述职"
     )
@@ -193,7 +195,7 @@ def test_affirmation_confirms_suggested_doc_name_via_llm(tmp_path: Path):
         )
 
     hit = try_handle_pending_message(session, "是的", invoke=_invoke)
-    assert isinstance(hit, dict)
+    assert isinstance(hit, Mapping)
     assert hit.get("slots", {}).get("title") == "1101安全预评价"
     assert hit.get("option_id") == "use_suggested_name"
     reply, _cards, _ = execute_clarify_spec(tmp_path, session, hit, message="是的")
@@ -253,7 +255,7 @@ def test_rename_while_doc_name_pending_applies_offline(tmp_path: Path):
     hit = try_handle_pending_message(
         session, "名字改一下叫做 lzb 安全报告", invoke=None
     )
-    assert isinstance(hit, dict)
+    assert isinstance(hit, Mapping)
     assert "lzb" in str(hit.get("slots", {}).get("title") or "")
     reply, _cards, _ = execute_clarify_spec(
         tmp_path, session, hit, message="名字改一下叫做 lzb 安全报告"
@@ -319,7 +321,7 @@ def test_typed_name_after_clarify_continues_entry_not_rename_loop(tmp_path: Path
     )
     assert get_pending(session) and get_pending(session).get("source") == "doc_name"
     hit = try_handle_pending_message(session, "lzb的述职报告", invoke=None)
-    assert isinstance(hit, dict)
+    assert isinstance(hit, Mapping)
     reply, cards, _ = execute_clarify_spec(
         tmp_path, session, hit, message="lzb的述职报告", invoke=None
     )
@@ -445,7 +447,7 @@ def test_offline_doc_name_safe_default_uses_tip(tmp_path: Path):
     session = ChatSession(id="s3d", phase=ChatPhase.INTENT.value)
     build_document_name_clarify(session, message="帮我写一份安全报告", title_hint="安全报告")
     hit = try_handle_pending_message(session, "是的", invoke=None)
-    assert isinstance(hit, dict)
+    assert isinstance(hit, Mapping)
     assert hit.get("slots", {}).get("title") == "安全报告"
     assert hit.get("option_id") == "use_suggested_name"
     reply, _cards, _ = execute_clarify_spec(tmp_path, session, hit, message="是的")
@@ -479,7 +481,7 @@ def test_specific_doc_name_with_blueprint_tail_beats_suggestion(tmp_path: Path):
     hit = try_handle_pending_message(
         session, "2026年工程安全报告 用蓝本库的", invoke=_unclear
     )
-    assert isinstance(hit, dict)
+    assert isinstance(hit, Mapping)
     assert hit.get("slots", {}).get("title") == "2026年工程安全报告"
     assert "蓝本" in str(hit.get("slots", {}).get("residual_message") or "")
     assert hit.get("defaulted") is not True
@@ -500,9 +502,9 @@ def test_specific_doc_name_with_blueprint_tail_beats_suggestion(tmp_path: Path):
     build_document_name_clarify(session2, message="帮我写一份安全报告", title_hint="安全报告")
     pending = get_pending(session2)
     pending["ask_count"] = 1
-    session2.freeform = {**(session2.freeform or {}), "intent_clarify": pending}
+    session2.freeform = {**(session2.freeform or {}), "intent_clarify": pending.to_dict()}
     again = try_handle_pending_message(session2, "2026年工程安全报告", invoke=_unclear)
-    assert isinstance(again, dict)
+    assert isinstance(again, Mapping)
     assert again.get("slots", {}).get("title") == "2026年工程安全报告"
     assert again.get("defaulted") is not True
 
@@ -565,7 +567,7 @@ def test_confirm_name_preserves_entry_branch_when_path_not_yet_chosen(tmp_path: 
     assert "述职报告" not in str((session.freeform or {}).get("title") or "")
     pending = get_pending(session)
     pending["ask_count"] = 1
-    session.freeform = {**(session.freeform or {}), "intent_clarify": pending}
+    session.freeform = {**(session.freeform or {}), "intent_clarify": pending.to_dict()}
     again = try_handle_pending_message(session, "新写一份述职报告", invoke=_unclear)
     assert isinstance(again, str)
     assert not is_writing_document_named(session)
@@ -609,7 +611,7 @@ def test_doc_name_residual_continues_entry_path(tmp_path: Path):
     hit = try_handle_pending_message(
         session, "就叫1101安全预评价，然后匹配已有蓝本", invoke=_invoke
     )
-    assert isinstance(hit, dict)
+    assert isinstance(hit, Mapping)
     assert hit.get("slots", {}).get("title") == "1101安全预评价"
     assert "匹配" in str(hit.get("slots", {}).get("residual_message") or "")
     reply, cards, _ = execute_clarify_spec(

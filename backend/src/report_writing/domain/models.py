@@ -1078,9 +1078,88 @@ class ClarifyPending(Entity, Mapping[str, Any]):
             return None
         return cls.model_validate(raw)
 
+    @classmethod
+    def from_any(cls, raw: Any = None) -> ClarifyPending:
+        hit = cls.parse(raw)
+        if hit is not None:
+            return hit
+        data = raw.to_dict() if hasattr(raw, "to_dict") else dict(raw or {})
+        if not str(data.get("id") or "").strip():
+            data["id"] = "_"
+        return cls.model_validate(data)
+
     def get(self, key: str, default: Any = None) -> Any:
         data = self.to_dict()
         return data.get(key, default)
+
+    def __getitem__(self, key: str) -> Any:
+        data = self.to_dict()
+        if key in data:
+            return data[key]
+        raise KeyError(key)
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        if key in type(self).model_fields:
+            setattr(self, key, value)
+            self.model_fields_set.add(key)
+            return
+        extra = self.model_extra
+        if extra is None:
+            object.__setattr__(self, "__pydantic_extra__", {key: value})
+        else:
+            extra[key] = value
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.to_dict())
+
+    def __len__(self) -> int:
+        return len(self.to_dict())
+
+
+class ClarifySpec(Entity, Mapping[str, Any]):
+    """澄清点选结果：交给 execute_clarify_spec 执行。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    candidate: ClarifyCandidate = Field(default_factory=ClarifyCandidate)
+    slots: dict[str, Any] = Field(default_factory=dict)
+    option_id: str = ""
+    defaulted: bool = False
+    note: str = ""
+    source: str = ""
+
+    @field_validator("candidate", mode="before")
+    @classmethod
+    def _coerce_candidate(cls, value: Any) -> ClarifyCandidate:
+        if isinstance(value, ClarifyCandidate):
+            return value
+        return ClarifyCandidate.model_validate(value or {})
+
+    @classmethod
+    def parse(cls, raw: Any = None) -> ClarifySpec:
+        if isinstance(raw, cls):
+            return raw
+        if raw is None:
+            return cls()
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except json.JSONDecodeError:
+                return cls()
+        if not isinstance(raw, dict):
+            if hasattr(raw, "to_dict"):
+                raw = raw.to_dict()
+            else:
+                return cls()
+        return cls.model_validate(raw)
+
+    def with_slots(self, **kwargs: Any) -> ClarifySpec:
+        slots = dict(self.slots)
+        slots.update(kwargs)
+        return self.model_copy(update={"slots": slots})
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self.to_dict().get(key, default)
 
     def __getitem__(self, key: str) -> Any:
         data = self.to_dict()

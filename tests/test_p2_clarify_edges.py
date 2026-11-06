@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from pathlib import Path
 
 from report_writing.chat.action_slots import ACTION_SLOT_SOURCE, try_resolve_action_slot_message
@@ -70,7 +72,7 @@ def test_pace_oral_alias_resolves(tmp_path: Path):
         phase_hint="writing_pace",
     )
     hit = try_handle_pending_message(session, "一章一章来", invoke=None)
-    assert isinstance(hit, dict)
+    assert isinstance(hit, Mapping)
     assert (hit.get("slots") or {}).get("args", {}).get("writing_pace") == "step"
 
 
@@ -119,7 +121,7 @@ def test_materials_rename_free_text_resume(tmp_path: Path):
     assert "旧名" in reply
 
     hit = try_handle_pending_message(session, "项目资料包", invoke=None)
-    assert isinstance(hit, dict)
+    assert isinstance(hit, Mapping)
     assert (hit.get("slots") or {}).get("args", {}).get("name") == "项目资料包"
 
 

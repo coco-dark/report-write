@@ -1,7 +1,14 @@
 """对话入参实体：已填字段可当 Mapping，未填字段不当作出现过。"""
 
 from report_writing.chat.session_goal import get_session_goal, merge_session_goal
-from report_writing.domain.models import ChatActionPayload, ChatRequest, ChatSession, SessionGoal, WritingPace
+from report_writing.domain.models import (
+    ChatActionPayload,
+    ChatRequest,
+    ChatSession,
+    ClarifySpec,
+    SessionGoal,
+    WritingPace,
+)
 
 
 def test_parse_json_and_dict():
@@ -73,3 +80,18 @@ def test_session_goal_entity_roundtrip():
     assert goal["doc_title"] == "年报"
     assert dict(goal)["doc_category"] == "报告"
     assert WritingPace.BATCH.value == "batch"
+
+
+def test_clarify_spec_parse_and_slots():
+    spec = ClarifySpec.parse(
+        {
+            "candidate": {"kind": "control_tool", "name": "go_study"},
+            "slots": {"study_scope": "self"},
+            "source": "wizard",
+        }
+    )
+    assert spec.candidate.name == "go_study"
+    bumped = spec.with_slots(residual_message="继续")
+    assert bumped.slots["residual_message"] == "继续"
+    assert bumped["source"] == "wizard"
+    assert dict(bumped)["slots"]["study_scope"] == "self"

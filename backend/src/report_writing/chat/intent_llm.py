@@ -19,6 +19,7 @@ from typing import Any, Callable
 _log = logging.getLogger(__name__)
 
 from report_writing.chat.tool_registry import WIZARD_COMMAND_HINTS, WRITING_CONTROL_TOOLS
+from report_writing.domain.models import ClarifyPending
 
 InvokeFn = Callable[[str, str], str]
 
@@ -1859,7 +1860,7 @@ def infer_element_payload_llm(
 def classify_doc_name_reply_llm(
     message: str,
     *,
-    pending: dict[str, Any],
+    pending: ClarifyPending | dict[str, Any],
     suggested_title: str = "",
     dialogue_tail: list[dict[str, str]] | None = None,
     focus_document_brief: str = "",
@@ -1877,6 +1878,7 @@ def classify_doc_name_reply_llm(
     text = (message or "").strip()
     if not text or invoke is None:
         return {}
+    pending = ClarifyPending.from_any(pending)
     options = [o for o in (pending.get("options") or []) if isinstance(o, dict)]
     catalog = []
     allowed_ids: list[str] = []
@@ -2018,7 +2020,7 @@ _FREEFORM_NAME_CLARIFY_SOURCES = frozenset({"doc_name", "session_meta", "materia
 def classify_clarify_reply_llm(
     message: str,
     *,
-    pending: dict[str, Any],
+    pending: ClarifyPending | dict[str, Any],
     dialogue_tail: list[dict[str, str]] | None = None,
     focus_document_brief: str = "",
     session_documents_brief: str = "",
@@ -2035,6 +2037,7 @@ def classify_clarify_reply_llm(
     text = (message or "").strip()
     if not text or invoke is None:
         return {}
+    pending = ClarifyPending.from_any(pending)
     source = str(pending.get("source") or "").strip()
     # 文档定名：专用规则（建议名确认）
     if source == "doc_name":

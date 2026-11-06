@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -2838,14 +2839,14 @@ def _ui_action_tool_name(action: str) -> str:
     return _UI_ACTION_TOOL_ALIASES.get(key, key)
 
 
-def _parse_agent_body(user_text: str) -> tuple[str, dict[str, Any], str]:
+def _parse_agent_body(user_text: str) -> tuple[str, ChatActionPayload, str]:
     try:
         body = json.loads(user_text or "{}")
     except json.JSONDecodeError:
-        return "", {}, (user_text or "").strip()
+        return "", ChatActionPayload(), (user_text or "").strip()
     if not isinstance(body, dict):
-        return "", {}, (user_text or "").strip()
-    payload = ChatActionPayload.parse(body.get("payload")).as_dict()
+        return "", ChatActionPayload(), (user_text or "").strip()
+    payload = ChatActionPayload.parse(body.get("payload"))
     return (
         str(body.get("action") or "").strip(),
         payload,
@@ -2992,7 +2993,7 @@ def _tool_args_for_ui_action(action: str, payload: ChatPayload) -> dict[str, Any
 def _try_ui_action_shortcut(state: ChatControlState, user_text: str) -> str | None:
     """界面按钮：只调对应工具一次，避免 LLM 同轮再调 handoff 盖掉选用结果。"""
     action = (state.user_action or "").strip()
-    payload: dict[str, Any] = {}
+    payload = ChatActionPayload()
     if action:
         _, payload, _ = _parse_agent_body(user_text)
     else:
@@ -3046,7 +3047,7 @@ def apply_resolve_intent_clarify(
         choice = option_label or option_id
     if isinstance(hit, str):
         return hit, [], []
-    if isinstance(hit, dict):
+    if isinstance(hit, Mapping):
         reply, cards, events = execute_clarify_spec(
             home, session, hit, message=choice, emit=emit, invoke=invoke
         )
@@ -3527,7 +3528,7 @@ def run_chat_control(
             state.did_invoke_tool = False
             reply = ""
     if act in UI_SHORTCUT_ACTIONS and not state.did_invoke_tool:
-        payload: dict[str, Any] = {}
+        payload = ChatActionPayload()
         if user_text:
             _, payload, _ = _parse_agent_body(user_text)
         hit = run_ui_action_shortcut(

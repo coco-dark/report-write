@@ -95,8 +95,9 @@ def chapters_linking_element(task: WritingTask | None, element_id: str) -> list[
     return rows
 
 
-def _resolve_name_hint(body: dict[str, Any], message: str, *, invoke=None) -> str:
-    hint = str(body.get("element_name") or body.get("name") or "").strip()
+def _resolve_name_hint(body: ChatPayload, message: str, *, invoke=None) -> str:
+    payload = ChatActionPayload.parse(body)
+    hint = str(payload.get("element_name") or payload.get("name") or "").strip()
     if hint:
         return hint
     if invoke is not None:
@@ -113,7 +114,7 @@ def _resolve_name_hint(body: dict[str, Any], message: str, *, invoke=None) -> st
 def _element_disambiguate_card(
     session: ChatSession,
     tool: str,
-    body: dict[str, Any],
+    body: ChatPayload,
     matches: list[ElementNode],
     *,
     task: WritingTask | None,
@@ -121,6 +122,7 @@ def _element_disambiguate_card(
 ) -> tuple[str, list[Any]]:
     from report_writing.chat.action_slots import build_action_slot_clarify
 
+    payload = ChatActionPayload.parse(body).as_dict()
     rows = [
         (str(getattr(el, "id", "") or "").strip(), str(getattr(el, "name", "") or "").strip())
         for el in matches
@@ -129,7 +131,7 @@ def _element_disambiguate_card(
     reply, cards = build_action_slot_clarify(
         session,
         tool,
-        body,
+        payload,
         ["element_id"],
         task=task,
         message=message,

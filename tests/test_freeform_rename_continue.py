@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from pathlib import Path
 
 from report_writing.chat.actions import _action_submit_outline, _collect_freeform_outline
@@ -216,7 +218,7 @@ def test_session_meta_clarify_accepts_plain_title_followup(tmp_path: Path):
     assert get_pending(session) and get_pending(session)["source"] == "session_meta"
 
     hit = try_handle_pending_message(session, "2026年度个人述职", invoke=None)
-    assert isinstance(hit, dict)
+    assert isinstance(hit, Mapping)
     assert hit.get("slots", {}).get("meta_action") == "apply"
     assert get_pending(session) is None
 
