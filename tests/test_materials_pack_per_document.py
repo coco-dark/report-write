@@ -117,3 +117,22 @@ def test_create_pack_before_writing_task_stashes_pending(tmp_path: Path):
     # 蓝本本身不应被绑上资料包
     reloaded = TaskStore(home / "tasks" / bp.id).load()
     assert reloaded.materials_pack_id == "mp-should-not-inherit"
+
+
+def test_resolve_pack_from_pending_and_unique_blueprint_pack(tmp_path: Path):
+    from report_writing.chat.materials_pack_gate import (
+        resolve_writing_materials_pack_id,
+        stash_pending_materials_pack,
+    )
+    from report_writing.services.materials_pack import create_pack
+
+    home = tmp_path
+    bp = _blueprint_with_pack(home)
+    writing = clone_blueprint_to_writing_task(home, bp.id, chapter_keys=["c1"])
+    session = ChatSession(id="s5", blueprint_id=bp.id, task_id=writing.id)
+    stash_pending_materials_pack(session, "mp-pending", blueprint_id=bp.id)
+    assert resolve_writing_materials_pack_id(home, session, writing) == "mp-pending"
+
+    session2 = ChatSession(id="s6", blueprint_id=bp.id, task_id=writing.id)
+    pack = create_pack(home, name="项目资料包", in_library=False, blueprint_id=bp.id)
+    assert resolve_writing_materials_pack_id(home, session2, writing) == pack.id

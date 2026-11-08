@@ -10,13 +10,8 @@
     </p>
     <div v-if="localRows.length" class="pending-bulk">
       <label class="pending-bulk-all">
-        <input
-          type="checkbox"
-          :checked="allChecked"
-          :indeterminate.prop="someChecked && !allChecked"
-          :disabled="busy"
-          @change="toggleSelectAll($event.target.checked)"
-        />
+        <input type="checkbox" :checked="allChecked" :indeterminate.prop="someChecked && !allChecked" :disabled="busy"
+          @change="toggleSelectAll($event.target.checked)" />
         <span>全选</span>
       </label>
       <span v-if="checkedCount" class="pending-bulk-count">已选 {{ checkedCount }}</span>
@@ -24,150 +19,94 @@
     <p v-else class="card-hint">没有待收录的要素（已入库的已自动隐藏）。</p>
     <div v-for="row in localRows" :key="row.pending_id" class="pending-row">
       <div class="pending-head">
-        <input
-          type="checkbox"
-          class="pending-check"
-          :checked="row.selected"
-          :disabled="busy"
-          @change="row.selected = $event.target.checked"
-        />
-        <el-tag size="small">{{ elementKindLabel(row.element?.kind) }}</el-tag>
+        <input type="checkbox" class="pending-check" :checked="row.selected" :disabled="busy"
+          @change="row.selected = $event.target.checked" />
+        <a-tag size="small">{{ elementKindLabel(row.element?.kind) }}</a-tag>
         <strong>{{ row.element?.name || row.element?.id }}</strong>
         <span class="muted">{{ row.chapter_title || row.chapter_key }}</span>
       </div>
       <div v-if="row.metaFromCreate" class="meta-summary">
-        <el-tag v-if="row.category" size="small" type="warning" effect="plain">{{ row.category }}</el-tag>
-        <el-tag v-for="t in row.tags" :key="t" size="small" effect="plain">{{ t }}</el-tag>
+        <a-tag v-if="row.category" size="small" color="warning">{{ row.category }}</a-tag>
+        <a-tag v-for="t in row.tags" :key="t" size="small">{{ t }}</a-tag>
         <span v-if="row.purpose" class="meta-purpose">{{ row.purpose }}</span>
         <button type="button" class="meta-edit-link" @click="row.showEdit = !row.showEdit">
           {{ row.showEdit ? "收起修改" : "改一下" }}
         </button>
-        <button
-          type="button"
-          class="meta-delete-link"
-          :disabled="busy"
-          @click="deleteRow(row)"
-        >
+        <button type="button" class="meta-delete-link" :disabled="busy" @click="deleteRow(row)">
           删除
         </button>
       </div>
-      <el-row v-if="!row.metaFromCreate || row.showEdit" :gutter="8" class="pending-fields">
-        <el-col :span="6">
-          <el-input
-            v-model="row.element.name"
-            size="small"
-            placeholder="名称"
-            @change="() => onIdentityChange(row)"
-          />
-        </el-col>
-        <el-col :span="6">
-          <el-autocomplete
-            v-model="row.category"
-            size="small"
-            :fetch-suggestions="queryCategory"
-            clearable
-            placeholder="分类（可选）"
-            style="width: 100%"
-            @change="() => onCategoryChange(row)"
-            @select="() => onCategoryChange(row)"
-          />
+      <a-row v-if="!row.metaFromCreate || row.showEdit" :gutter="8" class="pending-fields">
+        <a-col :span="6">
+          <a-input v-model:value="row.element.name" size="small" placeholder="名称"
+            @change="() => onIdentityChange(row)" />
+        </a-col>
+        <a-col :span="6">
+          <UiAutoComplete v-model="row.category" size="small" :fetch-suggestions="queryCategory" clearable
+            placeholder="分类（可选）" style="width: 100%" @change="() => onCategoryChange(row)"
+            @select="() => onCategoryChange(row)" />
           <p v-if="row.categoryHint" class="field-tip">{{ row.categoryHint }}</p>
-        </el-col>
-        <el-col :span="6">
-          <el-select
-            v-model="row.tags"
-            size="small"
-            multiple
-            filterable
-            allow-create
-            default-first-option
-            collapse-tags
-            collapse-tags-tooltip
-            placeholder="标签（可选）"
-            style="width: 100%"
-            @change="() => onTagsChange(row)"
-          >
-            <el-option v-for="t in libraryTags" :key="t" :label="t" :value="t" />
-          </el-select>
+        </a-col>
+        <a-col :span="6">
+          <a-select v-model:value="row.tags" size="small" placeholder="标签（可选）" style="width: 100%"
+            @change="() => onTagsChange(row)" mode="tags" show-search>
+            >
+            <a-select-option v-for="t in libraryTags" :key="t" :value="t">{{ t }}</a-select-option>
+          </a-select>
           <p v-if="row.tagsHint" class="field-tip">{{ row.tagsHint }}</p>
-        </el-col>
-        <el-col :span="6">
-          <el-input v-model="row.purpose" size="small" placeholder="作用说明（可选）" />
-        </el-col>
-      </el-row>
+        </a-col>
+        <a-col :span="6">
+          <a-input v-model:value="row.purpose" size="small" placeholder="作用说明（可选）" />
+        </a-col>
+      </a-row>
       <p v-if="row.identityHint" class="field-tip warn-tip">{{ row.identityHint }}</p>
       <div v-if="!row.metaFromCreate" class="pending-row-actions">
-        <button
-          type="button"
-          class="meta-delete-link"
-          :disabled="busy"
-          @click="deleteRow(row)"
-        >
+        <button type="button" class="meta-delete-link" :disabled="busy" @click="deleteRow(row)">
           删除
         </button>
       </div>
     </div>
     <div class="pending-actions">
-      <el-button type="primary" round :loading="busy" :disabled="!checkedCount" @click="importSelected">
+      <a-button type="primary" :loading="busy" :disabled="!checkedCount" @click="importSelected" shape="round">
         收入我的要素库{{ checkedCount ? `（${checkedCount}）` : "" }}
-      </el-button>
-      <el-button round :loading="busy" :disabled="!checkedCount" @click="dismissSelected">
+      </a-button>
+      <a-button :loading="busy" :disabled="!checkedCount" @click="dismissSelected" shape="round">
         暂不收录{{ checkedCount ? `（${checkedCount}）` : "" }}
-      </el-button>
+      </a-button>
     </div>
 
-    <el-dialog
-      v-model="conflictDialog.visible"
-      title="要素重复，请修改名称 / 分类 / 标签"
-      width="520px"
-      destroy-on-close
-      :close-on-click-modal="false"
-    >
+    <a-modal v-model:open="conflictDialog.visible" title="要素重复，请修改名称 / 分类 / 标签" width="520px" :mask-closable="false"
+      destroy-on-close centered>
       <p class="dup-hint">
         库中已有相同「名称 + 分类 + 标签」的条目。请修改下面三项后再收入；三者完全一样才会判为重复。
       </p>
       <div v-for="row in conflictDialog.rows" :key="row.pending_id" class="conflict-row">
-        <el-form label-position="top">
-          <el-form-item label="名称" required>
-            <el-input v-model="row.name" maxlength="80" />
-          </el-form-item>
-          <el-form-item label="分类">
-            <el-autocomplete
-              v-model="row.category"
-              :fetch-suggestions="queryCategory"
-              clearable
-              placeholder="分类"
-              style="width: 100%"
-            />
-          </el-form-item>
-          <el-form-item label="标签">
-            <el-select
-              v-model="row.tags"
-              multiple
-              filterable
-              allow-create
-              default-first-option
-              collapse-tags
-              collapse-tags-tooltip
-              placeholder="标签"
-              style="width: 100%"
-            >
-              <el-option v-for="t in libraryTags" :key="t" :label="t" :value="t" />
-            </el-select>
-          </el-form-item>
-        </el-form>
+        <a-form layout="vertical">
+          <a-form-item label="名称" required>
+            <a-input v-model:value="row.name" maxlength="80" />
+          </a-form-item>
+          <a-form-item label="分类">
+            <UiAutoComplete v-model="row.category" :fetch-suggestions="queryCategory" clearable placeholder="分类"
+              style="width: 100%" />
+          </a-form-item>
+          <a-form-item label="标签">
+            <a-select v-model:value="row.tags" placeholder="标签" style="width: 100%" mode="tags" show-search>
+              <a-select-option v-for="t in libraryTags" :key="t" :value="t">{{ t }}</a-select-option>
+            </a-select>
+          </a-form-item>
+        </a-form>
       </div>
       <template #footer>
-        <el-button @click="conflictDialog.visible = false">取消</el-button>
-        <el-button type="primary" :loading="busy" @click="retryConflicts">改完再收入</el-button>
+        <a-button @click="conflictDialog.visible = false">取消</a-button>
+        <a-button type="primary" :loading="busy" @click="retryConflicts">改完再收入</a-button>
       </template>
-    </el-dialog>
+    </a-modal>
   </div>
 </template>
 
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from "vue";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessage, ElMessageBox } from "../ui.js";
 
 import { authHeaders, request } from "../api";
 import { elementKindLabel } from "../elementUi";
@@ -636,28 +575,32 @@ async function dismissSelected() {
 .element-library-pending-card {
   font-size: 13px;
   line-height: 1.5;
-  color: var(--el-text-color-primary);
+  color: var(--ay-ink);
 }
+
 .element-library-pending-card .card-title {
   margin: 0 0 4px;
   font-size: 13px;
   font-weight: 650;
   line-height: 1.4;
 }
+
 .element-library-pending-card .card-hint {
   margin: 0;
   font-size: 13px;
   line-height: 1.5;
-  color: var(--el-text-color-secondary);
+  color: var(--ay-muted);
 }
+
 .element-library-pending-card .pending-row {
   margin: 10px 0;
   padding: 8px 10px;
-  border: 1px solid var(--el-border-color-lighter);
+  border: 1px solid var(--ay-line);
   border-radius: 8px;
   background: #fafbfc;
   font-size: 13px;
 }
+
 .pending-bulk {
   display: flex;
   align-items: center;
@@ -665,6 +608,7 @@ async function dismissSelected() {
   margin: 8px 0 4px;
   font-size: 13px;
 }
+
 .pending-bulk-all {
   display: inline-flex;
   align-items: center;
@@ -674,16 +618,19 @@ async function dismissSelected() {
   cursor: pointer;
   user-select: none;
 }
+
 .pending-bulk-count {
   font-size: 13px;
   color: #64748b;
 }
+
 .pending-check {
   width: 14px;
   height: 14px;
   margin: 0;
   flex: 0 0 auto;
 }
+
 .pending-head {
   display: flex;
   align-items: center;
@@ -692,33 +639,40 @@ async function dismissSelected() {
   margin-bottom: 6px;
   font-size: 13px;
 }
+
 .pending-head strong {
   font-size: 13px;
   font-weight: 600;
 }
+
 .pending-head .muted {
   font-size: 13px;
-  color: var(--el-text-color-secondary);
+  color: var(--ay-muted);
 }
+
 .pending-actions {
   display: flex;
   gap: 8px;
   margin-top: 10px;
   flex-wrap: wrap;
 }
-.pending-actions :deep(.el-button) {
+
+.pending-actions :deep(.ant-btn) {
   font-size: 13px;
 }
+
 .field-tip {
   margin: 4px 0 0;
   font-size: 12px;
-  color: var(--el-text-color-secondary);
+  color: var(--ay-muted);
   line-height: 1.4;
 }
+
 .field-tip.warn,
 .field-tip.warn-tip {
-  color: var(--el-color-warning-dark-2);
+  color: #d48806;
 }
+
 .dup-hint {
   margin: 0 0 12px;
   padding: 8px 10px;
@@ -728,11 +682,13 @@ async function dismissSelected() {
   font-size: 13px;
   line-height: 1.45;
 }
-.conflict-row + .conflict-row {
+
+.conflict-row+.conflict-row {
   margin-top: 12px;
   padding-top: 12px;
-  border-top: 1px solid var(--el-border-color-lighter);
+  border-top: 1px solid var(--ay-line);
 }
+
 .meta-summary {
   display: flex;
   flex-wrap: wrap;
@@ -741,10 +697,12 @@ async function dismissSelected() {
   margin-bottom: 4px;
   font-size: 13px;
 }
+
 .meta-purpose {
   font-size: 13px;
-  color: var(--el-text-color-secondary);
+  color: var(--ay-muted);
 }
+
 .meta-edit-link {
   border: 0;
   background: transparent;
@@ -753,9 +711,11 @@ async function dismissSelected() {
   cursor: pointer;
   padding: 0 4px;
 }
+
 .meta-edit-link:hover {
   text-decoration: underline;
 }
+
 .meta-delete-link {
   border: 0;
   background: transparent;
@@ -764,13 +724,16 @@ async function dismissSelected() {
   cursor: pointer;
   padding: 0 4px;
 }
+
 .meta-delete-link:hover:not(:disabled) {
   text-decoration: underline;
 }
+
 .meta-delete-link:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
 .pending-row-actions {
   margin-top: 4px;
 }

@@ -85,6 +85,8 @@ DISPATCH_TOOLS = frozenset(
         "open_blueprint_library",
         "open_knowledge",  # 兼容旧意图 → 资料库
         "configure_chapter",
+        "get_chapter_info",
+        "generate_chapter_describes",
         "select_write_chapters",
         "write_analyzed_only",
         "start_writing",
@@ -290,13 +292,18 @@ def execute_dispatch_tool(
             expected_tool=name,
         )
 
-    if name == "configure_chapter":
+    if name in {"configure_chapter", "get_chapter_info", "generate_chapter_describes"}:
         from report_writing.chat.action_slots import build_action_slot_clarify, missing_action_slots
-        from report_writing.chat.actions import _action_configure_chapter
+        from report_writing.chat.actions import (
+            _action_configure_chapter,
+            _action_generate_chapter_describes,
+            _action_get_chapter_info,
+        )
         from report_writing.chat.helpers import _load_task
         from report_writing.chat.chapter_resolve import (
             message_has_chapter_sequence,
             pick_awaiting_confirm_chapter_key,
+            pick_focus_chapter_key_extended,
             resolve_chapter_key_from_message,
         )
         from report_writing.chat.writing_control_route import _session_writing_task_id
@@ -304,37 +311,41 @@ def execute_dispatch_tool(
         task_id = str(args.get("task_id") or _session_writing_task_id(session) or "").strip()
         chapter_key = str(args.get("chapter_key") or args.get("chapter_key_hint") or "").strip()
         task = _load_task(home, task_id) if task_id else None
-        # 只认显式传入或原话序号；禁止静默绑「待确认章」或第一章
+        # 只认显式传入或原话序号；查看本章时允许用当前焦点章
         if not chapter_key and task is not None:
             chapter_key = resolve_chapter_key_from_message(task, text)
+            if not chapter_key and name in {"get_chapter_info", "generate_chapter_describes"}:
+                chapter_key = str(pick_focus_chapter_key_extended(session, task, text) or "").strip()
             if not chapter_key and message_has_chapter_sequence(text):
-                # 点了序号但对不上：仍 hang，勿绑 awaiting
                 chapter_key = ""
         if not task_id:
             return None
         body = {**dict(args), "task_id": task_id}
         if chapter_key:
             body["chapter_key"] = chapter_key
-        # 待确认章仅作为澄清首选项提示，不自动选用
         awaiting = ""
         if not chapter_key and task is not None:
             awaiting = str(pick_awaiting_confirm_chapter_key(task) or "").strip()
             if awaiting:
                 body["_prefer_chapter_key"] = awaiting
         if not chapter_key:
-            miss = missing_action_slots("configure_chapter", body, session=session, task=task)
+            miss = missing_action_slots(name, body, session=session, task=task)
             reply, cards = build_action_slot_clarify(
                 session,
-                "configure_chapter",
+                name,
                 body,
                 miss or ["chapter_key"],
                 task=task,
                 message=text,
             )
             return reply, list(cards or []), []
-        reply, cards = _action_configure_chapter(
-            home, session, {**args, "task_id": task_id, "chapter_key": chapter_key}
-        )
+        payload = {**args, "task_id": task_id, "chapter_key": chapter_key}
+        if name == "get_chapter_info":
+            reply, cards = _action_get_chapter_info(home, session, payload)
+        elif name == "generate_chapter_describes":
+            reply, cards = _action_generate_chapter_describes(home, session, payload)
+        else:
+            reply, cards = _action_configure_chapter(home, session, payload)
         return reply, list(cards or []), []
 
     if name == "start_writing":

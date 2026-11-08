@@ -221,16 +221,14 @@
     </template>
   </div>
 
-  <el-dialog
-    v-if="isRail"
-    v-model="editorVisible"
-    :title="editorTitle"
-    width="420px"
-    append-to-body
-    destroy-on-close
-    class="slot-editor-dialog"
-    @closed="editingNo = null"
-  >
+  <a-modal
+ v-if="isRail"
+ v-model:open="editorVisible"
+ :title="editorTitle"
+ width="420px"
+ class="slot-editor-dialog"
+ @afterClose="editingNo = null"
+ destroy-on-close centered>
     <div v-if="editingRow" class="slot-editor">
       <label class="slot-editor-field">
         <span>槽位名称</span>
@@ -322,7 +320,7 @@
     <template #footer>
       <button type="button" class="folder-btn" @click="editorVisible = false">关闭</button>
     </template>
-  </el-dialog>
+  </a-modal>
 </template>
 
 <script setup>

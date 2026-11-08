@@ -20,6 +20,8 @@ from report_writing.controller import (
     save_spec_meta,
 )
 from report_writing.domain.models import (
+    MAX_REVISIONS,
+    WRITE_SCORE_PASS,
     ChapterStatus,
     ChatActionPayload,
     ChatCard,
@@ -443,17 +445,31 @@ def _associate_elements_card(
     chapter_key: str,
     chapter_label: str = "",
     auto_open: bool = True,
+    extra: dict | None = None,
 ) -> ChatCard:
+    payload = {
+        "task_id": str(task_id or "").strip(),
+        "chapter_key": str(chapter_key or "").strip(),
+        "chapter_label": str(chapter_label or "").strip(),
+        "action": "associate_elements",
+        "auto_open": bool(auto_open),
+    }
+    for key in (
+        "associateScope",
+        "pointItemId",
+        "pointIndex",
+        "pointSlot",
+        "pointItems",
+        "sequence",
+        "title",
+        "chapter_title",
+    ):
+        if extra and extra.get(key) not in (None, ""):
+            payload[key] = extra.get(key)
     return ChatCard(
         type="associate_elements",
         title="关联要素",
-        payload={
-            "task_id": str(task_id or "").strip(),
-            "chapter_key": str(chapter_key or "").strip(),
-            "chapter_label": str(chapter_label or "").strip(),
-            "action": "associate_elements",
-            "auto_open": bool(auto_open),
-        },
+        payload=payload,
     )
 
 
@@ -541,25 +557,318 @@ def _chapter_config_snapshot(task: WritingTask, chapter_key: str) -> dict[str, A
     src = node or req
     if src is None:
         return {
+            "key": chapter_key,
+            "title": "",
+            "sequence": "",
+            "parent": "",
+            "parent_sequence": "",
+            "level": 1,
             "points": [],
+            "point_items": [],
             "keywords": [],
             "describes": "",
             "aux_prompt": "",
             "reference_text": "",
             "fixed_output": False,
+            "presence": "always",
+            "compose": "hybrid",
+            "compose_label": "",
             "structure_only": False,
             "element_ids": [],
+            "extracts": [],
+            "content_blocks_count": 0,
         }
+    point_items = list(getattr(src, "point_items", None) or [])
+    from report_writing.domain.compose_analysis import COMPOSE_LABELS
+
+    compose = str(getattr(src, "compose", "") or "hybrid")
     return {
-        "points": list(getattr(src, "points", None) or []),
-        "keywords": list(getattr(src, "keywords", None) or []),
-        "describes": (getattr(src, "describes", "") or "").strip(),
-        "aux_prompt": (getattr(src, "aux_prompt", "") or "").strip(),
-        "reference_text": (getattr(src, "reference_text", "") or "").strip(),
+        "key": str(getattr(src, "key", "") or chapter_key),
+        "title": str(getattr(src, "title", "") or "").strip(),
+        "sequence": str(getattr(src, "sequence", "") or "").strip(),
+        "parent": str(getattr(src, "parent", "") or "").strip(),
+        "parent_sequence": str(getattr(src, "parent_sequence", "") or "").strip(),
+        "level": int(getattr(src, "level", 1) or 1),
+        "points": list(getattr(src, "points", None) or [])[:20],
+        # 进度卡只保留要点关联摘要，避免整段 reference_text / 长 point_items 把会话撑爆
+        "point_items": [
+            {
+                "id": str((row or {}).get("id") or f"p{i}"),
+                "text": str((row or {}).get("text") or "")[:200],
+                **(
+                    {"element_id": eid, "element_name": str((row or {}).get("element_name") or "")[:80]}
+                    if (eid := str((row or {}).get("element_id") or "").strip())
+                    else {}
+                ),
+                **(
+                    {"slot": slot}
+                    if (slot := str((row or {}).get("slot") or "").strip())
+                    else {}
+                ),
+                **(
+                    {"needs_supplement": True}
+                    if (row or {}).get("needs_supplement") and not str((row or {}).get("element_id") or "").strip()
+                    else {}
+                ),
+            }
+            for i, row in enumerate(point_items[:20])
+            if isinstance(row, dict) and str((row or {}).get("text") or "").strip()
+        ],
+        "keywords": list(getattr(src, "keywords", None) or [])[:12],
+        "describes": ((getattr(src, "describes", "") or "").strip())[:400],
+        "aux_prompt": ((getattr(src, "aux_prompt", "") or "").strip())[:240],
+        "reference_text": "",
         "fixed_output": bool(getattr(src, "fixed_output", False)),
+        "presence": str(getattr(src, "presence", "") or "always"),
+        "compose": compose,
+        "compose_label": str(COMPOSE_LABELS.get(compose, compose) or compose).split("：")[0],
         "structure_only": bool(getattr(src, "structure_only", False)),
-        "element_ids": list(getattr(src, "element_ids", None) or []),
+        "element_ids": list(getattr(src, "element_ids", None) or [])[:32],
+        "extracts": [],
+        "content_blocks_count": len(list(getattr(src, "content_blocks", None) or [])),
     }
+
+
+def _slim_element_nodes_for_progress(nodes: list[Any] | None) -> list[dict[str, Any]]:
+    """进度卡内嵌要素：去掉长 result / 附件细节，只保留展示与关联所需字段。"""
+    out: list[dict[str, Any]] = []
+    for item in nodes or []:
+        if item is None:
+            continue
+        if isinstance(item, dict):
+            eid = str(item.get("id") or "").strip()
+            if not eid:
+                continue
+            result = str(item.get("result") or item.get("value") or "").strip()
+            out.append(
+                {
+                    "id": eid,
+                    "name": str(item.get("name") or eid).strip() or eid,
+                    "kind": str(item.get("kind") or "").strip(),
+                    "query": str(item.get("query") or "").strip()[:120],
+                    "result": result[:240],
+                    "required": bool(item.get("required", True)),
+                    "library_item_id": str(item.get("library_item_id") or "").strip(),
+                    "knowledge_folder_ids": list(item.get("knowledge_folder_ids") or [])[:8],
+                }
+            )
+            continue
+        eid = str(getattr(item, "id", "") or "").strip()
+        if not eid:
+            continue
+        result = str(getattr(item, "result", "") or getattr(item, "value", "") or "").strip()
+        out.append(
+            {
+                "id": eid,
+                "name": str(getattr(item, "name", "") or eid).strip() or eid,
+                "kind": str(getattr(item, "kind", "") or "").strip(),
+                "query": str(getattr(item, "query", "") or "").strip()[:120],
+                "result": result[:240],
+                "required": bool(getattr(item, "required", True)),
+                "library_item_id": str(getattr(item, "library_item_id", "") or "").strip(),
+                "knowledge_folder_ids": list(getattr(item, "knowledge_folder_ids", None) or [])[:8],
+            }
+        )
+    return out[:64]
+
+
+def slim_progress_card_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
+    """裁掉历史进度卡里的整章 draft_text / 冗长 evidence / 完整 element_nodes。"""
+    if not isinstance(payload, dict):
+        return {}
+    chapters_in = payload.get("chapters")
+    chapters: list[Any] = list(chapters_in) if isinstance(chapters_in, list) else []
+    # 历史卡可能塞过未写章；落库/回放时一并剔掉
+    chapters, _ = _written_progress_chapters(
+        [ch for ch in chapters if isinstance(ch, dict)]
+    )
+    slim_chapters: list[dict[str, Any]] = []
+    for ch in chapters:
+        if not isinstance(ch, dict):
+            continue
+        next_ch = dict(ch)
+        preview = str(next_ch.get("draft_preview") or next_ch.get("draft_text") or "")[:1800]
+        next_ch["draft_preview"] = preview
+        next_ch.pop("draft_text", None)
+        evidence = next_ch.get("evidence")
+        if isinstance(evidence, list):
+            next_ch["evidence"] = [
+                {
+                    **(row if isinstance(row, dict) else {}),
+                    "excerpt": str((row or {}).get("excerpt") or "")[:180]
+                    if isinstance(row, dict)
+                    else "",
+                    "query": str((row or {}).get("query") or "")[:80] if isinstance(row, dict) else "",
+                }
+                for row in evidence[:8]
+                if isinstance(row, dict)
+            ]
+        results = next_ch.get("element_results")
+        if isinstance(results, list):
+            next_ch["element_results"] = [
+                {
+                    **(row if isinstance(row, dict) else {}),
+                    "value": str((row or {}).get("value") or "")[:240] if isinstance(row, dict) else "",
+                    "query": str((row or {}).get("query") or "")[:120] if isinstance(row, dict) else "",
+                }
+                for row in results[:12]
+                if isinstance(row, dict)
+            ]
+        uncovered = next_ch.get("uncovered_points")
+        if isinstance(uncovered, list):
+            next_ch["uncovered_points"] = uncovered[:12]
+        steps = next_ch.get("steps")
+        if isinstance(steps, list):
+            next_ch["steps"] = steps[-8:]
+        cfg = next_ch.get("config")
+        if isinstance(cfg, dict):
+            next_ch["config"] = {
+                **cfg,
+                "reference_text": "",
+                "describes": str(cfg.get("describes") or "")[:2500],
+                "aux_prompt": str(cfg.get("aux_prompt") or "")[:240],
+                "points": list(cfg.get("points") or [])[:20],
+                "point_items": [
+                    {
+                        "id": str((row or {}).get("id") or f"p{i}"),
+                        "text": str((row or {}).get("text") or "")[:200],
+                        **(
+                            {
+                                "element_id": eid,
+                                "element_name": str((row or {}).get("element_name") or "")[:80],
+                            }
+                            if (eid := str((row or {}).get("element_id") or "").strip())
+                            else {}
+                        ),
+                        **(
+                            {"slot": slot}
+                            if (slot := str((row or {}).get("slot") or "").strip())
+                            else {}
+                        ),
+                    }
+                    for i, row in enumerate(list(cfg.get("point_items") or [])[:20])
+                    if isinstance(row, dict)
+                ],
+                "extracts": [],
+            }
+        slim_chapters.append(next_ch)
+    next_payload = dict(payload)
+    next_payload["chapters"] = slim_chapters
+    nodes = payload.get("element_nodes")
+    if isinstance(nodes, list):
+        next_payload["element_nodes"] = _slim_element_nodes_for_progress(nodes)
+    return next_payload
+
+
+def slim_session_progress_cards(session: Any) -> bool:
+    """就地瘦身会话消息里的 progress 卡；有裁剪返回 True。"""
+    from report_writing.domain.models import ChatCard
+
+    changed = False
+    messages = list(getattr(session, "messages", None) or [])
+    if not messages:
+        return False
+    new_messages = []
+    for msg in messages:
+        cards = list(getattr(msg, "cards", None) or [])
+        if not cards:
+            new_messages.append(msg)
+            continue
+        next_cards: list[Any] = []
+        msg_changed = False
+        for card in cards:
+            ctype = getattr(card, "type", None) if not isinstance(card, dict) else card.get("type")
+            if ctype != "progress":
+                next_cards.append(card)
+                continue
+            raw = getattr(card, "payload", None) if not isinstance(card, dict) else card.get("payload")
+            before = raw if isinstance(raw, dict) else {}
+            after = slim_progress_card_payload(before)
+            if after != before:
+                msg_changed = True
+                if isinstance(card, ChatCard):
+                    next_cards.append(card.model_copy(update={"payload": after}))
+                elif isinstance(card, dict):
+                    next_cards.append({**card, "payload": after})
+                else:
+                    next_cards.append(card)
+            else:
+                next_cards.append(card)
+        if msg_changed:
+            changed = True
+            new_messages.append(msg.model_copy(update={"cards": next_cards}))
+        else:
+            new_messages.append(msg)
+    if changed:
+        session.messages = new_messages
+    return changed
+
+
+def _chapter_element_results_snapshot(task: WritingTask, chapter_key: str) -> list[dict[str, Any]]:
+    """本章关联要素解析结果，供进度卡 / 文档窗展示「获取了哪些要素」。"""
+    req = None
+    if task.brief is not None:
+        try:
+            req = task.brief.chapter(chapter_key)
+        except KeyError:
+            req = None
+    rows = list(getattr(req, "element_results", None) or []) if req is not None else []
+    by_id = {
+        str(getattr(el, "id", "") or "").strip(): el
+        for el in list(getattr(task, "element_nodes", None) or [])
+        if str(getattr(el, "id", "") or "").strip()
+    }
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        eid = str(item.get("id") or "").strip()
+        value = str(item.get("value") or "").strip()
+        if not value and eid and eid in by_id:
+            value = str(getattr(by_id[eid], "result", "") or "").strip()
+        name = str(item.get("name") or getattr(by_id.get(eid), "name", "") or eid or "要素").strip() or "要素"
+        row = {
+            "id": eid,
+            "name": name,
+            "kind": str(item.get("kind") or getattr(by_id.get(eid), "kind", "") or "").strip(),
+            "query": str(item.get("query") or "").strip()[:160],
+            "value": value[:240],
+            "ok": bool(value),
+            "slot_missing": list(item.get("slot_missing") or [])[:4],
+        }
+        key = eid or f"name:{name}"
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(row)
+    # brief 尚未带 element_results 时，用章 element_ids + 要素节点 result 兜底
+    if not out:
+        node = None
+        if task.outline is not None:
+            node = next(
+                (item for item in task.outline.chapters if str(getattr(item, "key", "") or "") == chapter_key),
+                None,
+            )
+        from report_writing.domain.point_items_sync import element_ids_for_chapter_node
+
+        for eid in element_ids_for_chapter_node(node, elements_by_id=by_id) if node is not None else []:
+            el = by_id.get(eid)
+            if el is None:
+                continue
+            value = str(getattr(el, "result", "") or "").strip()
+            out.append(
+                {
+                    "id": eid,
+                    "name": str(getattr(el, "name", "") or eid).strip() or eid,
+                    "kind": str(getattr(el, "kind", "") or "").strip(),
+                    "query": str(getattr(el, "query", "") or "").strip()[:120],
+                    "value": value[:240],
+                    "ok": bool(value),
+                    "slot_missing": [],
+                }
+            )
+    return out[:12]
 
 
 def _chapter_progress_row(task: WritingTask, chapter) -> dict[str, Any]:
@@ -615,6 +924,27 @@ def _chapter_progress_row(task: WritingTask, chapter) -> dict[str, Any]:
         ChapterStatus.WRITING.value,
         ChapterStatus.CHECKING.value,
     }
+    check_rows = []
+    for item in checks[-3:]:
+        action = getattr(item, "action", "")
+        action_s = str(action.value if hasattr(action, "value") else action or "")
+        check_rows.append(
+            {
+                "action": action_s,
+                "reason": (getattr(item, "reason", "") or "")[:160],
+                "score": int(getattr(item, "score", 0) or 0),
+                "below_threshold": bool(getattr(item, "below_threshold", False)),
+                "comments": [
+                    {
+                        "index": int(getattr(c, "index", 0) or 0),
+                        "message": str(getattr(c, "message", "") or "")[:120],
+                    }
+                    for c in list(getattr(item, "comments", None) or [])[:4]
+                ],
+            }
+        )
+    last_check = check_rows[-1] if check_rows else {}
+    revision_n = int(chapter.revision_count or 0)
     return {
         "key": chapter.key,
         "title": chapter.title or chapter.key,
@@ -624,7 +954,14 @@ def _chapter_progress_row(task: WritingTask, chapter) -> dict[str, Any]:
         "is_running": is_running,
         "structure_only": structure_only,
         "human_note": (chapter.human_note or "").strip(),
-        "revision_count": int(chapter.revision_count or 0),
+        "revision_count": revision_n,
+        "max_revisions": int(MAX_REVISIONS),
+        "write_score_pass": int(WRITE_SCORE_PASS),
+        "rewritten": revision_n > 0,
+        "check_action": str(last_check.get("action") or ""),
+        "check_score": int(last_check.get("score") or 0),
+        "check_below_threshold": bool(last_check.get("below_threshold")),
+        "check_reason": str(last_check.get("reason") or "")[:160],
         "evidence_count": len(evidence),
         "evidence": [
             {
@@ -632,39 +969,32 @@ def _chapter_progress_row(task: WritingTask, chapter) -> dict[str, Any]:
                 "point": getattr(item, "point", "") or "",
                 "source_file": getattr(item, "source_file", "") or "",
                 "location": getattr(item, "location", "") or "",
-                "query": (getattr(item, "query", "") or "")[:120],
-                "excerpt": (getattr(item, "excerpt", "") or "")[:400],
+                "query": (getattr(item, "query", "") or "")[:80],
+                "excerpt": (getattr(item, "excerpt", "") or "")[:180],
                 "adopted": bool(getattr(item, "adopted", False)),
             }
             for item in evidence[:8]
         ],
-        "checks": [
-            {
-                "action": str(getattr(item, "action", "").value if hasattr(getattr(item, "action", None), "value") else getattr(item, "action", "")),
-                "reason": (getattr(item, "reason", "") or "")[:240],
-            }
-            for item in checks[-3:]
-        ],
-        "draft_preview": draft[:4000],
-        "draft_text": draft[:50000],
+        "element_results": _chapter_element_results_snapshot(task, chapter.key),
+        "checks": check_rows,
+        # 正文真值走 draft-preview API；进度卡只留短预览，避免会话 JSON 膨胀拖慢加载/对话
+        "draft_preview": draft[:1800],
         "has_draft": bool(draft.strip()),
-        "uncovered_points": uncovered_points[:40],
+        "uncovered_points": uncovered_points[:12],
         "editable": editable,
         "config": _chapter_config_snapshot(task, chapter.key),
-        "steps": steps[-12:],
+        "steps": steps[-8:],
     }
 
 
-def _visible_progress_chapters_step(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
-    """写一章确认一章：卡片只露出当前在写/待确认/下一章，便于看清写到哪。"""
+def _written_progress_chapters(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    """进度卡只输出正在写 / 已写过的章，不带未开写、下一章占位。"""
     if not rows:
         return [], 0
-    in_progress = {
+    writing_now = {
         ChapterStatus.SEARCHING.value,
         ChapterStatus.WRITING.value,
         ChapterStatus.CHECKING.value,
-        ChapterStatus.AWAITING_CONFIRM.value,
-        ChapterStatus.NEEDS_HUMAN.value,
     }
     visible: list[dict[str, Any]] = []
     for row in rows:
@@ -672,54 +1002,34 @@ def _visible_progress_chapters_step(rows: list[dict[str, Any]]) -> tuple[list[di
             continue
         r = dict(row)
         status = str(r.get("status") or "")
-        if status == ChapterStatus.CONFIRMED.value and not r.get("has_draft") and not r.get("steps"):
-            continue
-        if (
-            r.get("is_running")
-            or status in in_progress
-            or r.get("has_draft")
+        touched = bool(
+            r.get("has_draft")
             or r.get("steps")
-        ):
+            or r.get("checks")
+            or int(r.get("revision_count") or 0) > 0
+            or int(r.get("check_score") or 0) > 0
+        )
+        # 正在写：直接露出；已写完：必须有正文/步骤/检查痕迹，避免整本大纲混进进度
+        if r.get("is_running") or status in writing_now:
             visible.append(r)
-    if not any(r.get("is_running") for r in visible):
-        for row in rows:
-            if row.get("structure_only"):
-                continue
-            if str(row.get("status") or "") != ChapterStatus.PENDING.value:
-                continue
-            key = str(row.get("key") or "")
-            if key and any(str(v.get("key") or "") == key for v in visible):
-                continue
-            tagged = dict(row)
-            tagged["is_next"] = True
-            tagged["status_label"] = "下一章"
-            visible.append(tagged)
-            break
-    if not visible:
-        for row in rows:
-            if row.get("structure_only"):
-                continue
-            if str(row.get("status") or "") == ChapterStatus.PENDING.value:
-                tagged = dict(row)
-                tagged["is_next"] = True
-                tagged["status_label"] = "下一章"
-                visible.append(tagged)
-                break
+        elif touched and status in {
+            ChapterStatus.AWAITING_CONFIRM.value,
+            ChapterStatus.NEEDS_HUMAN.value,
+            ChapterStatus.CONFIRMED.value,
+        }:
+            visible.append(r)
+        elif touched and status not in {"", ChapterStatus.PENDING.value, ChapterStatus.SKIPPED.value}:
+            visible.append(r)
     order = {str(r.get("key") or ""): i for i, r in enumerate(rows)}
     visible.sort(key=lambda r: order.get(str(r.get("key") or ""), 10_000))
-    collapsed = max(0, len(rows) - len(visible))
+    collapsed = max(0, len([r for r in rows if not r.get("structure_only")]) - len(visible))
     return visible, collapsed
 
 
 def _visible_progress_chapters(rows: list[dict[str, Any]], *, pace: str) -> tuple[list[dict[str, Any]], int]:
-    """批量模式展示全部章；逐步模式只展示当前焦点章。"""
-    from report_writing.chat.helpers import WRITING_PACE_STEP
-
-    if not rows:
-        return [], 0
-    if pace == WRITING_PACE_STEP:
-        return _visible_progress_chapters_step(rows)
-    return [dict(row) for row in rows], 0
+    """不论逐步/批量：进度只展示本轮已写或正在写的章。"""
+    del pace  # 展示范围不再随 pace 扩大到未写章
+    return _written_progress_chapters(rows)
 
 
 def _pick_focus_chapter_key(all_rows: list[dict[str, Any]], visible: list[dict[str, Any]]) -> str:
@@ -808,10 +1118,8 @@ def _progress_and_confirm_cards(task: WritingTask, *, pace: str = "") -> list[Ch
                 "can_confirm_all": pending_confirm > 0 and pace_norm != WRITING_PACE_STEP,
                 "can_confirm_one": pending_confirm > 0,
                 "focus_chapter_key": focus,
-                "element_nodes": [
-                    item.to_dict() if hasattr(item, "to_dict") else item
-                    for item in (task.element_nodes or [])
-                ],
+                # 进度卡只留要素摘要；完整节点走任务 API，避免会话 JSON / SSE 膨胀
+                "element_nodes": _slim_element_nodes_for_progress(task.element_nodes or []),
                 "stats": {
                     "needs_human": needs_human_n,
                     "awaiting_confirm": awaiting_n,

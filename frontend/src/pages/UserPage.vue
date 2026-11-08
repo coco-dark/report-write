@@ -8,125 +8,124 @@
         </p>
         <p v-else class="hero-sub">{{ panelSubtitle }}</p>
       </div>
-      <el-tag v-if="loggedIn && profile" type="success" effect="plain">{{ profile.display_name || profile.username }}</el-tag>
+      <a-tag v-if="loggedIn && profile" color="success">{{ profile.display_name || profile.username }}</a-tag>
     </header>
 
-    <el-tabs v-model="tab" class="tabs" :class="{ 'tabs-panel-only': panelOnly }">
-      <el-tab-pane label="账号" name="account">
+    <a-tabs v-model:activeKey="tab" class="tabs" :class="{ 'tabs-panel-only': panelOnly }">
+      <a-tab-pane tab="账号" key="account">
         <div v-if="!loggedIn" class="card-pane guest-pane">
           <p class="guest-hint">账号页用于查看与修改个人信息，请先登录。</p>
           <div class="guest-actions">
-            <el-button type="primary" @click="goLogin">登录</el-button>
-            <el-button @click="goRegister">注册</el-button>
+            <a-button type="primary" @click="goLogin">登录</a-button>
+            <a-button @click="goRegister">注册</a-button>
           </div>
         </div>
         <div v-else class="card-pane narrow">
-          <el-form label-position="top">
-            <el-form-item label="显示名称">
-              <el-input v-model="profileForm.display_name" placeholder="在侧栏与界面中展示" />
-            </el-form-item>
-            <el-form-item label="用户名">
-              <el-input :model-value="profile?.username || ''" disabled />
-            </el-form-item>
-            <el-form-item label="用户 ID">
-              <el-input :model-value="profile?.id || ''" disabled />
-            </el-form-item>
-            <el-form-item label="注册时间">
-              <el-input :model-value="profile?.created_at || '—'" disabled />
-            </el-form-item>
-            <el-button type="primary" :loading="busy" @click="saveProfile">保存</el-button>
-          </el-form>
+          <a-form layout="vertical">
+            <a-form-item label="显示名称">
+              <a-input v-model:value="profileForm.display_name" placeholder="在侧栏与界面中展示" />
+            </a-form-item>
+            <a-form-item label="用户名">
+              <a-input :value="profile?.username || ''" disabled />
+            </a-form-item>
+            <a-form-item label="用户 ID">
+              <a-input :value="profile?.id || ''" disabled />
+            </a-form-item>
+            <a-form-item label="注册时间">
+              <a-input :value="profile?.created_at || '—'" disabled />
+            </a-form-item>
+            <a-button type="primary" :loading="busy" @click="saveProfile">保存</a-button>
+          </a-form>
         </div>
-      </el-tab-pane>
+      </a-tab-pane>
 
-      <el-tab-pane label="模型连接" name="llm">
+      <a-tab-pane tab="模型连接" key="llm">
         <div class="card-pane">
-          <el-alert
+          <a-alert
             v-if="llm.using_system_default"
             type="info"
             :closable="false"
-            show-icon
             class="mb"
+            show-icon
           >
-            <template #title>
+            <template #message>
               当前实际调用：<strong>系统默认百炼</strong>
               <span v-if="llm.active_model_name || llm.system_model_name">
                 · 模型 {{ llm.active_model_name || llm.system_model_name }}
               </span>
             </template>
-            <p class="alert-body">
-              关闭「使用我的模型配置」后不会使用下方已保存的 Key（仅作草稿保留）。
-              个人配置保存后写入 <strong>MySQL</strong>（表 writing_user_llm_config），不再写入本地 llm.json。
-              系统 Key 来自 <code>config/bailian.local.yml</code>，若与你在用户中心填过的是同一把 Key，账单上仍会看到同一账号，这不代表开关未生效。
-            </p>
-          </el-alert>
-          <el-alert
-            v-else
-            type="success"
-            :closable="false"
-            show-icon
-            :title="`当前实际调用：你的配置 · 模型 ${llm.active_model_name || llm.model_name || '—'}`"
-            class="mb"
-          />
-          <el-form label-position="top" class="narrow" :class="{ 'form-disabled': !llmForm.enabled }">
-            <el-form-item label="使用我的模型配置">
-              <el-switch v-model="llmForm.enabled" />
-            </el-form-item>
-            <el-form-item label="平台">
-              <el-select v-model="llmForm.provider" style="width: 100%" @change="applyProviderPreset">
-                <el-option label="OpenAI 兼容" value="openai_compatible" />
-                <el-option label="阿里云百炼（兼容模式）" value="bailian" />
-                <el-option label="DeepSeek" value="deepseek" />
-                <el-option label="自定义 Base URL" value="custom" />
-              </el-select>
-            </el-form-item>
-            <el-form-item label="API Base URL">
-              <el-input v-model="llmForm.base_url" placeholder="留空则用平台默认" />
-            </el-form-item>
-            <el-form-item label="API Key">
-              <el-input
-                v-model="llmForm.api_key"
-                type="password"
-                show-password
+            <template #description>
+              <p class="alert-body">
+                关闭「使用我的模型配置」后不会使用下方已保存的 Key（仅作草稿保留）。
+                个人配置保存后写入 <strong>MySQL</strong>（表 writing_user_llm_config），不再写入本地 llm.json。
+                系统 Key 来自 <code>config/bailian.local.yml</code>，若与你在用户中心填过的是同一把 Key，账单上仍会看到同一账号，这不代表开关未生效。
+              </p>
+            </template>
+          </a-alert>
+          <a-alert
+ v-else
+ type="success"
+ :closable="false"
+ :message="`当前实际调用：你的配置 · 模型 ${llm.active_model_name || llm.model_name || '—'}`"
+ class="mb"
+ show-icon />
+          <a-form layout="vertical" class="narrow" :class="{ 'form-disabled': !llmForm.enabled }">
+            <a-form-item label="使用我的模型配置">
+              <a-switch v-model:checked="llmForm.enabled"  />
+            </a-form-item>
+            <a-form-item label="平台">
+              <a-select v-model:value="llmForm.provider" style="width: 100%" @change="applyProviderPreset">
+                <a-select-option value="openai_compatible">OpenAI 兼容</a-select-option>
+                <a-select-option value="bailian">阿里云百炼（兼容模式）</a-select-option>
+                <a-select-option value="deepseek">DeepSeek</a-select-option>
+                <a-select-option value="custom">自定义 Base URL</a-select-option>
+              </a-select>
+            </a-form-item>
+            <a-form-item label="API Base URL">
+              <a-input v-model:value="llmForm.base_url" placeholder="留空则用平台默认" />
+            </a-form-item>
+            <a-form-item label="API Key">
+              <a-input-password
+                v-model:value="llmForm.api_key"
                 :placeholder="llm.api_key_set ? `已设置 ${llm.api_key_hint}` : 'sk-…'"
               />
-            </el-form-item>
-            <el-form-item label="模型名称">
-              <el-input v-model="llmForm.model_name" placeholder="如 deepseek-chat / qwen-plus" />
-            </el-form-item>
-            <el-form-item label="意图模型名称（可选）">
-              <el-input
-                v-model="llmForm.intent_model_name"
+            </a-form-item>
+            <a-form-item label="模型名称">
+              <a-input v-model:value="llmForm.model_name" placeholder="如 deepseek-chat / qwen-plus" />
+            </a-form-item>
+            <a-form-item label="意图模型名称（可选）">
+              <a-input
+                v-model:value="llmForm.intent_model_name"
                 placeholder="默认 qwen-turbo（百炼便宜、适合意图 JSON）；留空走系统配置"
               />
               <p class="field-hint">仅用于对话意图分类、要素抽取等短 JSON 任务，可与主模型不同以省 Token。</p>
-            </el-form-item>
-            <el-form-item label="Completions 路径">
-              <el-input v-model="llmForm.completions_path" placeholder="/chat/completions" />
-            </el-form-item>
-            <el-row :gutter="12">
-              <el-col :span="8">
-                <el-form-item label="超时 (秒)">
-                  <el-input-number v-model="llmForm.timeout" :min="10" :max="600" style="width: 100%" />
-                </el-form-item>
-              </el-col>
-              <el-col :span="8">
-                <el-form-item label="温度">
-                  <el-input-number v-model="llmForm.temperature" :min="0" :max="2" :step="0.1" style="width: 100%" />
-                </el-form-item>
-              </el-col>
-              <el-col :span="8">
-                <el-form-item label="Max tokens">
-                  <el-input-number v-model="llmForm.max_tokens" :min="256" :max="128000" :step="256" style="width: 100%" />
-                </el-form-item>
-              </el-col>
-            </el-row>
-            <el-button type="primary" :loading="busy" @click="saveLlm">保存配置</el-button>
-          </el-form>
+            </a-form-item>
+            <a-form-item label="Completions 路径">
+              <a-input v-model:value="llmForm.completions_path" placeholder="/chat/completions" />
+            </a-form-item>
+            <a-row :gutter="12">
+              <a-col :span="8">
+                <a-form-item label="超时 (秒)">
+                  <a-input-number v-model:value="llmForm.timeout" :min="10" :max="600" style="width: 100%"  />
+                </a-form-item>
+              </a-col>
+              <a-col :span="8">
+                <a-form-item label="温度">
+                  <a-input-number v-model:value="llmForm.temperature" :min="0" :max="2" :step="0.1" style="width: 100%"  />
+                </a-form-item>
+              </a-col>
+              <a-col :span="8">
+                <a-form-item label="Max tokens">
+                  <a-input-number v-model:value="llmForm.max_tokens" :min="256" :max="128000" :step="256" style="width: 100%"  />
+                </a-form-item>
+              </a-col>
+            </a-row>
+            <a-button type="primary" :loading="busy" @click="saveLlm">保存配置</a-button>
+          </a-form>
         </div>
-      </el-tab-pane>
+      </a-tab-pane>
 
-      <el-tab-pane label="Token 统计" name="tokens">
+      <a-tab-pane tab="Token 统计" key="tokens">
         <div class="card-pane">
           <div class="stat-grid">
             <div class="stat">
@@ -147,30 +146,32 @@
             </div>
           </div>
           <h3>按日</h3>
-          <el-table :data="dayRows" size="small" empty-text="暂无记录">
-            <el-table-column prop="day" label="日期" width="120" />
-            <el-table-column prop="calls" label="次数" width="80" />
-            <el-table-column prop="prompt_tokens" label="输入" />
-            <el-table-column prop="completion_tokens" label="输出" />
-            <el-table-column prop="total_tokens" label="合计" />
-          </el-table>
+          <a-table
+            :data-source="dayRows"
+            :columns="dayColumns"
+            :pagination="false"
+            size="small"
+            row-key="day"
+            :locale="{ emptyText: '暂无记录' }"
+          />
           <h3>最近调用</h3>
-          <el-table :data="usage.recent || []" size="small" empty-text="暂无记录">
-            <el-table-column prop="at" label="时间" width="160" />
-            <el-table-column prop="label" label="场景" width="100" />
-            <el-table-column prop="prompt_tokens" label="输入" width="90" />
-            <el-table-column prop="completion_tokens" label="输出" width="90" />
-            <el-table-column prop="total_tokens" label="合计" width="90" />
-          </el-table>
+          <a-table
+            :data-source="usage.recent || []"
+            :columns="recentColumns"
+            :pagination="false"
+            size="small"
+            row-key="at"
+            :locale="{ emptyText: '暂无记录' }"
+          />
         </div>
-      </el-tab-pane>
-    </el-tabs>
+      </a-tab-pane>
+    </a-tabs>
   </div>
 </template>
 
 <script setup>
 import { computed, inject, onMounted, reactive, ref, watch } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage } from "../ui.js";
 
 import { isLoggedIn, request } from "../api";
 
@@ -180,6 +181,20 @@ const props = defineProps({
 });
 
 const tab = ref(props.initialTab || "account");
+const dayColumns = [
+  { title: "日期", dataIndex: "day", key: "day", width: 120 },
+  { title: "次数", dataIndex: "calls", key: "calls", width: 80 },
+  { title: "输入", dataIndex: "prompt_tokens", key: "prompt_tokens" },
+  { title: "输出", dataIndex: "completion_tokens", key: "completion_tokens" },
+  { title: "合计", dataIndex: "total_tokens", key: "total_tokens" },
+];
+const recentColumns = [
+  { title: "时间", dataIndex: "at", key: "at", width: 160 },
+  { title: "场景", dataIndex: "label", key: "label", width: 100 },
+  { title: "输入", dataIndex: "prompt_tokens", key: "prompt_tokens", width: 90 },
+  { title: "输出", dataIndex: "completion_tokens", key: "completion_tokens", width: 90 },
+  { title: "合计", dataIndex: "total_tokens", key: "total_tokens", width: 90 },
+];
 
 const panelTitle = computed(() => {
   const map = { account: "账号", llm: "设置", tokens: "Token 统计" };
@@ -353,7 +368,7 @@ onMounted(() => {
 .tabs {
   margin-top: 8px;
 }
-.tabs-panel-only :deep(.el-tabs__header) {
+.tabs-panel-only :deep(.ant-tabs-nav) {
   display: none;
 }
 .hero-sub {
@@ -425,9 +440,9 @@ h3 {
 .alert-body code {
   font-size: 12px;
 }
-.form-disabled :deep(.el-input__wrapper),
-.form-disabled :deep(.el-select__wrapper),
-.form-disabled :deep(.el-input-number) {
+.form-disabled :deep(.ant-input-affix-wrapper, .ant-input),
+.form-disabled :deep(.ant-select-selector),
+.form-disabled :deep(.ant-input-number) {
   opacity: 0.72;
 }
 </style>

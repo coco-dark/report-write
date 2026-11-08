@@ -113,6 +113,7 @@ def run_chapters(
     on_event=None,
     search_only: bool = False,
     model=None,
+    force_rerun: bool = False,
 ) -> WritingTask:
     """运行指定章节；父节点默认带子树。"""
     from report_writing.domain.elements import chapter_subtree_keys, resolve_elements_for_chapter, sync_brief_from_outline
@@ -157,14 +158,21 @@ def run_chapters(
     selected.sort(key=lambda item: keys.index(item.key) if item.key in keys else 0)
 
     # 重跑前清掉旧草稿/证据/检查，避免写作员沿用上一稿导致「改配置后仍一模一样」
-    from report_writing.domain.models import ChapterStatus
+    from report_writing.agents.check import revision_feedback_from_checks
+    from report_writing.domain.models import ChapterStatus, CheckAction
 
     for chapter in selected:
-        if chapter.status == ChapterStatus.CONFIRMED:
+        if chapter.status == ChapterStatus.CONFIRMED and not force_rerun:
             continue
+        kept_defects = revision_feedback_from_checks(chapter.checks)
         chapter.draft = None
         chapter.evidence = []
-        chapter.checks = []
+        # 重试前保留最近一次未通过检查，写下一稿时仍能改正缺陷
+        chapter.checks = (
+            [c for c in (chapter.checks or []) if c.action != CheckAction.ACCEPT][-1:]
+            if kept_defects
+            else []
+        )
         chapter.revision_count = 0
         chapter.official_text = ""
         chapter.human_note = ""
@@ -220,6 +228,8 @@ def run_chapters(
                 robot,
                 on_step,
                 search_only=True,
+                chapters=task.chapters,
+                brief=task.brief,
             )
         task.steps = list(task.steps) + new_steps
         task.refresh_status()

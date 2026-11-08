@@ -7,7 +7,7 @@ from collections.abc import Iterator, Mapping
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_serializer, field_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_serializer, field_validator, model_validator
 
 
 class ChapterStatus(str, Enum):
@@ -46,7 +46,8 @@ MAX_ADOPTED = 8
 MAX_SEARCH_TERMS = 6  # 每章最多用几个检索词
 SEARCH_TOP_K = 4  # 每个检索词 RAG 返回条数
 MAX_EVIDENCE_CARDS = 20  # 每章最终保留的证据卡上限（含未采纳）
-MAX_REVISIONS = 2
+MAX_REVISIONS = 5  # 检查退回自动重写上限
+WRITE_SCORE_PASS = 70  # 写作检查通过分阈值（0–100）；低于此线进度卡标为未达线
 MAX_AGENT_STEPS = 8
 
 
@@ -88,6 +89,8 @@ class ContentBlock(Entity):
     fixed_items: list[str] = Field(default_factory=list)
     # 随项目变化的单元格/行项（写作时需从资料填充）
     variable_items: list[str] = Field(default_factory=list)
+    compose: str = ""  # source_only | template_fill | hybrid | auto_generate；空=跟随章节
+    template_text: str = ""  # 套话原文，可用 {{槽名}}
 
     @field_validator("cells_sample", mode="before")
     @classmethod
@@ -109,6 +112,8 @@ class ChapterRequirement(Entity):
     keywords: list[str] = Field(default_factory=list)
     extracts: list[ExtractItem] = Field(default_factory=list)
     points: list[str] = Field(default_factory=list)
+    # 与大纲 point_items 对齐：写作时绑定「要点 ↔ 关联要素结果」
+    point_items: list[dict[str, Any]] = Field(default_factory=list)
     content_blocks: list[ContentBlock] = Field(default_factory=list)
     reference_text: str = ""  # 参考正文：学写法/格式；fixed_output 时作为必须照抄的固定正文
     allowed_fact_types: list[str] = Field(default_factory=lambda: ["名称", "数值", "日期", "单位"])
@@ -121,7 +126,16 @@ class ChapterRequirement(Entity):
     element_results: list[dict[str, Any]] = Field(default_factory=list)
     structure_only: bool = False  # 纯目录节点：不写正文、不检索
     fixed_output: bool = False  # 固定内容：跳过检索，按 reference_text 原文输出
+    presence: str = "always"  # always | if_materials（由写作策略派生）
+    compose: str = "hybrid"  # source_only | template_fill | hybrid | auto_generate
     search_terms_separate: bool = False  # True=每个检索词单独查；默认 False=合并一次查
+
+    @model_validator(mode="after")
+    def _sync_compose_fields(self):
+        from report_writing.domain.chapter_compose import apply_compose_fields
+
+        apply_compose_fields(self)
+        return self
 
     def search_terms(self) -> list[str]:
         """章节级检索词已废弃；资料由关联要素解析（见 element_results）。"""
@@ -308,7 +322,17 @@ class OutlineNode(Entity):
     elements: list[ChapterElement] = Field(default_factory=list)
     structure_only: bool = False  # 仅目录标题，不需要写作要点/检索词
     fixed_output: bool = False  # 固定内容输出：写作时照抄 reference_text
+    presence: str = "always"
+    compose: str = "hybrid"
+    extracts: list[ExtractItem] = Field(default_factory=list)
     search_terms_separate: bool = False  # True=检索词分开查；默认合并一次查
+
+    @model_validator(mode="after")
+    def _sync_compose_fields(self):
+        from report_writing.domain.chapter_compose import apply_compose_fields
+
+        apply_compose_fields(self)
+        return self
 
 
 class AutoStudyDraft(Entity):
@@ -329,6 +353,9 @@ class AutoStudyDraft(Entity):
     accepted: bool = True
     structure_only: bool = False
     project_slots: list[dict[str, Any]] = Field(default_factory=list)
+    presence: str = "always"
+    compose: str = "hybrid"
+    boilerplate: str = ""
 
 
 class OutlineDiffItem(Entity):
@@ -450,12 +477,15 @@ class ParsePointsRequest(Entity):
 
 
 class MetaFromPointsRequest(Entity):
-    """按当前写作要点重写章节说明与补充提示词。"""
+    """按当前写作要点 / 原文生成章节说明（不改补充提示词）。"""
 
     chapter_key: str = ""
     title: str = ""
     sequence: str = ""
     point_items: list[dict] = Field(default_factory=list)
+    compose: str = ""
+    presence: str = ""
+    reference_text: str = ""
 
 
 class ElementDraftFromPointRequest(Entity):
@@ -527,6 +557,9 @@ class CheckResult(Entity):
     action: CheckAction
     comments: list[ParagraphComment] = Field(default_factory=list)
     reason: str = ""
+    # 写作检查分 0–100；与 WRITE_SCORE_PASS 对照展示是否达线
+    score: int = 0
+    below_threshold: bool = False
 
 
 class ChapterState(Entity):
@@ -836,6 +869,9 @@ class ChatActionPayload(Entity, Mapping[str, Any]):
     chapters: list[Any] = Field(default_factory=list)
     point_index: Any = None
     fixed_output: bool = False
+    presence: str = ""
+    compose: str = ""
+    source_text: str = ""
     search_terms_separate: bool = False
     structure_only: bool = False
     preserve_chapter_meta: bool = False
@@ -1332,6 +1368,10 @@ class UseStudyRequest(Entity):
 class UpdatePointsRequest(Entity):
     points: list[str]
     save_cache: bool = False
+
+
+class GenerateBoilerplateRequest(Entity):
+    source_text: str = ""
 
 
 class ConfirmChapterRequest(Entity):

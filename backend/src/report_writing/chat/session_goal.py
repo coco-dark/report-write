@@ -368,11 +368,12 @@ def _llm_extract_goal_patch(
     from report_writing.chat.dialogue import format_full_dialogue
 
     system = (
-        "你是写作会话目标提取器。结合 dialogue 与当前 message，理解用户真正要写的文档。"
-        "若本轮只是「不用蓝本/跳过蓝本」等路径选择，应保留对话里更早的写作题目，不要清空。"
-        "只返回 JSON："
-        '{"summary":"","doc_category":"","doc_title":"","project":"","notes":""} '
-        "doc_category 为简短类型（如技术方案、工作说明），doc_title 为具体题目；缺项留空，不要编造。"
+        "# Role\n你是写作会话目标提取器。\n"
+        "# Task\n结合 dialogue 与当前 message，理解用户真正要写的文档。"
+        "若本轮只是「不用蓝本/跳过蓝本」等路径选择，应保留对话里更早的写作题目，不要清空。\n"
+        "# Constraints\ndoc_category 为简短类型（如技术方案、工作说明），doc_title 为具体题目；缺项留空，不要编造。\n"
+        "# Output\n只返回 JSON："
+        '{"summary":"","doc_category":"","doc_title":"","project":"","notes":""}'
     )
     payload = {
         "dialogue": format_full_dialogue(session, max_turns=10),

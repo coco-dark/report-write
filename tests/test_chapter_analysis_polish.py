@@ -3,7 +3,8 @@ from report_writing.controller.points import _merge_describes_and_style, _polish
 
 def test_merge_writing_style_into_describes():
     out = _merge_describes_and_style("说明评价依据与适用范围。", ["客观陈述", "先列规范再分条"])
-    assert "写作特点" in out
+    assert "1." in out
+    assert "2." in out
     assert "客观陈述" in out
 
 

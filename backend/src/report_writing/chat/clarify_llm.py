@@ -192,8 +192,10 @@ def classify_wizard_action_llm(
     from report_writing.chat.classifier_action_chain import MULTI_ACTION_JSON_HINT
 
     system = (
-        "你是蓝本向导的意图分类器。结合近期对话、焦点文档与当前步骤选出向导命令；"
+        "# Role\n你是蓝本向导的意图分类器。\n"
+        "# Task\n结合近期对话、焦点文档与当前步骤选出向导命令；"
         "说法不固定，按意思判断；指代（继续/那个）要落到上下文。\n"
+        "# Inputs\nclassifier context JSON（对话、焦点文档、当前步骤）。\n"
         "\n"
         "## 输出\n"
         "只返回 JSON，不要 Markdown：\n"
@@ -363,8 +365,9 @@ def classify_writing_control_llm(
         focus = f"{wt.get('focus_chapter_title') or ''} (key={wt.get('focus_chapter_key') or '—'})"
 
     system = (
-        "你是写作对话总控的意图分类器。结合近期对话、阶段与任务选工具；"
-        "默认针对当前焦点文档，用户点名其它文档时才切换。\n"
+        "# Role\n你是写作对话总控的意图分类器。\n"
+        "# Task\n结合近期对话、阶段与任务选工具；默认针对当前焦点文档，用户点名其它文档时才切换。\n"
+        "# Inputs\nclassifier context JSON。\n"
         "\n"
         "## 输出\n"
         "只返回 JSON，不要 Markdown：\n"
@@ -828,8 +831,9 @@ def classify_freeform_action_llm(
     from report_writing.chat.classifier_context import classifier_context_user_block
 
     system = (
-        "你是无蓝本写作流程的动作分类器。结合近期对话、焦点文档与阶段判断操作；"
-        "不要只看本句孤立措辞，指代（继续/那个/刚才）要落到上下文文档。\n"
+        "# Role\n你是无蓝本写作流程的动作分类器。\n"
+        "# Task\n结合近期对话、焦点文档与阶段判断操作；不要只看本句孤立措辞，指代（继续/那个/刚才）要落到上下文文档。\n"
+        "# Inputs\nclassifier context JSON。\n"
         "\n"
         "## 输出\n"
         '只返回 JSON：{"intent":"<id>","intents":["<动作1>","<动作2>"],"confidence":0.0}\n'
@@ -1019,7 +1023,9 @@ def classify_document_scope_llm(
         "ask",
     )
     system = (
-        "你是「文档作用域」分类器。用户说法不固定，按意思判断，不要靠固定句式或关键词表。\n"
+        "# Role\n你是「文档作用域」分类器。\n"
+        "# Task\n用户说法不固定，按意思判断，不要靠固定句式或关键词表。\n"
+        "# Inputs\n当前消息与会话焦点文档。\n"
         "\n"
         "## 输出\n"
         '只返回 JSON：{"action":"continue|force_new|switch_existing|chapter_revise|rewrite_current|ask",'
@@ -1266,7 +1272,9 @@ def classify_entry_routing_llm(
     lines = format_dialogue_lines(dialogue_tail, limit=6, max_chars=300)
 
     system = (
-        "你是报告写作对话的「入口意图」分类器。结合近期对话与已有文档判断本句入口意图。\n"
+        "# Role\n你是报告写作对话的「入口意图」分类器。\n"
+        "# Task\n结合近期对话与已有文档判断本句入口意图。\n"
+        "# Inputs\n当前消息与近期对话。\n"
         "\n"
         "## 输出\n"
         "只返回 JSON：\n"

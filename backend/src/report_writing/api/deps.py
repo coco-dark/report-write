@@ -201,7 +201,11 @@ def _iter_sse(worker, *, user_id: str | None = None):
         item = events.get()
         if item is None:
             break
-        yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
+        try:
+            payload = json.dumps(item, ensure_ascii=False, default=str)
+        except TypeError:
+            payload = json.dumps({"type": "process", "message": str(item)}, ensure_ascii=False)
+        yield f"data: {payload}\n\n"
 
 
 def sse_response(worker) -> StreamingResponse:
@@ -210,6 +214,11 @@ def sse_response(worker) -> StreamingResponse:
     return StreamingResponse(
         _iter_sse(worker, user_id=current_user_id()),
         media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
     )
 
 

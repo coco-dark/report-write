@@ -8,6 +8,7 @@ from unittest.mock import patch
 from report_writing.chat.actions import (
     _action_dismiss_writing_supplement,
     _action_retry_chapter,
+    _action_skip_writing_supplement_check,
     _action_start_writing,
 )
 from report_writing.chat.clarify_flow import get_pending
@@ -23,7 +24,14 @@ from report_writing.chat.writing_supplement_check import (
     supplement_gate_needed,
 )
 from report_writing.controller import ensure_task
-from report_writing.domain.models import ChatSession, ElementNode, OutlineNode, OutlineTree, WritingTask
+from report_writing.domain.models import (
+    ChatSession,
+    ElementNode,
+    FileSlotDef,
+    OutlineNode,
+    OutlineTree,
+    WritingTask,
+)
 from report_writing.services.store import TaskStore
 
 
@@ -76,6 +84,48 @@ def test_deterministic_gap_for_empty_element(tmp_path: Path):
     gaps = collect_deterministic_gaps(task, ["c1"], home)
     assert any(g.get("element_id") == "el_proj" for g in gaps)
     assert element_needs_supplement(task.element_nodes[0], task, home)
+
+
+def test_file_slot_with_slot_no_is_configured(tmp_path: Path):
+    home = tmp_path
+    (home / "tasks").mkdir(parents=True)
+    wid = "wSlotOk"
+    path = home / "tasks" / wid
+    ensure_task(path)
+    task = TaskStore(path).load()
+    task.id = wid
+    task.element_nodes = [
+        ElementNode(
+            id="el_feat",
+            name="工程特性表",
+            kind="file_slot",
+            file_slots=[FileSlotDef(no=1, name="批复文件", query="建设规模")],
+        )
+    ]
+    task.outline = OutlineTree(
+        chapters=[
+            OutlineNode(
+                key="c1",
+                sequence="2.2",
+                title="建设规模",
+                point_items=[
+                    {
+                        "id": "p0",
+                        "text": "工程特性表各项目及内容",
+                        "slot": "工程特性表各项目及内容",
+                        "needs_supplement": True,
+                    }
+                ],
+            )
+        ]
+    )
+    TaskStore(path).save(task)
+    task = TaskStore(path).load()
+    assert not element_needs_supplement(task.element_nodes[0], task, home)
+    gaps = collect_deterministic_gaps(task, ["c1"], home)
+    assert not any(
+        "工程特性" in str(g.get("display_line") or g.get("slot_label") or "") for g in gaps
+    )
 
 
 def test_normalize_gap_display_replaces_element_id_line(tmp_path: Path):
@@ -456,6 +506,36 @@ def test_start_writing_shows_supplement_card_before_run(tmp_path: Path):
     assert "不补也可以先写" in (reply or "")
 
 
+def test_retry_chapter_rewrite_rechecks_after_first_skip(tmp_path: Path):
+    home = tmp_path
+    (home / "tasks").mkdir(parents=True)
+    task = _task_with_empty_element(home)
+    session = ChatSession(id="s_retry_after_skip", task_id=task.id, phase="ready_to_write")
+    run_supplement_check(home, session, task, ["c1"], invoke=None)
+    from report_writing.chat.writing_supplement_check import (
+        mark_supplement_skipped,
+        supplement_batch_scope,
+    )
+
+    mark_supplement_skipped(session, supplement_batch_scope(task.id, ["c1"]))
+    assert not supplement_gate_needed(session, task, ["c1"], home=home)
+    with patch("report_writing.services.pipeline.run_chapters") as run_mock:
+        _reply, cards, _events = _action_retry_chapter(
+            home,
+            session,
+            {
+                "task_id": task.id,
+                "chapter_key": "c1",
+                "_write_mode": "rewrite",
+            },
+        )
+    run_mock.assert_not_called()
+    assert any(getattr(c, "type", "") == "writing_supplement_check" for c in cards)
+    card = next(c for c in cards if getattr(c, "type", "") == "writing_supplement_check")
+    assert str(card.payload.get("resume_action") or "") == "retry_chapter"
+    assert str(card.payload.get("chapter_key") or "") == "c1"
+
+
 def test_retry_chapter_rewrite_mode_still_shows_supplement_card(tmp_path: Path):
     home = tmp_path
     (home / "tasks").mkdir(parents=True)
@@ -473,6 +553,28 @@ def test_retry_chapter_rewrite_mode_still_shows_supplement_card(tmp_path: Path):
         )
     run_mock.assert_not_called()
     assert any(getattr(c, "type", "") == "writing_supplement_check" for c in cards)
+
+
+def test_skip_supplement_after_rewrite_resumes_retry(tmp_path: Path):
+    home = tmp_path
+    (home / "tasks").mkdir(parents=True)
+    task = _task_with_empty_element(home)
+    session = ChatSession(id="s_skip_retry", task_id=task.id, phase="ready_to_write")
+    with patch("report_writing.services.pipeline.run_chapters") as run_mock:
+        run_mock.return_value = TaskStore(home / "tasks" / task.id).load()
+        _reply, cards, _events = _action_skip_writing_supplement_check(
+            home,
+            session,
+            {
+                "task_id": task.id,
+                "chapter_key": "c1",
+                "chapter_keys": ["c1"],
+                "resume_action": "retry_chapter",
+                "_write_mode": "rewrite",
+            },
+        )
+    run_mock.assert_called_once()
+    assert not any(getattr(c, "type", "") == "writing_supplement_check" for c in cards)
 
 
 def test_retry_chapter_shows_supplement_card_before_run(tmp_path: Path):
@@ -494,6 +596,87 @@ def test_retry_chapter_shows_supplement_card_before_run(tmp_path: Path):
     assert not events
     assert any(getattr(c, "type", "") == "writing_supplement_check" for c in cards)
     assert "不补也可以先写" in (reply or "")
+    assert "卡片列出了" in (reply or "")
+
+
+def test_retry_chapter_tool_waits_on_supplement_card(tmp_path: Path):
+    import json
+
+    from report_writing.agents.chat_tools import build_chat_tools
+    from report_writing.agents.state import ChatControlState
+
+    home = tmp_path
+    (home / "tasks").mkdir(parents=True)
+    task = _task_with_empty_element(home)
+    session = ChatSession(id="s_retry_tool", task_id=task.id, phase="ready_to_write")
+    state = ChatControlState(
+        home=home,
+        session=session,
+        user_action="retry_chapter",
+        last_user_message="重写章节[2.2 建设规模]",
+    )
+    tools = {t.name: t for t in build_chat_tools(state)}
+    with patch("report_writing.services.pipeline.run_chapters") as run_mock:
+        raw = tools["retry_chapter"].invoke(
+            {
+                "payload_json": json.dumps(
+                    {"task_id": task.id, "chapter_key": "c1", "_write_mode": "rewrite"}
+                )
+            }
+        )
+    run_mock.assert_not_called()
+    data = json.loads(raw)
+    assert data.get("ok") is False
+    assert data.get("awaiting_user_choice") is True
+    assert "writing_supplements" in (data.get("missing_slots") or [])
+    assert any(getattr(c, "type", "") == "writing_supplement_check" for c in state.cards)
+
+
+def test_run_supplement_check_reply_count_matches_card(tmp_path: Path):
+    home = tmp_path
+    (home / "tasks").mkdir(parents=True)
+    task = _task_with_empty_element(home)
+    session = ChatSession(id="s_count", task_id=task.id)
+
+    def extra_llm(_system, _user):
+        return '{"gaps":[{"chapter_key":"c1","point_index":9,"display_line":"虚构第二处"}]}'
+
+    reply, items, _reg = run_supplement_check(
+        home, session, task, ["c1"], invoke=extra_llm
+    )
+    from report_writing.chat.writing_supplement_check import supplement_check_card
+
+    card = supplement_check_card(task, ["c1"], items=items, home=home)
+    n = len(items)
+    assert n >= 1
+    assert f"{n} 处还空着" in (reply or "")
+    assert card is not None
+    assert len(card.payload.get("items") or []) == n
+    assert "虚构" not in (reply or "")
+
+
+def test_collapse_point_and_element_counted_once(tmp_path: Path):
+    home = tmp_path
+    (home / "tasks").mkdir(parents=True)
+    task = _task_with_empty_element(home)
+    node = task.outline.chapters[0]
+    node.point_items = [
+        {
+            "id": "p0",
+            "text": "填写项目名称（待补充：项目名称）",
+            "slot": "项目名称",
+            "needs_supplement": True,
+        }
+    ]
+    TaskStore(home / "tasks" / task.id).save(task)
+    session = ChatSession(id="s_once", task_id=task.id)
+    reply, items, _reg = run_supplement_check(home, session, task, ["c1"], invoke=None)
+    from report_writing.chat.writing_supplement_check import supplement_check_card
+
+    card = supplement_check_card(task, ["c1"], items=items, home=home)
+    assert len(items) == 1
+    assert "1 处还空着" in (reply or "")
+    assert len(card.payload.get("items") or []) == 1
 
 
 def test_dismiss_action_returns_card(tmp_path: Path):

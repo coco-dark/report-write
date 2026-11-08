@@ -487,8 +487,30 @@ def handle_chat(
     )
     # 无蓝本回合禁止把「学习分析」卡追加到大纲旁；但依据样本上传卡必须保留
     # 放弃向导：回合开始有向导、结束已清空、且本轮 handler 没再下发向导卡
+    write_turn = act in {
+        "start_writing",
+        "write_analyzed_only",
+        "retry_chapter",
+        "save_and_retry",
+        "skip_writing_supplement_check",
+    }
+    if write_turn:
+        from report_writing.chat.wizard_state import mark_wizard_past_outline_confirm
+
+        mark_wizard_past_outline_confirm(session)
+        wiz = dict((session.freeform or {}).get("blueprint_wizard") or {})
+        wiz_merged = dict(wiz)
+        cards = [
+            c
+            for c in (cards or [])
+            if str(getattr(c, "type", "") or "") != "blueprint_wizard"
+        ]
     wizard_cleared = bool(wiz_before) and not wiz and not handler_wiz
-    if wizard_cleared:
+    if write_turn:
+        from report_writing.chat.cards import collapse_duplicate_turn_cards
+
+        cards = collapse_duplicate_turn_cards(list(cards or []), session=session)
+    elif wizard_cleared:
         cards = [
             c
             for c in (cards or [])

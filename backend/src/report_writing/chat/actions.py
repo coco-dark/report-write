@@ -740,6 +740,7 @@ def _action_start_writing(
         _normalize_writing_pace,
         _pending_write_keys,
         _prepare_writing_task,
+        _apply_chapter_config,
         _run_writing_keys,
         _session_writing_pace,
         _writing_chapter_keys,
@@ -752,6 +753,9 @@ def _action_start_writing(
     from report_writing.services.task_ids import is_writing_task_id
     _apply_project_folders_from_payload(session, payload)
     incoming_keys = [str(k).strip() for k in (chapter_keys or []) if str(k).strip()]
+    focus_key = str(payload.get("chapter_key") or "").strip()
+    if focus_key and focus_key not in incoming_keys:
+        incoming_keys = [focus_key, *incoming_keys]
     if incoming_keys:
         session.freeform = {**(session.freeform or {}), "write_chapter_keys": incoming_keys}
     prefer_keys = list((session.freeform or {}).get("write_chapter_keys") or [])
@@ -816,7 +820,7 @@ def _action_start_writing(
                 # 勾选范围与副本 scope 不一致（含旧版曾裁剪目录的副本），按勾选重建 scope
                 writing = None
                 session.task_id = ""
-            else:
+            elif not prefer_keys:
                 _emit_process(emit, "接着上一章继续写…", task_id=existing_id)
 
     if writing is None:
@@ -911,6 +915,7 @@ def _action_start_writing(
         materials_pack_gate_satisfied,
         offer_materials_pack_cards,
         peek_pending_materials_pack,
+        resolve_writing_materials_pack_id,
     )
     from report_writing.services.store import TaskStore as _TaskStorePack
 
@@ -924,9 +929,17 @@ def _action_start_writing(
     if bp_id and _materials_pack_skipped_for_task(session, bp_id):
         mark_materials_pack_skipped(session, writing.id, skipped=True)
 
-    # 开写前预建/预选的资料包
+    # 磁盘上可能已绑（文档窗 PUT），内存副本尚未带 materials_pack_id
+    if not str(getattr(writing, "materials_pack_id", "") or "").strip():
+        fresh_pack = _load_task(home, str(writing.id or "").strip())
+        if fresh_pack is not None and str(getattr(fresh_pack, "materials_pack_id", "") or "").strip():
+            writing = fresh_pack
+
+    # 开写前预建/预选，或本蓝本仅有一份待入库包（文档窗已当绑定展示）
     if not incoming_pack:
         incoming_pack = peek_pending_materials_pack(session, blueprint_id=bp_id)
+    if not incoming_pack:
+        incoming_pack = resolve_writing_materials_pack_id(home, session, writing)
 
     if body_pack.get("materials_pack_skip") or body_pack.get("skip_materials_pack"):
         writing.materials_pack_id = ""
@@ -956,10 +969,34 @@ def _action_start_writing(
         return reply, cards, []
 
     body = payload.as_dict()
-    if body.get("already_persisted") or body.get("from_doc_window"):
-        fresh = _load_task(home, writing.id)
-        if fresh is not None:
-            writing = fresh
+    fresh = _load_task(home, writing.id)
+    if fresh is not None:
+        writing = fresh
+    cfg_key = str(body.get("chapter_key") or "").strip()
+    already_persisted = bool(body.get("already_persisted") or body.get("from_doc_window"))
+    configure_fields = (
+        "points",
+        "points_text",
+        "point_items",
+        "keywords",
+        "keywords_text",
+        "describes",
+        "aux_prompt",
+        "reference_text",
+        "fixed_output",
+        "presence",
+        "compose",
+        "structure_only",
+        "search_terms_separate",
+        "element_ids",
+        "elements",
+    )
+    if cfg_key and (not already_persisted) and any(k in body for k in configure_fields):
+        _apply_chapter_config(writing, cfg_key, payload, model=model)
+        from report_writing.services.store import TaskStore as _TaskStoreCfg
+
+        _TaskStoreCfg(home / "tasks" / writing.id).save(writing)
+        writing = _load_task(home, writing.id) or writing
     force_skip_sup = bool(
         body.get("skip_supplement_check") or body.get("_skip_supplement_check")
     )
@@ -987,6 +1024,8 @@ def _action_start_writing(
                 writing_pace=pace,
                 items=open_items,
                 home=home,
+                resume_action="start_writing",
+                chapter_key=str(body.get("chapter_key") or "").strip(),
             )
             if card is not None:
                 return reply_chk, [card], []
@@ -1012,23 +1051,18 @@ def _action_start_writing(
     )
     all_keys = _writing_chapter_keys(writing)
     pending = _pending_write_keys(writing)
-    if pace == WRITING_PACE_STEP:
+    selected = [str(k).strip() for k in (prefer_keys or []) if str(k).strip()]
+    if selected:
+        keys_to_run = selected
+        pace_tip = (
+            f"本轮写选中的 {len(keys_to_run)} 章" if len(keys_to_run) != 1 else "本轮写选中的 1 章"
+        )
+    elif pace == WRITING_PACE_STEP:
         keys_to_run = pending[:1]
         pace_tip = "逐步确认：本轮只写一章"
     else:
         keys_to_run = pending or all_keys
         pace_tip = "全部书写：本轮写完待写章节"
-    if prefer_keys:
-        want = {str(k).strip() for k in prefer_keys if str(k).strip()}
-        if want:
-            keys_to_run = [k for k in keys_to_run if k in want]
-            if not keys_to_run:
-                task_key_set = set(_writing_chapter_keys(writing))
-                keys_to_run = [k for k in prefer_keys if k in task_key_set]
-            if len(prefer_keys) == 1 and keys_to_run:
-                pace_tip = "本轮只写勾选的 1 章"
-            elif keys_to_run and want:
-                pace_tip = f"本轮写勾选的 {len(keys_to_run)} 章"
     if not keys_to_run:
         from report_writing.chat.resource_readiness import export_phase_cards, robot_export_ready
         from report_writing.services.robots import get_robot
@@ -1060,6 +1094,9 @@ def _action_start_writing(
     clear_writing_cancel(session.id)
     session.freeform = {**(session.freeform or {}), "writing_paused": False}
 
+    from report_writing.chat.wizard_state import mark_wizard_past_outline_confirm
+
+    mark_wizard_past_outline_confirm(session)
     _emit_process(
         emit,
         f"准备好了（{pace_tip}），开始按章检索、起草、检查…",
@@ -1302,13 +1339,19 @@ def _action_check_writing_supplements(
     if not keys and task.outline:
         keys = [str(n.key) for n in task.outline.chapters if not bool(getattr(n, "structure_only", False))]
     mark_resolved_gaps_in_registry(session, task, home)
-    reply, _open, reg = run_supplement_check(home, session, task, keys, invoke=invoke)
-    from report_writing.chat.writing_supplement_check import effective_open_gaps
-
-    open_items = effective_open_gaps(task, reg, home)
+    reply, open_items, _reg = run_supplement_check(home, session, task, keys, invoke=invoke)
     pace = str(payload.get("writing_pace") or (session.freeform or {}).get("writing_pace") or "").strip()
     card = (
-        supplement_check_card(task, keys, writing_pace=pace, items=open_items, home=home)
+        supplement_check_card(
+            task,
+            keys,
+            writing_pace=pace,
+            items=open_items,
+            home=home,
+            resume_action=str(payload.get("resume_action") or "").strip(),
+            chapter_key=str(payload.get("chapter_key") or "").strip(),
+            write_mode=str(payload.get("_write_mode") or payload.get("write_mode") or "").strip(),
+        )
         if open_items
         else None
     )
@@ -1329,12 +1372,16 @@ def _action_skip_writing_supplement_check(
     payload = ChatActionPayload.parse(payload)
     body = payload.as_dict()
     body["_skip_supplement_check"] = True
+    chapter_key = str(body.get("chapter_key") or "").strip()
+    keys = body.get("chapter_keys") if isinstance(body.get("chapter_keys"), list) else None
+    if chapter_key and not keys:
+        keys = [chapter_key]
     return _action_start_writing(
         home,
         session,
         emit=emit,
         writing_pace=str(body.get("writing_pace") or "").strip(),
-        chapter_keys=body.get("chapter_keys") if isinstance(body.get("chapter_keys"), list) else None,
+        chapter_keys=keys,
         payload=body,
         invoke=invoke,
     )
@@ -1442,6 +1489,270 @@ def _action_configure_chapter(
         if queued:
             reply += " 本次有新要素，可在右侧文档窗口点「待收录要素」收入个人要素库。"
     # 待收录入口改到文档窗口角标，不再往对话里塞 element_library_pending 卡
+    cards = _progress_and_confirm_cards(task, pace=_session_writing_pace(session))
+    return reply, cards
+
+
+def _format_chapter_info_reply(task: WritingTask, chapter_key: str, info: dict) -> str:
+    from report_writing.chat.helpers import _CHAPTER_STATUS_LABEL, _plain_message
+
+    seq = str(info.get("sequence") or "").strip()
+    title = str(info.get("title") or chapter_key).strip()
+    heading = f"{seq} {title}".strip() if seq else title
+    lines = [f"「{heading}」当前配置如下："]
+    if info.get("structure_only"):
+        lines.append("• 类型：仅目录（本章不写正文，由子节展开）")
+    else:
+        lines.append("• 类型：写作章")
+        lines.append(f"• 写作策略：{info.get('compose_label') or info.get('compose') or '混合'}")
+        presence = str(info.get("presence") or "always")
+        lines.append("• 出现条件：" + ("有资料才写" if presence == "if_materials" else "始终撰写"))
+    parent = str(info.get("parent_sequence") or info.get("parent") or "").strip()
+    if parent:
+        lines.append(f"• 父级：{parent}")
+    items = list(info.get("point_items") or [])
+    points = [str(x.get("text") or "").strip() for x in items if isinstance(x, dict) and str(x.get("text") or "").strip()]
+    if not points:
+        points = [str(p).strip() for p in (info.get("points") or []) if str(p).strip()]
+    if points:
+        lines.append(f"• 写作要点（{len(points)}）：")
+        for i, text in enumerate(points[:12], 1):
+            lines.append(f"  {i}. {text[:160]}")
+        if len(points) > 12:
+            lines.append(f"  …另有 {len(points) - 12} 条")
+    else:
+        lines.append("• 写作要点：未配置")
+    describes = str(info.get("describes") or "").strip()
+    lines.append("• 章节说明：" + (describes[:800] if describes else "未配置"))
+    aux = str(info.get("aux_prompt") or "").strip()
+    lines.append("• 补充提示词：" + (aux[:400] if aux else "未配置（不会自动生成，需你口授）"))
+    ref_plain = _plain_message(str(info.get("reference_text") or ""))
+    if ref_plain:
+        lines.append(f"• 参考正文：已有（约 {len(ref_plain)} 字）")
+    else:
+        lines.append("• 参考正文：无")
+    names = list(info.get("element_names") or [])
+    if names:
+        lines.append("• 关联要素：" + "、".join(names[:12]))
+    elif info.get("element_ids"):
+        lines.append(f"• 关联要素：{len(info.get('element_ids') or [])} 个")
+    else:
+        lines.append("• 关联要素：无")
+    st = str(info.get("status") or "").strip()
+    if st:
+        lines.append(f"• 写作状态：{_CHAPTER_STATUS_LABEL.get(st, st)}")
+    if info.get("has_body"):
+        lines.append("• 正文：已有")
+    elif not info.get("structure_only"):
+        lines.append("• 正文：尚未写")
+    lines.append("")
+    lines.append(
+        "要改的话直接说，例如：「改成固定内容输出」「章节说明改成…」「补充提示词加上…」"
+        "「要点改成…」「关联某某要素」「生成章节说明」。"
+    )
+    return "\n".join(lines)
+
+
+def _action_get_chapter_info(
+    home: Path, session: ChatSession, payload: ChatPayload
+) -> tuple[str, list[ChatCard]]:
+    payload = ChatActionPayload.parse(payload)
+    from report_writing.chat.cards import (
+        _chapter_config_snapshot,
+        _chapter_display_body,
+        _doc_window_hint_card,
+        _progress_and_confirm_cards,
+    )
+    from report_writing.chat.session_documents import bind_session_focus_to_task, resolve_task_id
+    from report_writing.chat.writing import _session_writing_pace
+
+    task_id = resolve_task_id(session, payload, require=True)
+    chapter_key = str(payload.get("chapter_key") or "").strip()
+    if not chapter_key:
+        raise ValueError("需要 chapter_key")
+    path = home / "tasks" / task_id
+    store = TaskStore(path)
+    task = store.load()
+    info = _chapter_config_snapshot(task, chapter_key)
+    if not info.get("title") and task.outline is not None:
+        node = next((item for item in task.outline.chapters if item.key == chapter_key), None)
+        if node is None:
+            raise ValueError(f"章节不存在：{chapter_key}")
+    el_names = []
+    want = {str(x).strip() for x in (info.get("element_ids") or []) if str(x).strip()}
+    for el in task.element_nodes or []:
+        eid = str(getattr(el, "id", "") or "").strip()
+        if eid in want:
+            el_names.append(str(getattr(el, "name", "") or eid).strip() or eid)
+    info["element_names"] = el_names
+    ch = next((c for c in (task.chapters or []) if c.key == chapter_key), None)
+    if ch is not None:
+        st = ch.status.value if hasattr(ch.status, "value") else ch.status
+        info["status"] = str(st or "")
+        body, _ = _chapter_display_body(ch)
+        info["has_body"] = bool(str(body or "").strip())
+    else:
+        info["status"] = ""
+        info["has_body"] = False
+    bind_session_focus_to_task(
+        session,
+        task_id,
+        blueprint_id=str(getattr(task, "source_blueprint_id", "") or payload.get("blueprint_id") or "").strip(),
+        writing_task_id=task_id,
+        title=str(getattr(task, "title", "") or ""),
+    )
+    reply = _format_chapter_info_reply(task, chapter_key, info)
+    hint = _doc_window_hint_card(
+        session,
+        task_id=task_id,
+        blueprint_id=str(getattr(task, "source_blueprint_id", "") or "").strip(),
+        title="在文档窗口查看本章",
+        hint=f"已打开「{info.get('title') or chapter_key}」配置。",
+        action="open_doc_window",
+        auto_open=True,
+    )
+    hint.payload = hint.payload.with_updates(chapter_key=chapter_key, tab="config")
+    cards = _progress_and_confirm_cards(task, pace=_session_writing_pace(session))
+    return reply, [hint, *cards]
+
+
+def _action_generate_chapter_describes(
+    home: Path, session: ChatSession, payload: ChatPayload, *, model=None
+) -> tuple[str, list[ChatCard]]:
+    payload = ChatActionPayload.parse(payload)
+    from report_writing.chat.cards import _progress_and_confirm_cards
+    from report_writing.chat.session_documents import bind_session_focus_to_task, resolve_task_id
+    from report_writing.chat.writing import _session_writing_pace
+    from report_writing.domain.chapter_meta_from_points import apply_meta_from_points_to_node
+    from report_writing.domain.elements import sync_brief_from_outline
+    from report_writing.infra.llm import or_live_model
+
+    task_id = resolve_task_id(session, payload, require=True)
+    chapter_key = str(payload.get("chapter_key") or "").strip()
+    if not chapter_key:
+        raise ValueError("需要 chapter_key")
+    path = home / "tasks" / task_id
+    store = TaskStore(path)
+    task = store.load()
+    if task.outline is None:
+        raise ValueError("任务没有大纲")
+    node = next((item for item in task.outline.chapters if item.key == chapter_key), None)
+    if node is None:
+        raise ValueError(f"章节不存在：{chapter_key}")
+    parent_title = ""
+    if node.parent:
+        parent = next((item for item in task.outline.chapters if item.key == node.parent), None)
+        if parent is not None:
+            parent_title = str(parent.title or "")
+    ok = apply_meta_from_points_to_node(
+        node,
+        category=str(getattr(task, "category", "") or "文档"),
+        parent_title=parent_title,
+        model=or_live_model(model),
+    )
+    if not ok:
+        cards = _progress_and_confirm_cards(task, pace=_session_writing_pace(session))
+        return (
+            f"「{node.title or chapter_key}」没有写作要点，没法生成章节说明。先配要点，或直接把说明发给我。",
+            cards,
+        )
+    sync_brief_from_outline(task)
+    store.save(task)
+    from report_writing.services.doc_outline_cache import invalidate_doc_outline_cache
+
+    invalidate_doc_outline_cache(task_id)
+    bind_session_focus_to_task(
+        session,
+        task_id,
+        blueprint_id=str(getattr(task, "source_blueprint_id", "") or "").strip(),
+        writing_task_id=task_id,
+        title=str(getattr(task, "title", "") or ""),
+    )
+    cards = _progress_and_confirm_cards(task, pace=_session_writing_pace(session))
+    return f"「{node.title or chapter_key}」的章节说明已按要点生成：\n{node.describes}", cards
+
+
+def apply_chapter_boilerplate(task, chapter_key: str, source_text: str, *, model=None) -> dict:
+    """根据原文/样板生成套话并写回该章。返回 {title, text, slots, used_llm}。"""
+    from report_writing.domain.boilerplate import apply_boilerplate_to_node, ensure_boilerplate_text
+    from report_writing.infra.llm import or_live_model
+
+    if task.outline is None:
+        raise ValueError("任务没有大纲")
+    node = next((item for item in task.outline.chapters if item.key == chapter_key), None)
+    if node is None:
+        raise ValueError(f"章节不存在：{chapter_key}")
+    source = (source_text or "").strip() or (getattr(node, "reference_text", None) or "").strip()
+    if not source:
+        raise ValueError("没有可用于生成套话的原文。请粘贴一段，或先分析本章得到样板正文。")
+    slots = [
+        item.to_dict() if hasattr(item, "to_dict") else dict(item)
+        for item in (getattr(node, "extracts", None) or [])
+    ]
+    result = ensure_boilerplate_text(
+        source,
+        slots=slots,
+        title=node.title or "",
+        model=or_live_model(model),
+    )
+    apply_boilerplate_to_node(node, result)
+    from report_writing.domain.elements import sync_brief_from_outline
+
+    sync_brief_from_outline(task)
+    return {
+        "title": node.title or chapter_key,
+        "text": node.reference_text,
+        "slots": [
+            item.to_dict() if hasattr(item, "to_dict") else item
+            for item in (getattr(node, "extracts", None) or [])
+        ],
+        "used_llm": bool(result.used_llm),
+    }
+
+
+def _action_generate_chapter_boilerplate(
+    home: Path, session: ChatSession, payload: ChatPayload, *, model=None
+) -> tuple[str, list[ChatCard]]:
+    payload = ChatActionPayload.parse(payload)
+    from report_writing.chat.cards import _progress_and_confirm_cards
+    from report_writing.chat.session_documents import bind_session_focus_to_task, resolve_task_id
+    from report_writing.chat.writing import _session_writing_pace
+    from report_writing.domain.boilerplate import extract_source_from_message
+
+    task_id = resolve_task_id(session, payload, require=True)
+    chapter_key = str(payload.get("chapter_key") or payload.get("chapter_key_hint") or "").strip()
+    if not chapter_key:
+        raise ValueError("需要 chapter_key")
+    path = home / "tasks" / task_id
+    store = TaskStore(path)
+    task = store.load()
+    source = str(payload.get("source_text") or payload.get("text") or payload.get("reference_text") or "").strip()
+    if not source:
+        source = extract_source_from_message(
+            str(payload.get("message") or payload.get("user_message") or payload.get("hint") or "")
+        )
+    applied = apply_chapter_boilerplate(task, chapter_key, source, model=model)
+    store.save(task)
+    from report_writing.services.doc_outline_cache import invalidate_doc_outline_cache
+
+    invalidate_doc_outline_cache(task_id)
+    source_bp = str(getattr(task, "source_blueprint_id", "") or "").strip()
+    if source_bp:
+        invalidate_doc_outline_cache(source_bp)
+    bind_session_focus_to_task(
+        session,
+        task_id,
+        blueprint_id=source_bp or str(payload.get("blueprint_id") or "").strip(),
+        writing_task_id=task_id if source_bp else None,
+        title=str(getattr(task, "title", "") or ""),
+    )
+    title = applied["title"]
+    preview = (applied["text"] or "").strip()
+    if len(preview) > 180:
+        preview = preview[:180] + "…"
+    slot_names = [str(s.get("name") or "").strip() for s in applied.get("slots") or [] if str(s.get("name") or "").strip()]
+    extra = f"槽位：{'、'.join(slot_names[:8])}。" if slot_names else ""
+    reply = f"「{title}」已改成套话填槽。{extra}套话预览：{preview or '（空）'}"
     cards = _progress_and_confirm_cards(task, pace=_session_writing_pace(session))
     return reply, cards
 
@@ -1564,15 +1875,20 @@ def _retry_chapter_display_title(task, chapter_key: str, payload: ChatPayload = 
 
 def _ensure_outline_confirmed_for_retry(path: Path, session: ChatSession, task) -> object:
     """用户已点保存并开写/重写、且大纲已有章节时，落库对齐确认，避免 UI 已确认却仍被闸门拦住。"""
+    from report_writing.chat.wizard_state import mark_wizard_past_outline_confirm
+
     if task is None:
         return task
     if bool(getattr(task, "outline_confirmed", False)):
+        mark_wizard_past_outline_confirm(session)
         return task
     outline = getattr(task, "outline", None)
     if outline is None or not list(getattr(outline, "chapters", None) or []):
         return task
     confirm_outline(path)
-    return TaskStore(path).load()
+    updated = TaskStore(path).load()
+    mark_wizard_past_outline_confirm(session)
+    return updated
 
 
 def _action_retry_chapter(
@@ -1585,193 +1901,39 @@ def _action_retry_chapter(
     model=None,
 ) -> tuple[str, list[ChatCard], list[dict]]:
     payload = ChatActionPayload.parse(payload)
-    from report_writing.chat.cards import _progress_and_confirm_cards
-    from report_writing.chat.helpers import _STEP_LABEL, _emit, _emit_process
-    from report_writing.chat.resource_readiness import export_phase_cards, robot_export_ready
-    from report_writing.chat.session_documents import bind_session_focus_to_task, resolve_task_id
-    from report_writing.chat.writing import _apply_chapter_config, _session_writing_pace
-    from report_writing.services.robots import get_robot
-
-    task_id = resolve_task_id(session, payload, require=True)
-    chapter_key = str(payload.get("chapter_key") or "").strip()
-    if not chapter_key:
+    body = payload.as_dict()
+    key = str(body.get("chapter_key") or "").strip()
+    keys = [str(k).strip() for k in (body.get("chapter_keys") or []) if str(k).strip()]
+    if key and key not in keys:
+        keys = [key, *keys]
+    if not keys:
         raise ValueError("需要 chapter_key")
-
-    path = home / "tasks" / task_id
-    store = TaskStore(path)
-    task = store.load()
-    already_persisted = bool(
-        payload.get("already_persisted") or payload.get("from_doc_window")
-    )
-    configure_fields = (
-        "points",
-        "points_text",
-        "point_items",
-        "keywords",
-        "keywords_text",
-        "describes",
-        "aux_prompt",
-        "reference_text",
-        "fixed_output",
-        "structure_only",
-        "search_terms_separate",
-        "element_ids",
-        "elements",
-    )
-    if not already_persisted and any(key in payload for key in configure_fields):
-        _apply_chapter_config(task, chapter_key, payload, model=model)
-        store.save(task)
-        from report_writing.chat.writing_supplement_check import reset_supplement_gate_for_scope
-
-        reset_supplement_gate_for_scope(session, task.id, [chapter_key])
-    elif already_persisted:
-        task = store.load()
-
-    task = _ensure_outline_confirmed_for_retry(path, session, task)
-    title = _retry_chapter_display_title(task, chapter_key, payload)
-    pace = _session_writing_pace(session)
-    force_skip_sup = bool(
-        payload.get("skip_supplement_check") or payload.get("_skip_supplement_check")
-    )
-    run_keys = [chapter_key]
-    from report_writing.chat.writing_supplement_check import (
-        mark_resolved_gaps_in_registry,
-        mark_supplement_skipped,
-        run_supplement_check,
-        supplement_batch_scope,
-        supplement_check_card,
-        supplement_gate_needed,
-    )
-
-    mark_resolved_gaps_in_registry(session, task, home)
-    if supplement_gate_needed(
-        session, task, run_keys, force_skip=force_skip_sup, home=home
-    ):
-        reply_chk, open_items, _reg = run_supplement_check(
-            home, session, task, run_keys, invoke=invoke
-        )
-        if open_items:
-            card = supplement_check_card(
-                task,
-                run_keys,
-                writing_pace=pace,
-                items=open_items,
-                home=home,
-            )
-            if card is not None:
-                return reply_chk, [card], []
-    elif force_skip_sup:
-        mark_supplement_skipped(session, supplement_batch_scope(task.id, run_keys))
-
-    _emit_process(emit, f"正在重试章节「{title}」…", task_id=task_id, chapter=chapter_key)
-    events: list[dict] = []
-
-    def on_event(event: dict) -> None:
-        events.append(event)
-        _emit(emit, event)
-        if event.get("type") != "step":
-            return
-        step = str(event.get("step") or "")
-        status = str(event.get("status") or "")
-        chap_title = str(event.get("title") or "").strip()
-        if not chap_title or chap_title == chapter_key or "_" in chap_title:
-            chap_title = title
-        label = _STEP_LABEL.get(step, step or "步骤")
-        status_cn = {"running": "进行中", "done": "完成", "skipped": "跳过", "error": "失败"}.get(status, status)
-        result = event.get("result") if isinstance(event.get("result"), dict) else {}
-        note = str((result or {}).get("note") or "").strip()
-        tip = f"{label} · {status_cn}" + (f" · {chap_title}" if chap_title else "")
-        if note:
-            tip = f"{tip} {note}"
-        _emit_process(emit, tip, step=step, status=status, chapter=event.get("chapter") or "")
-        if step == "search" and status in {"done", "skipped"}:
-            from report_writing.chat.helpers import emit_search_element_lines
-
-            emit_search_element_lines(emit, result or {})
-        if step == "write" and status == "running":
-            from report_writing.chat.helpers import emit_write_points_lines
-
-            emit_write_points_lines(emit, result or {})
-
-    from report_writing.chat.session_goal import apply_session_goal_to_task
-    from report_writing.services.pipeline import run_chapters
-
-    if apply_session_goal_to_task(session, task):
-        store.save(task)
+    body["chapter_keys"] = keys
+    body["chapter_key"] = key or keys[0]
+    from report_writing.chat.session_documents import resolve_task_id
 
     try:
-        updated = run_chapters(
-            path,
-            chapter_keys=[chapter_key],
-            include_children=False,
-            robot_id=session.robot_id or "",
-            on_event=on_event,
-            model=model,
-        )
-        _emit_process(emit, f"「{title}」重试完成")
-    except Exception as error:
-        _log.warning("retry_chapter from chat: %s", error)
-        err = {"type": "error", "detail": str(error)}
-        events.append(err)
-        _emit(emit, err)
-        _emit_process(emit, f"重试失败：{error}")
-        updated = store.load()
-        source_bp = str(getattr(updated, "source_blueprint_id", "") or "").strip()
-        bind_session_focus_to_task(
-            session,
-            task_id,
-            blueprint_id=source_bp or str(payload.get("blueprint_id") or "").strip(),
-            writing_task_id=task_id if source_bp else None,
-            title=str(getattr(updated, "title", "") or ""),
-        )
-        detail = str(error).strip() or "未知错误"
-        if "确认目录" in detail:
-            return (
-                f"「{title}」还没法开写：目录还没在任务里确认落盘。"
-                "请在文档窗再点一次「确认大纲并继续」，然后再重试。",
-                _progress_and_confirm_cards(updated, pace=_session_writing_pace(session)),
-                events,
-            )
-        return (
-            f"「{title}」这次没跑成：{detail}",
-            _progress_and_confirm_cards(updated, pace=_session_writing_pace(session)),
-            events,
-        )
-
-    source_bp = str(getattr(updated, "source_blueprint_id", "") or "").strip()
-    bind_session_focus_to_task(
+        task_id = resolve_task_id(session, body, require=True)
+    except Exception:
+        task_id = str(body.get("task_id") or session.task_id or "").strip()
+    if task_id:
+        path = home / "tasks" / task_id
+        try:
+            task = _ensure_outline_confirmed_for_retry(path, session, TaskStore(path).load())
+        except Exception:
+            task = None
+        if task is not None:
+            session.task_id = task_id
+    return _action_start_writing(
+        home,
         session,
-        task_id,
-        blueprint_id=source_bp or str(payload.get("blueprint_id") or "").strip(),
-        writing_task_id=task_id if source_bp else None,
-        title=str(getattr(updated, "title", "") or ""),
+        emit=emit,
+        writing_pace=str(body.get("writing_pace") or "").strip(),
+        chapter_keys=keys,
+        payload=body,
+        invoke=invoke,
+        model=model,
     )
-    session.phase = ChatPhase.CONFIRM_EXPORT.value
-    robot = get_robot(home, session.robot_id) if session.robot_id else None
-    cards = _progress_and_confirm_cards(updated, pace=_session_writing_pace(session))
-    if updated.chapters and all(
-        c.status in {ChapterStatus.CONFIRMED, ChapterStatus.SKIPPED} for c in updated.chapters
-    ):
-        cards.extend(export_phase_cards(home, task_id, robot))
-        return f"「{title}」我重新跑完了，各章也都确认好了，可以导出了。", cards, events
-    applied = any(
-        key in payload
-        for key in (
-            "points_text",
-            "keywords_text",
-            "describes",
-            "aux_prompt",
-            "reference_text",
-            "user_turn",
-        )
-    )
-    if applied and payload.get("aux_prompt"):
-        reply = f"「{title}」已按你补充的要求重写了，展开章节看看效果。"
-    elif applied:
-        reply = f"「{title}」已按新配置重跑，你展开章节看看效果。"
-    else:
-        reply = f"「{title}」已重跑，你展开章节看看效果。"
-    return reply, cards, events
 
 
 def _action_retry_search_chapter(
@@ -1795,7 +1957,10 @@ def _action_retry_search_chapter(
     path = home / "tasks" / task_id
     store = TaskStore(path)
     task = store.load()
-    if any(
+    already_persisted = bool(
+        payload.get("already_persisted") or payload.get("from_doc_window")
+    )
+    if (not already_persisted) and any(
         key in payload
         for key in (
             "points",
@@ -1806,6 +1971,8 @@ def _action_retry_search_chapter(
             "aux_prompt",
             "reference_text",
             "fixed_output",
+            "presence",
+            "compose",
             "structure_only",
             "search_terms_separate",
             "element_ids",
@@ -1814,6 +1981,7 @@ def _action_retry_search_chapter(
     ):
         _apply_chapter_config(task, chapter_key, payload, model=model)
         store.save(task)
+    task = store.load()
 
     title = next((c.title for c in (task.chapters or []) if c.key == chapter_key), chapter_key)
     events: list[dict] = []

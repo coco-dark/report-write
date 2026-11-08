@@ -6,8 +6,8 @@
         <p class="hint">左侧按分类浏览，右侧拓扑连线；键值类要素可配置多行键值。</p>
       </div>
       <div class="head-actions">
-        <el-button type="primary" @click="openCreate">新建要素</el-button>
-        <el-button :loading="saving" @click="saveAll">保存全部</el-button>
+        <a-button type="primary" @click="openCreate">新建要素</a-button>
+        <a-button :loading="saving" @click="saveAll">保存全部</a-button>
       </div>
     </header>
 
@@ -15,7 +15,7 @@
       <aside class="category-panel">
         <div class="panel-head">
           <span class="panel-title">分类</span>
-          <el-input v-model="filterText" clearable size="small" placeholder="搜索" />
+          <a-input v-model:value="filterText" allow-clear size="small" placeholder="搜索" />
         </div>
         <button
           type="button"
@@ -49,7 +49,7 @@
           @click="focusItem(item.id)"
         >
           <span class="item-name">{{ item.name || item.id }}</span>
-          <el-tag size="small" effect="plain">{{ kindShort(item.kind) }}</el-tag>
+          <a-tag size="small">{{ kindShort(item.kind) }}</a-tag>
         </button>
         <div v-if="!filteredItems.length" class="panel-empty">无要素</div>
       </aside>
@@ -69,12 +69,12 @@
           <Controls />
           <MiniMap pannable zoomable />
         </VueFlow>
-        <el-empty v-if="!items.length" class="empty-overlay" description="暂无要素" />
+        <a-empty v-if="!items.length" class="empty-overlay" description="暂无要素"  />
       </div>
     </div>
 
-    <el-dialog v-model="dialogVisible" :title="draft?.id ? '编辑要素' : '新建要素'" width="760px" destroy-on-close>
-      <el-form v-if="draft" label-position="top">
+    <a-modal v-model:open="dialogVisible" :title="draft?.id ? '编辑要素' : '新建要素'" width="760px" destroy-on-close centered>
+      <a-form v-if="draft" layout="vertical">
         <ElementConfigFields
           v-model="draft"
           show-library-meta
@@ -82,16 +82,16 @@
           :category-options="categoryRows.map((r) => r.name).filter((n) => n !== '未分类')"
           :show-node-ref="false"
         />
-        <el-form-item v-if="draft.link_ids?.length" label="已关联要素">
-          <el-tag v-for="lid in draft.link_ids" :key="lid" size="small" style="margin: 2px">{{ linkLabel(lid) }}</el-tag>
-        </el-form-item>
-      </el-form>
+        <a-form-item v-if="draft.link_ids?.length" label="已关联要素">
+          <a-tag v-for="lid in draft.link_ids" :key="lid" size="small" style="margin: 2px">{{ linkLabel(lid) }}</a-tag>
+        </a-form-item>
+      </a-form>
       <template #footer>
-        <el-button v-if="draft?.id" type="danger" plain @click="removeCurrent">删除</el-button>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="applyDraft">确定</el-button>
+        <a-button v-if="draft?.id" @click="removeCurrent" danger>删除</a-button>
+        <a-button @click="dialogVisible = false">取消</a-button>
+        <a-button type="primary" @click="applyDraft">确定</a-button>
       </template>
-    </el-dialog>
+    </a-modal>
   </div>
 </template>
 
@@ -101,7 +101,7 @@ import { Controls } from "@vue-flow/controls";
 import { VueFlow, useVueFlow } from "@vue-flow/core";
 import { MiniMap } from "@vue-flow/minimap";
 import { computed, markRaw, nextTick, onMounted, ref, watch } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage } from "../ui.js";
 
 import { authHeaders, request } from "../api";
 import ElementConfigFields from "../components/ElementConfigFields.vue";
@@ -418,7 +418,7 @@ onMounted(() => {
   gap: 12px;
 }
 .category-panel {
-  border: 1px solid var(--el-border-color-lighter);
+  border: 1px solid var(--ay-line);
   border-radius: 12px;
   background: #fafbfc;
   padding: 10px 8px;
@@ -458,19 +458,19 @@ onMounted(() => {
 }
 .cat-row.active,
 .item-row.active {
-  background: var(--el-color-primary-light-9);
-  color: var(--el-color-primary);
+  background: var(--ay-blue-soft);
+  color: var(--ay-blue);
 }
 .count {
   font-size: 12px;
-  color: var(--el-text-color-secondary);
+  color: var(--ay-muted);
 }
 .panel-divider {
   margin-top: 8px;
   padding: 8px 6px 4px;
   font-size: 12px;
-  color: var(--el-text-color-secondary);
-  border-top: 1px solid var(--el-border-color-extra-light);
+  color: var(--ay-muted);
+  border-top: 1px solid var(--ay-line);
 }
 .item-name {
   flex: 1;
@@ -480,12 +480,12 @@ onMounted(() => {
 }
 .panel-empty {
   font-size: 12px;
-  color: var(--el-text-color-secondary);
+  color: var(--ay-muted);
   padding: 8px;
 }
 .canvas-wrap {
   min-height: 420px;
-  border: 1px solid var(--el-border-color-lighter);
+  border: 1px solid var(--ay-line);
   border-radius: 12px;
   overflow: hidden;
   position: relative;

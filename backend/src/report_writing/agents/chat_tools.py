@@ -176,11 +176,28 @@ def _run_dispatch_switch(state: ChatControlState, name: str, args: dict[str, Any
     reply, cards, events = hit
     _set_cards(state, cards)
     state.events.extend(events or [])
+    wait = _obs_if_supplement_gate(reply, cards)
+    if wait:
+        return wait
     return _dump({"ok": True, "reply_hint": reply,})
 
 
 def _card_types(cards: list[Any] | None) -> set[str]:
     return {str(getattr(c, "type", "") or "").strip() for c in (cards or []) if c}
+
+
+def _obs_if_supplement_gate(reply: str, cards: list[Any] | None) -> str | None:
+    """待补充卡要等用户点「去配置 / 先这样写」，不要当成写作已成功继续排下一步。"""
+    if "writing_supplement_check" not in _card_types(cards):
+        return None
+    return _dump(
+        {
+            "ok": False,
+            "awaiting_user_choice": True,
+            "missing_slots": ["writing_supplements"],
+            "reply_hint": reply,
+        }
+    )
 
 
 def _emit_process(state: ChatControlState, message: str, **extra: Any) -> None:
@@ -578,8 +595,19 @@ def bound_tool_invoke_args(
         return {"payload_json": json.dumps(payload, ensure_ascii=False)}
     if action == "pause_writing":
         return {}
+    if action == "generate_chapter_boilerplate":
+        return {
+            "chapter_key": str(payload.get("chapter_key") or "").strip(),
+            "source_text": str(
+                payload.get("source_text") or payload.get("reference_text") or payload.get("text") or ""
+            ).strip(),
+            "task_id": str(payload.get("task_id") or "").strip(),
+            "message": str(payload.get("message") or msg).strip(),
+        }
     if action in {
         "configure_chapter",
+        "get_chapter_info",
+        "generate_chapter_describes",
         "add_chapter_element",
         "associate_elements",
         "collect_to_element_library",
@@ -1437,7 +1465,7 @@ def build_chat_tools(state: ChatControlState) -> list:
         _set_cards(state, cards)
         return _dump({"ok": True, "reply_hint": reply})
 
-    @tool("start_writing", description="何时：用户说开始写、写这一章（已点明章节）。缺了：没说哪一章就问或让用户在文档窗勾选，不要猜第一章；多章未指定 pace 先澄清「一次写完 / 写一章看一章」。不要：路径未定不要硬开写；「改名叫 X 然后开始写」须先定名再开写。")
+    @tool("start_writing", description="何时：用户说开始写、写这一章、「开始写作章节[序号 标题]」（已点明章节）。缺了：没说哪一章就问或让用户在文档窗勾选，不要猜第一章；多章未指定 pace 先澄清「一次写完 / 写一章看一章」。不要：路径未定不要硬开写；「改名叫 X 然后开始写」须先定名再开写。")
     def start_writing(writing_pace: Annotated[str, Field(description="可选。batch=一次写完；step=写一章看一章。多章未指定时先问，不要猜。")] = "", chapter_keys_json: Annotated[str, Field(description="可选。章节 key 的 JSON 数组。没点名章节时不要猜第一章，用会话勾选/焦点章或先问。")] = "[]") -> str:
         """
 
@@ -1480,6 +1508,9 @@ def build_chat_tools(state: ChatControlState) -> list:
         )
         state.events.extend(events or [])
         _set_cards(state, cards)
+        wait = _obs_if_supplement_gate(reply, cards)
+        if wait:
+            return wait
         types = _card_types(cards)
         if types & {"analysis_gate", "chapter_picker", "intent_clarify"}:
             missing: list[str] = []
@@ -1677,19 +1708,75 @@ def build_chat_tools(state: ChatControlState) -> list:
         _set_cards(state, cards)
         return _dump({"ok": True, "reply_hint": reply})
 
-    @tool("configure_chapter", description="何时：打开或保存某章配置（要点、关键词、说明、辅助提示词）。缺了：问配置哪一章；字段从用户话提取，没有的不要编。")
-    def configure_chapter(payload_json: Annotated[str, Field(description="JSON。必填 chapter_key；task_id 可从会话取。可选 points_text/keywords_text/describes/aux_prompt/reference_text，没有的不要编。")] = "{}") -> str:
-        """
+    @tool(
+        "get_chapter_info",
+        description=(
+            "何时：用户要查看某章配置（要点、章节说明、写作策略、参考正文、关联要素、是否已写）。"
+            "不要：用本工具改配置或开写；改配置用 configure_chapter。"
+            "缺了：问看哪一章；用户说「这章/本章」且文档窗有焦点章时可用焦点章。"
+        ),
+    )
+    def get_chapter_info(
+        payload_json: Annotated[
+            str,
+            Field(description="JSON。必填 chapter_key；task_id 可从会话取。可选 message 用于从原话解析章节号。"),
+        ] = "{}",
+    ) -> str:
+        from report_writing.chat.actions import _action_get_chapter_info
+        from report_writing.chat.chapter_resolve import (
+            pick_focus_chapter_key_extended,
+            resolve_chapter_key_from_message,
+        )
+        from report_writing.chat.helpers import _load_task
 
-        何时：打开或保存某章配置（要点、关键词、说明、辅助提示词）。
+        payload = ChatActionPayload.parse(payload_json).as_dict()
+        ck = str(payload.get("chapter_key") or payload.get("chapter_key_hint") or "").strip()
+        hint = str(payload.get("message") or state.last_user_message or "").strip()
+        tid = str(payload.get("task_id") or state.session.task_id or "").strip()
+        ui = (state.user_action or "").strip() == "get_chapter_info"
+        task = _load_task(state.home, tid) if tid else None
+        if task is not None and not ck:
+            ck = resolve_chapter_key_from_message(task, hint) or ""
+            if not ck:
+                ck = pick_focus_chapter_key_extended(state.session, task, hint) or ""
+        if not ck and not ui:
+            return _obs_fail(
+                missing_slots=["chapter_key"],
+                reply_hint="查看章节配置要先说清是哪一章，也可以先在文档窗点开那一章。",
+            )
+        if not ck:
+            return _obs_fail(missing_slots=["chapter_key"], reply_hint="查看章节配置要先说清是哪一章。")
+        payload["chapter_key"] = ck
+        if tid:
+            payload["task_id"] = tid
+        _tool_begin(state, "get_chapter_info")
+        reply, cards = _action_get_chapter_info(state.home, state.session, payload)
+        _set_cards(state, cards)
+        return _dump({"ok": True, "reply_hint": reply})
 
-        必填：payload_json 含 chapter_key（task_id 默认可从会话取）。
-
-        可选：points_text、keywords_text、describes、aux_prompt、reference_text。
-
-        缺了：问配置哪一章；字段从用户话提取，没有的不要编。
-
-        """
+    @tool(
+        "configure_chapter",
+        description=(
+            "何时：保存某章配置。可改：标题、序号、父级、仅目录、写作策略 compose"
+            "（source_only/template_fill/hybrid/auto_generate/fixed）、要点 points 或 point_items、"
+            "章节说明 describes、补充提示词 aux_prompt、参考正文 reference_text、关联要素 element_ids。"
+            "缺了：问配置哪一章；只填用户明确说的字段，没有的不要编、不要清空未提到的项。"
+            "不要：用本工具查看配置（用 get_chapter_info）；不要自动生成补充提示词。"
+        ),
+    )
+    def configure_chapter(
+        payload_json: Annotated[
+            str,
+            Field(
+                description=(
+                    "JSON。必填 chapter_key。可选 title/sequence/parent/structure_only/compose/presence/"
+                    "points_text 或 point_items/describes/aux_prompt/reference_text/element_ids。"
+                    "compose 口语：资料驱动、模板填槽、混合、自动生成、固定内容输出。"
+                    "没有的不要编。"
+                )
+            ),
+        ] = "{}",
+    ) -> str:
         from report_writing.chat import _action_configure_chapter
 
         payload = ChatActionPayload.parse(payload_json).as_dict()
@@ -1712,6 +1799,112 @@ def build_chat_tools(state: ChatControlState) -> list:
 
             }
         )
+
+    @tool(
+        "generate_chapter_describes",
+        description=(
+            "何时：用户要按本章写作要点生成「章节说明」（风格/格式/排版注意，分点 1. 2.）。"
+            "不要：生成补充提示词；不要覆盖用户刚口述的说明，除非用户明确说重新生成。"
+            "缺了：问哪一章；没有要点时请用户先配要点或直接口述说明。"
+        ),
+    )
+    def generate_chapter_describes(
+        payload_json: Annotated[
+            str,
+            Field(description="JSON。必填 chapter_key；task_id 可从会话取。"),
+        ] = "{}",
+    ) -> str:
+        from report_writing.chat.actions import _action_generate_chapter_describes
+        from report_writing.chat.chapter_resolve import (
+            pick_focus_chapter_key_extended,
+            resolve_chapter_key_from_message,
+        )
+        from report_writing.chat.helpers import _load_task
+
+        payload = ChatActionPayload.parse(payload_json).as_dict()
+        ck = str(payload.get("chapter_key") or payload.get("chapter_key_hint") or "").strip()
+        hint = str(payload.get("message") or state.last_user_message or "").strip()
+        tid = str(payload.get("task_id") or state.session.task_id or "").strip()
+        ui = (state.user_action or "").strip() == "generate_chapter_describes"
+        task = _load_task(state.home, tid) if tid else None
+        if task is not None and not ck:
+            ck = resolve_chapter_key_from_message(task, hint) or ""
+            if not ck:
+                ck = pick_focus_chapter_key_extended(state.session, task, hint) or ""
+        if not ck and not ui:
+            return _obs_fail(
+                missing_slots=["chapter_key"],
+                reply_hint="生成章节说明要先说清是哪一章。",
+            )
+        payload["chapter_key"] = ck
+        if tid:
+            payload["task_id"] = tid
+        _tool_begin(state, "generate_chapter_describes")
+        reply, cards = _action_generate_chapter_describes(
+            state.home, state.session, payload, model=state.chat_model
+        )
+        _set_cards(state, cards)
+        return _dump({"ok": True, "reply_hint": reply})
+
+    @tool(
+        "generate_chapter_boilerplate",
+        description=(
+            "何时：用户要把某章做成套话正文（固定话术里嵌 {{槽名}}），或根据蓝本/粘贴原文生成套话。"
+            "缺了：问哪一章；该章没有参考正文且用户也没贴原文时，请用户粘贴一段或先分析本章。"
+            "不要：与 generate_freeform_points（写作要点）或 verbatim 整段照抄混淆。"
+        ),
+    )
+    def generate_chapter_boilerplate(
+        chapter_key: Annotated[str, Field(description="可选。哪一章；可从当前焦点或用户说的序号取。")] = "",
+        source_text: Annotated[str, Field(description="可选。用户粘贴的原文；空则用该章已有样板/参考正文。")] = "",
+        task_id: Annotated[str, Field(description="可选。默认可从会话取。")] = "",
+        message: Annotated[str, Field(description="可选。用户原话，用于抽出粘贴的原文。")] = "",
+    ) -> str:
+        from report_writing.chat.actions import _action_generate_chapter_boilerplate
+        from report_writing.chat.chapter_resolve import (
+            pick_focus_chapter_key_extended,
+            resolve_chapter_key_from_message,
+        )
+        from report_writing.chat.helpers import _load_task
+
+        hint = str(message or state.last_user_message or "").strip()
+        tid = (task_id or state.session.task_id or "").strip()
+        ck = (chapter_key or "").strip()
+        ui = (state.user_action or "").strip() == "generate_chapter_boilerplate"
+        task = _load_task(state.home, tid) if tid else None
+        if task is not None and not ck:
+            ck = resolve_chapter_key_from_message(task, hint) or ""
+            if not ck:
+                ck = pick_focus_chapter_key_extended(state.session, task, hint) or ""
+        if not ck and not ui:
+            return _obs_fail(
+                missing_slots=["chapter_key"],
+                reply_hint="生成套话要先说清是哪一章，也可以先在文档窗点开那一章。",
+            )
+        if not ck:
+            return _obs_fail(
+                missing_slots=["chapter_key"],
+                reply_hint="生成套话要先说清是哪一章。",
+            )
+        _tool_begin(state, "generate_chapter_boilerplate")
+        try:
+            reply, cards = _action_generate_chapter_boilerplate(
+                state.home,
+                state.session,
+                {
+                    "task_id": tid,
+                    "chapter_key": ck,
+                    "source_text": source_text,
+                    "message": hint,
+                },
+                model=state.chat_model,
+            )
+        except ValueError as error:
+            _tool_done(state, "generate_chapter_boilerplate")
+            return _obs_fail(reply_hint=str(error) or "生成套话还缺原文或章节。")
+        _tool_done(state, "generate_chapter_boilerplate")
+        _set_cards(state, cards)
+        return _dump({"ok": True, "reply_hint": reply})
 
     @tool("add_chapter_element", description="何时：为某章新建要素草稿（键值、固定文案、文件、引用槽位等）。缺了：从用户原话拆 kind/名称/哪一章；拆不出就问，不要留空让用户手填、不要编造章。不要：与 collect_to_element_library（收入个人库）混淆。")
     def add_chapter_element(payload_json: Annotated[str, Field(description="必填 JSON。至少 kind、name；chapter_key 或当前焦点章。从原话填全，拆不出就问，不要编章。")]) -> str:
@@ -1787,7 +1980,7 @@ def build_chat_tools(state: ChatControlState) -> list:
             }
         )
 
-    @tool("associate_elements", description="何时：把已有要素勾选关联到某章（打开关联面板）。缺了：问关联到哪一章、哪个要素，不要猜。不要：用本工具新建要素。")
+    @tool("associate_elements", description="何时：把已有要素勾选关联到某章（打开关联面板）。用户说「关联要素[序号 标题]」或点关联按钮时用。缺了：问关联到哪一章、哪个要素，不要猜。不要：用本工具新建要素。")
     def associate_elements(payload_json: Annotated[str, Field(description="JSON。须能确定 chapter_key（或焦点章）；可选 element_id/name。缺了就问。")] = "") -> str:
         """
 
@@ -2055,7 +2248,7 @@ def build_chat_tools(state: ChatControlState) -> list:
             fail_hint="资料库是放资料包的地方。请打开侧栏「资料库」管理资料包；要素「文件」可上传并手动解析。",
         )
 
-    @tool("retry_chapter", description="何时：按最新配置重试某章（重新检索+写+检）。缺了：问重试哪一章。")
+    @tool("retry_chapter", description="何时：按最新配置重试某章（重新检索+写+检）。用户说「重写章节[序号 标题]」或点重写按钮时用。缺了：问重试哪一章。")
     def retry_chapter(payload_json: Annotated[str, Field(description="必填 JSON。至少 chapter_key；task_id 可从会话取。可选 aux_prompt/user_turn 改写要求。")]) -> str:
         """
 
@@ -2100,6 +2293,9 @@ def build_chat_tools(state: ChatControlState) -> list:
         )
         state.events.extend(events or [])
         _set_cards(state, cards)
+        wait = _obs_if_supplement_gate(reply, cards)
+        if wait:
+            return wait
         return _dump({"ok": True, "reply_hint": reply})
 
     @tool("retry_search_chapter", description="何时：只重试某章检索与证据采纳，不写正文（方便改关键词后再写）。缺了：问重试检索的是哪一章。")
@@ -3319,6 +3515,9 @@ def build_chat_tools(state: ChatControlState) -> list:
         pause_writing,
         confirm_all_chapters,
         configure_chapter,
+        get_chapter_info,
+        generate_chapter_describes,
+        generate_chapter_boilerplate,
         add_chapter_element,
         associate_elements,
         dissociate_chapter_element,

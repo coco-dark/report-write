@@ -42,8 +42,84 @@ def ensure_element_ids(elements: list[ElementNode]) -> list[ElementNode]:
     return cleaned
 
 
+def union_element_ids(*seqs) -> list[str]:
+    """保序去重合并章节/要点上的要素 id。"""
+    out: list[str] = []
+    seen: set[str] = set()
+    for seq in seqs:
+        for raw in list(seq or []):
+            eid = str(raw or "").strip()
+            if not eid or eid in seen:
+                continue
+            seen.add(eid)
+            out.append(eid)
+    return out
+
+
+def referenced_element_ids(task: WritingTask) -> set[str]:
+    """大纲章关联 + 要点行关联，仍在用的要素 id。"""
+    found: set[str] = set()
+    outline = getattr(task, "outline", None)
+    for node in list(getattr(outline, "chapters", None) or []):
+        for raw in list(getattr(node, "element_ids", None) or []):
+            eid = str(raw or "").strip()
+            if eid:
+                found.add(eid)
+        for row in list(getattr(node, "point_items", None) or []):
+            if not isinstance(row, dict):
+                continue
+            eid = str(row.get("element_id") or "").strip()
+            if eid:
+                found.add(eid)
+    return found
+
+
 def save_elements(task: WritingTask, elements: list[ElementNode]) -> WritingTask:
-    task.element_nodes = ensure_element_ids(elements)
+    incoming = ensure_element_ids(elements)
+    existing = [
+        item
+        for item in list(getattr(task, "element_nodes", None) or [])
+        if str(getattr(item, "id", "") or "").strip()
+    ]
+    # 空列表不覆盖：切会话/未 hydrate 时前端曾把整表清空
+    if not incoming:
+        if existing:
+            return task
+        task.element_nodes = []
+        _sync_elements_table(task.id, task.element_nodes)
+        return task
+    merged: dict[str, ElementNode] = {
+        str(item.id).strip(): item for item in existing if str(item.id or "").strip()
+    }
+    incoming_ids = set()
+    for item in incoming:
+        eid = str(getattr(item, "id", "") or "").strip()
+        if not eid:
+            continue
+        incoming_ids.add(eid)
+        merged[eid] = item
+    referenced = referenced_element_ids(task)
+    for eid in list(merged.keys()):
+        if eid not in incoming_ids and eid not in referenced:
+            merged.pop(eid, None)
+    # 保序：已有 → 新来
+    ordered: list[ElementNode] = []
+    seen: set[str] = set()
+    for item in existing:
+        eid = str(item.id or "").strip()
+        node = merged.get(eid)
+        if node is None or eid in seen:
+            continue
+        seen.add(eid)
+        ordered.append(node)
+    for item in incoming:
+        eid = str(getattr(item, "id", "") or "").strip()
+        node = merged.get(eid)
+        if node is None or eid in seen:
+            continue
+        seen.add(eid)
+        ordered.append(node)
+    task.element_nodes = ordered
     _sync_elements_table(task.id, task.element_nodes)
     return task
 
@@ -99,13 +175,21 @@ def sync_brief_from_outline(task: WritingTask) -> None:
         write_points = points_for_writing_from_node(node)
         chapter.points = write_points
         chapter.generate = "\n".join(write_points)
-        chapter.describes = describes_for_writing_from_node(node)
+        chapter.point_items = [
+            dict(row)
+            for row in list(getattr(node, "point_items", None) or [])
+            if isinstance(row, dict) and str(row.get("text") or row.get("label") or "").strip()
+        ]
+        chapter.describes = describes_for_writing_from_node(node) or str(getattr(node, "describes", "") or "").strip()
         chapter.aux_prompt = aux_prompt_for_writing_from_node(node)
         chapter.keywords = []
         chapter.reference_text = (getattr(node, "reference_text", None) or "").strip()
         chapter.structure_only = bool(getattr(node, "structure_only", False))
         chapter.fixed_output = bool(getattr(node, "fixed_output", False))
         chapter.search_terms_separate = bool(getattr(node, "search_terms_separate", False))
+        from report_writing.domain.chapter_compose import copy_compose_fields
+
+        copy_compose_fields(chapter, node)
         if chapter.fixed_output:
             chapter.keywords = []
         node_blocks = list(getattr(node, "content_blocks", None) or [])

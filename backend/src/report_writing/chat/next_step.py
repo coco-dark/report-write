@@ -190,7 +190,7 @@ def _writing_step(
             out,
             label="已暂停，可继续或改章",
             detail="writing_paused：用户说继续则 start_writing；改章用 configure_chapter / retry_chapter。",
-            tools=["start_writing", "get_writing_status", "configure_chapter"],
+            tools=["start_writing", "get_writing_status", "get_chapter_info", "configure_chapter"],
         )
 
     tid = (session.task_id or "").strip()
@@ -212,7 +212,7 @@ def _writing_step(
                     out,
                     label="处理需人工介入的章节",
                     detail=f"章 {ch.key} 需人工：get_writing_status，configure_chapter 或 retry_chapter。",
-                    tools=["get_writing_status", "configure_chapter", "retry_chapter"],
+                    tools=["get_writing_status", "get_chapter_info", "configure_chapter", "retry_chapter"],
                 )
             if st in {ChapterStatus.SEARCHING.value, ChapterStatus.WRITING.value, ChapterStatus.CHECKING.value}:
                 return _fill(
@@ -233,7 +233,7 @@ def _writing_step(
                 out,
                 label=f"确认本章{' · ' + title if title else ''}",
                 detail=f"进度卡有待确认章（{key}）：用户说确认则 confirm_chapter；要改要点/要素用 configure_chapter、add_chapter_element。",
-                tools=["confirm_chapter", "configure_chapter", "add_chapter_element", "retry_chapter"],
+                tools=["confirm_chapter", "get_chapter_info", "configure_chapter", "add_chapter_element", "retry_chapter"],
                 ui_action="confirm_chapter",
             )
         confirmed = sum(
@@ -255,7 +255,7 @@ def _writing_step(
         out,
         label="看写作进度卡片",
         detail="写作中：get_writing_status；改章 configure_chapter；加要素 add_chapter_element。",
-        tools=["get_writing_status", "configure_chapter", "add_chapter_element"],
+        tools=["get_writing_status", "get_chapter_info", "configure_chapter", "add_chapter_element"],
     )
 
 

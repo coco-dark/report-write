@@ -102,7 +102,7 @@
 
 <script setup>
 import { onMounted, ref } from "vue";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessage, ElMessageBox } from "../ui.js";
 
 import { authHeaders, request } from "../api";
 import MaterialsSlotCards from "../components/MaterialsSlotCards.vue";

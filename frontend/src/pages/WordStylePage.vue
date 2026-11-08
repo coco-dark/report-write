@@ -5,7 +5,7 @@
         <h1>Word 样式</h1>
         <p>个人 Word 样式（仅本账号）· 配置字号、字体与目录；在「机器人」中绑定后，对话导出可选用。</p>
       </div>
-      <el-button type="primary" round @click="openCreate">新建样式</el-button>
+      <a-button type="primary" @click="openCreate" shape="round">新建样式</a-button>
     </header>
 
     <div v-if="loading" class="hint">加载中…</div>
@@ -27,16 +27,16 @@
         </div>
       </article>
     </div>
-    <el-empty v-if="!loading && !styles.length" description="还没有 Word 样式" :image-size="72" />
+    <a-empty v-if="!loading && !styles.length" description="还没有 Word 样式" :image-style="{ height: 72 }"  />
 
     <section v-if="current" class="detail">
       <div class="detail-head">
         <h2>{{ current.name }}</h2>
         <div class="detail-actions">
-          <el-button size="small" @click="openEdit">编辑</el-button>
-          <el-button size="small" type="danger" plain :disabled="current.id === 'ws_default'" @click="removeCurrent">
+          <a-button size="small" @click="openEdit">编辑</a-button>
+          <a-button size="small" :disabled="current.id === 'ws_default'" @click="removeCurrent" danger>
             删除
-          </el-button>
+          </a-button>
         </div>
       </div>
       <ul v-if="detail" class="meta-list">
@@ -48,107 +48,107 @@
       </ul>
     </section>
 
-    <el-dialog v-model="dialog" :title="form.id ? '编辑 Word 样式' : '新建 Word 样式'" width="640px" destroy-on-close>
-      <el-form label-position="top">
-        <el-form-item label="名称">
-          <el-input v-model="form.name" placeholder="如：安评正文 A4" />
-        </el-form-item>
-        <el-form-item label="说明">
-          <el-input v-model="form.desc" type="textarea" :rows="2" />
-        </el-form-item>
-        <el-row :gutter="12">
-          <el-col :span="12">
-            <el-form-item label="正文字体">
-              <el-input v-model="form.settings.body_font" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="正文字号 (pt)">
-              <el-input-number v-model="form.settings.body_pt" :min="8" :max="24" :step="0.5" style="width: 100%" />
-            </el-form-item>
-          </el-col>
-        </el-row>
-        <el-row :gutter="12">
-          <el-col :span="12">
-            <el-form-item label="标题字体">
-              <el-input v-model="form.settings.title_font" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="段内小标题 (pt)">
-              <el-input-number v-model="form.settings.subheading_pt" :min="8" :max="18" :step="0.5" style="width: 100%" />
-            </el-form-item>
-          </el-col>
-        </el-row>
-        <el-row :gutter="12">
-          <el-col :span="8">
-            <el-form-item label="报告标题 (pt)">
-              <el-input-number v-model="form.settings.report_title_pt" :min="14" :max="28" style="width: 100%" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="8">
-            <el-form-item label="目录标题 (pt)">
-              <el-input-number v-model="form.settings.toc_title_pt" :min="12" :max="22" style="width: 100%" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="8">
-            <el-form-item label="目录条目 (pt)">
-              <el-input-number v-model="form.settings.toc_entry_pt" :min="10" :max="16" style="width: 100%" />
-            </el-form-item>
-          </el-col>
-        </el-row>
-        <el-form-item label="章标题字号（按大纲层级 1–6）">
+    <a-modal v-model:open="dialog" :title="form.id ? '编辑 Word 样式' : '新建 Word 样式'" width="640px" destroy-on-close centered>
+      <a-form layout="vertical">
+        <a-form-item label="名称">
+          <a-input v-model:value="form.name" placeholder="如：安评正文 A4" />
+        </a-form-item>
+        <a-form-item label="说明">
+          <a-textarea v-model:value="form.desc" :rows="2" />
+        </a-form-item>
+        <a-row :gutter="12">
+          <a-col :span="12">
+            <a-form-item label="正文字体">
+              <a-input v-model:value="form.settings.body_font" />
+            </a-form-item>
+          </a-col>
+          <a-col :span="12">
+            <a-form-item label="正文字号 (pt)">
+              <a-input-number v-model:value="form.settings.body_pt" :min="8" :max="24" :step="0.5" style="width: 100%"  />
+            </a-form-item>
+          </a-col>
+        </a-row>
+        <a-row :gutter="12">
+          <a-col :span="12">
+            <a-form-item label="标题字体">
+              <a-input v-model:value="form.settings.title_font" />
+            </a-form-item>
+          </a-col>
+          <a-col :span="12">
+            <a-form-item label="段内小标题 (pt)">
+              <a-input-number v-model:value="form.settings.subheading_pt" :min="8" :max="18" :step="0.5" style="width: 100%"  />
+            </a-form-item>
+          </a-col>
+        </a-row>
+        <a-row :gutter="12">
+          <a-col :span="8">
+            <a-form-item label="报告标题 (pt)">
+              <a-input-number v-model:value="form.settings.report_title_pt" :min="14" :max="28" style="width: 100%"  />
+            </a-form-item>
+          </a-col>
+          <a-col :span="8">
+            <a-form-item label="目录标题 (pt)">
+              <a-input-number v-model:value="form.settings.toc_title_pt" :min="12" :max="22" style="width: 100%"  />
+            </a-form-item>
+          </a-col>
+          <a-col :span="8">
+            <a-form-item label="目录条目 (pt)">
+              <a-input-number v-model:value="form.settings.toc_entry_pt" :min="10" :max="16" style="width: 100%"  />
+            </a-form-item>
+          </a-col>
+        </a-row>
+        <a-form-item label="章标题字号（按大纲层级 1–6）">
           <div class="level-row">
             <label v-for="lv in 6" :key="lv">
               <span>{{ lv }}级</span>
-              <el-input-number
-                v-model="form.settings.chapter_title_pt[lv]"
-                :min="10"
-                :max="22"
-                :step="0.5"
-                size="small"
-              />
+              <a-input-number
+ v-model:value="form.settings.chapter_title_pt[lv]"
+ :min="10"
+ :max="22"
+ :step="0.5"
+ size="small"
+  />
             </label>
           </div>
-        </el-form-item>
-        <el-row :gutter="12">
-          <el-col :span="8">
-            <el-form-item label="行距">
-              <el-input-number v-model="form.settings.line_spacing" :min="1" :max="2.5" :step="0.1" style="width: 100%" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="8">
-            <el-form-item label="首行缩进 (cm)">
-              <el-input-number
-                v-model="form.settings.first_line_indent_cm"
-                :min="0"
-                :max="2"
-                :step="0.1"
-                style="width: 100%"
-              />
-            </el-form-item>
-          </el-col>
-          <el-col :span="8">
-            <el-form-item label="目录缩进 (cm)">
-              <el-input-number v-model="form.settings.toc_indent_cm" :min="0" :max="2" :step="0.1" style="width: 100%" />
-            </el-form-item>
-          </el-col>
-        </el-row>
-        <el-form-item label="导出含目录">
-          <el-switch v-model="form.settings.include_toc" />
-        </el-form-item>
-      </el-form>
+        </a-form-item>
+        <a-row :gutter="12">
+          <a-col :span="8">
+            <a-form-item label="行距">
+              <a-input-number v-model:value="form.settings.line_spacing" :min="1" :max="2.5" :step="0.1" style="width: 100%"  />
+            </a-form-item>
+          </a-col>
+          <a-col :span="8">
+            <a-form-item label="首行缩进 (cm)">
+              <a-input-number
+ v-model:value="form.settings.first_line_indent_cm"
+ :min="0"
+ :max="2"
+ :step="0.1"
+ style="width: 100%"
+  />
+            </a-form-item>
+          </a-col>
+          <a-col :span="8">
+            <a-form-item label="目录缩进 (cm)">
+              <a-input-number v-model:value="form.settings.toc_indent_cm" :min="0" :max="2" :step="0.1" style="width: 100%"  />
+            </a-form-item>
+          </a-col>
+        </a-row>
+        <a-form-item label="导出含目录">
+          <a-switch v-model:checked="form.settings.include_toc"  />
+        </a-form-item>
+      </a-form>
       <template #footer>
-        <el-button @click="dialog = false">取消</el-button>
-        <el-button type="primary" :loading="busy" @click="submitForm">保存</el-button>
+        <a-button @click="dialog = false">取消</a-button>
+        <a-button type="primary" :loading="busy" @click="submitForm">保存</a-button>
       </template>
-    </el-dialog>
+    </a-modal>
   </div>
 </template>
 
 <script setup>
 import { computed, onMounted, reactive, ref } from "vue";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessage, ElMessageBox } from "../ui.js";
 
 import { request } from "../api";
 

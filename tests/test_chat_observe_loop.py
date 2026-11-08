@@ -315,6 +315,18 @@ def test_configure_chapter_missing_key(tmp_path: Path):
     assert "chapter_key" in (data.get("missing_slots") or [])
 
 
+def test_get_chapter_info_tool_bound_and_missing_key(tmp_path: Path):
+    session = ChatSession(id="s-info-empty")
+    state = ChatControlState(home=tmp_path, session=session)
+    tools = {t.name: t for t in build_chat_tools(state)}
+    assert "get_chapter_info" in tools
+    assert "generate_chapter_describes" in tools
+    raw = tools["get_chapter_info"].invoke({"payload_json": "{}"})
+    data = json.loads(raw)
+    assert data.get("ok") is False
+    assert "chapter_key" in (data.get("missing_slots") or [])
+
+
 def test_oral_entry_skips_domain_claim_modules():
     """口语主路径模块不得再导出 try_* 认领入口。"""
     import report_writing.chat.tool_dispatch as intent_dispatch

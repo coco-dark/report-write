@@ -19,31 +19,30 @@
     </div>
 
     <div v-else-if="step === 'meta'" class="wizard-pane">
-      <el-input
-        v-model="title"
+      <a-input
+        v-model:value="title"
         placeholder="蓝本名称，例如：XX 项目安全预评价"
         :disabled="disabled || busy || metaSubmitLock"
         @keydown.enter.prevent="submitMeta"
       />
-      <el-button
-        class="chat-action-btn"
-        type="primary"
-        round
-        :loading="busy"
-        :disabled="disabled || busy || metaSubmitLock || !title.trim()"
-        @click.prevent="submitMeta"
-      >
+      <a-button
+ class="chat-action-btn"
+ type="primary"
+ :loading="busy"
+ :disabled="disabled || busy || metaSubmitLock || !title.trim()"
+ @click.prevent="submitMeta"
+ shape="round">
         创建并下一步
-      </el-button>
+      </a-button>
     </div>
 
     <div v-else-if="step === 'upload'" class="wizard-pane">
       <p class="hint">上传样板 Word 或 PDF，用于提取目录与分析要点。</p>
-      <el-upload :show-file-list="false" :http-request="uploadSample" :disabled="disabled || busy">
-        <el-button class="chat-action-btn" type="primary" round :loading="busy" :disabled="disabled">
+      <a-upload :show-file-list="false" :custom-request="uploadSample" :disabled="disabled || busy">
+        <a-button class="chat-action-btn" type="primary" :loading="busy" :disabled="disabled" shape="round">
           上传样板
-        </el-button>
-      </el-upload>
+        </a-button>
+      </a-upload>
       <ul v-if="processLines.length" class="mini-log">
         <li v-for="(line, i) in processLines" :key="i">{{ line }}</li>
       </ul>
@@ -52,26 +51,24 @@
     <div v-else-if="step === 'outline'" class="wizard-pane">
       <p class="hint">从样板提取章节目录（过程会显示在下方）。</p>
       <div class="wizard-outline-actions">
-        <el-button
-          v-if="!isSelectedMode"
-          class="chat-action-btn"
-          round
-          :loading="busy"
-          :disabled="disabled || busy || outlineUiBusy"
-          @click="requestReUpload"
-        >
+        <a-button
+ v-if="!isSelectedMode"
+ class="chat-action-btn"
+ :loading="busy"
+ :disabled="disabled || busy || outlineUiBusy"
+ @click="requestReUpload"
+ shape="round">
           重新上传样板
-        </el-button>
-        <el-button
-          class="chat-action-btn"
-          type="primary"
-          round
-          :loading="outlineUiBusy"
-          :disabled="disabled || outlineUiBusy || outlineAlreadyExtracted"
-          @click="runOutline"
-        >
+        </a-button>
+        <a-button
+ class="chat-action-btn"
+ type="primary"
+ :loading="outlineUiBusy"
+ :disabled="disabled || outlineUiBusy || outlineAlreadyExtracted"
+ @click="runOutline"
+ shape="round">
           提取目录
-        </el-button>
+        </a-button>
       </div>
       <ul v-if="processLines.length" class="mini-log">
         <li v-for="(line, i) in processLines" :key="i">{{ line }}</li>
@@ -87,36 +84,33 @@
       <p v-if="!taskOutline?.chapters?.length && !isSelectedMode" class="hint">目录加载中或为空，可重新提取。</p>
       <p v-else-if="!taskOutline?.chapters?.length && isSelectedMode" class="hint">目录加载中或为空，请换一份已有目录的蓝本。</p>
       <div class="wizard-outline-actions">
-        <el-button
-          v-if="!isSelectedMode"
-          class="chat-action-btn"
-          round
-          :loading="busy"
-          :disabled="disabled || busy || outlineExtractMarked"
-          @click="requestReUpload"
-        >
+        <a-button
+ v-if="!isSelectedMode"
+ class="chat-action-btn"
+ :loading="busy"
+ :disabled="disabled || busy || outlineExtractMarked"
+ @click="requestReUpload"
+ shape="round">
           重新上传样板
-        </el-button>
-        <el-button
-          v-if="!isSelectedMode"
-          class="chat-action-btn"
-          round
-          :loading="busy"
-          :disabled="disabled || busy || outlineExtractMarked"
-          @click="requestReExtract"
-        >
+        </a-button>
+        <a-button
+ v-if="!isSelectedMode"
+ class="chat-action-btn"
+ :loading="busy"
+ :disabled="disabled || busy || outlineExtractMarked"
+ @click="requestReExtract"
+ shape="round">
           重新提取目录
-        </el-button>
-        <el-button
-          class="chat-action-btn"
-          type="primary"
-          round
-          :loading="busy"
-          :disabled="disabled || busy || outlineExtractMarked || !canConfirmOutline"
-          @click="confirmOutline"
-        >
+        </a-button>
+        <a-button
+ class="chat-action-btn"
+ type="primary"
+ :loading="busy"
+ :disabled="disabled || busy || outlineExtractMarked || !canConfirmOutline"
+ @click="confirmOutline"
+ shape="round">
           确认目录
-        </el-button>
+        </a-button>
       </div>
       <ul v-if="activityLines.length" ref="activityLogEl" class="mini-log activity-log">
         <li v-for="(line, i) in activityLines" :key="`${i}-${line}`">{{ line }}</li>
@@ -134,67 +128,57 @@
         分析流可能因切换页面已中断，不会自动接着跑。请点「{{ studyButtonLabel }}」从未完成的章继续；已写入的要点会保留。
       </p>
       <div class="study-actions">
-        <el-button
-          v-if="studyMode === 'confirm_pending'"
-          class="chat-action-btn"
-          type="primary"
-          round
-          :loading="busy"
-          :disabled="disabled || busy"
-          @click="confirmPendingStudy"
-        >
+        <a-button
+ v-if="studyMode === 'confirm_pending'"
+ class="chat-action-btn"
+ type="primary"
+ :loading="busy"
+ :disabled="disabled || busy"
+ @click="confirmPendingStudy"
+ shape="round">
           确认分析结果并写入蓝本
-        </el-button>
-        <el-button
-          v-else
-          class="chat-action-btn"
-          type="primary"
-          round
-          :loading="busy"
-          :disabled="disabled || busy"
-          @click="onStudyPrimaryClick"
-        >
+        </a-button>
+        <a-button
+ v-else
+ class="chat-action-btn"
+ type="primary"
+ :loading="busy"
+ :disabled="disabled || busy"
+ @click="onStudyPrimaryClick"
+ shape="round">
           {{ studyButtonLabel }}
-        </el-button>
-        <el-button
-          v-if="canWriteAnalyzed"
-          class="chat-action-btn"
-          round
-          plain
-          :disabled="disabled || busy"
-          @click="emitWriteAnalyzed"
-        >
+        </a-button>
+        <a-button
+ v-if="canWriteAnalyzed"
+ class="chat-action-btn"
+ :disabled="disabled || busy"
+ @click="emitWriteAnalyzed"
+ shape="round">
           先写已分析的章节
-        </el-button>
-        <el-button
-          v-if="!isSelectedMode"
-          class="chat-action-btn"
-          round
-          plain
-          :disabled="disabled || busy"
-          @click="requestReUpload"
-        >
+        </a-button>
+        <a-button
+ v-if="!isSelectedMode"
+ class="chat-action-btn"
+ :disabled="disabled || busy"
+ @click="requestReUpload"
+ shape="round">
           重新上传样板
-        </el-button>
-        <el-button
-          v-if="!isSelectedMode"
-          class="chat-action-btn"
-          round
-          plain
-          :disabled="disabled || busy"
-          @click="requestReExtract"
-        >
+        </a-button>
+        <a-button
+ v-if="!isSelectedMode"
+ class="chat-action-btn"
+ :disabled="disabled || busy"
+ @click="requestReExtract"
+ shape="round">
           重新提取目录
-        </el-button>
-        <el-button
-          class="chat-action-btn"
-          round
-          plain
-          :disabled="disabled || busy"
-          @click="requestGoOutlineConfirm"
-        >
+        </a-button>
+        <a-button
+ class="chat-action-btn"
+ :disabled="disabled || busy"
+ @click="requestGoOutlineConfirm"
+ shape="round">
           回到确认目录
-        </el-button>
+        </a-button>
       </div>
       <ul v-if="activityLines.length" ref="activityLogEl" class="mini-log activity-log">
         <li v-for="(line, i) in activityLines" :key="`${i}-${line}`">{{ line }}</li>
@@ -213,7 +197,7 @@
 
 <script setup>
 import { computed, nextTick, ref, watch } from "vue";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessage, ElMessageBox } from "../ui.js";
 
 import { authHeaders, readStream, request } from "../api";
 import ChatFlowPipeline from "./ChatFlowPipeline.vue";
@@ -1404,14 +1388,18 @@ async function submitMeta() {
 }
 
 async function uploadSample(option) {
-  if (!blueprintId.value) return;
+  if (!blueprintId.value) {
+    option?.onError?.(new Error("缺少蓝本"));
+    return;
+  }
   busy.value = true;
   processLines.value = [];
   runningLabel.value = "正在上传并解析样板…";
   pushProcess(runningLabel.value);
   try {
+    const file = option?.file?.originFileObj || option?.file;
     const body = new FormData();
-    body.append("file", option.file);
+    body.append("file", file);
     const response = await fetch(`/api/writing/tasks/${encodeURIComponent(operationalTaskId.value)}/sample`, {
       method: "POST",
       headers: authHeaders(),
@@ -1427,7 +1415,7 @@ async function uploadSample(option) {
     } catch {
       task = null;
     }
-    const name = task?.sample_name || option.file?.name || "样板";
+    const name = task?.sample_name || file?.name || "样板";
     const chars = Number(task?.sample_chars || 0);
     pushProcess(chars ? `✓ 已上传「${name}」，解析约 ${chars} 字` : `✓ 已上传「${name}」`);
     ElMessage.success(chars ? `样板已上传，约 ${chars} 字` : "样板已上传");

@@ -8,7 +8,6 @@ import secrets
 from pathlib import Path
 from typing import Any, Callable
 
-from report_writing.domain.elements import file_slot_missing_nos
 from report_writing.domain.models import ChatCard, ChatSession, ElementNode, WritingTask
 from report_writing.domain.point_items_sync import (
     _element_name,
@@ -308,6 +307,10 @@ def _point_row_resolved_element_id(
         ename = str(getattr(el, "name", "") or "").strip()
         if _names_overlap(slot, ename):
             return cid
+    for eid, el in by_id.items():
+        ename = str(getattr(el, "name", "") or "").strip()
+        if _names_overlap(slot, ename):
+            return eid
     return ""
 
 
@@ -425,9 +428,18 @@ def element_needs_supplement(
             for f in files
         )
     if kind == "file_slot":
-        pack_id = str(getattr(task, "materials_pack_id", "") or "").strip()
-        missing = file_slot_missing_nos(node, materials_pack_id=pack_id, home=home)
-        return bool(missing) or not list(getattr(node, "file_slots", None) or [])
+        slots = list(getattr(node, "file_slots", None) or [])
+        has_slot = False
+        for slot in slots:
+            try:
+                no = int(getattr(slot, "no", None) or (slot.get("no") if isinstance(slot, dict) else 0) or 0)
+            except (TypeError, ValueError):
+                no = 0
+            if no > 0:
+                has_slot = True
+                break
+        # 插槽编号已配即视为要素已配置；资料包缺文件不拦开写（正文用待补充占位）
+        return not has_slot
     if kind == "llm_generate":
         return not str(getattr(node, "prompt", "") or "").strip()
     if kind == "image":
@@ -729,11 +741,11 @@ def merge_llm_gaps(
         ensure_ascii=False,
     )
     system = (
-        "你是报告写作助手。用户按「写作要点 ↔ 关联要素」配置章节，开写前只检查下表仍缺配置的要点行。"
-        "只输出 JSON 数组；每项必须对应表中一条 point_index，禁止新增表外建议。"
-        "字段：chapter_key, point_index, element_id(可空), element_name, display_line, reason。"
-        "display_line 用「待补项或要素名：{{配置要素}}」；element_id 须来自该行已关联要素或留空。"
-        "禁止编造具体项目事实。"
+        "# Role\n你是报告写作助手。\n"
+        "# Task\n开写前只检查下表仍缺配置的要点行（写作要点 ↔ 关联要素）。\n"
+        "# Constraints\n每项必须对应表中一条 point_index，禁止新增表外建议。禁止编造具体项目事实。\n"
+        "display_line 用「待补项或要素名：{{配置要素}}」；element_id 须来自该行已关联要素或留空。\n"
+        "# Output\n只输出 JSON 数组。字段：chapter_key, point_index, element_id(可空), element_name, display_line, reason。"
     )
     user = (
         "写作要点与关联要素（仅列出仍缺配置的行）：\n"
@@ -823,6 +835,20 @@ def effective_open_gaps(
     return gaps_still_open_for_task(task, open_gaps(registry), home)
 
 
+def _reload_writing_task(home: Path, task: WritingTask) -> WritingTask:
+    """开写前检查以库里的任务为准，不用会话里过期的内存稿。"""
+    tid = str(getattr(task, "id", "") or "").strip()
+    if not tid:
+        return task
+    from report_writing.services.store import TaskStore
+
+    try:
+        fresh = TaskStore(home / "tasks" / tid).load()
+    except Exception:
+        return task
+    return fresh if fresh is not None else task
+
+
 def run_supplement_check(
     home: Path,
     session: ChatSession,
@@ -832,39 +858,47 @@ def run_supplement_check(
     invoke: InvokeFn | None = None,
 ) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
     from report_writing.domain.point_items_sync import normalize_chapter_point_items_on_node
+    from report_writing.services.store import TaskStore
 
+    _ = invoke
+    task = _reload_writing_task(home, task)
     for ck in [str(k).strip() for k in (chapter_keys or []) if str(k).strip()]:
         node = _outline_node(task, ck)
         if node is not None:
             normalize_chapter_point_items_on_node(task, node)
-    det = collect_deterministic_gaps(task, chapter_keys, home)
-    merged = det if not det else merge_llm_gaps(task, chapter_keys, det, invoke=invoke)
-    items = normalize_gap_list(task, merged)
+    # 只扫任务库里的要点/要素，不再用 LLM 往列表里加项（否则口播「2 处」卡片只剩 1 处）
+    items = collect_deterministic_gaps(task, chapter_keys, home)
+    items = normalize_gap_list(task, items)
+    display_items = gaps_still_open_for_task(task, items, home)
+    stored: list[dict[str, Any]] = []
+    open_ids = {str(x.get("id") or "") for x in display_items if isinstance(x, dict)}
     for item in items:
-        if isinstance(item, dict) and gap_resolved(task, item, home):
-            item["status"] = "filled"
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        if str(row.get("id") or "") not in open_ids:
+            row["status"] = "filled"
+        else:
+            row["status"] = "open"
+        stored.append(row)
     scope = supplement_batch_scope(task.id, chapter_keys)
     registry = {
         "scope": scope,
         "task_id": task.id,
         "chapter_keys": list(chapter_keys),
-        "items": items,
+        "items": stored or [dict(x) for x in display_items],
         "by_chapter": {},
         "skipped": False,
         "checked": True,
     }
     save_registry(session, registry)
     sync_registry_to_task(task, registry)
-    from report_writing.services.store import TaskStore
-
     TaskStore(home / "tasks" / task.id).save(task)
-    open_items = effective_open_gaps(task, registry, home)
-    display_items = gaps_still_open_for_task(task, open_items, home)
+    n = len(display_items)
     reply = (
-        "开写前我对齐了各章**写作要点**与每条要点**关联的配置要素**，"
-        f"{'下面有 ' + str(len(display_items)) + ' 处还空着' if display_items else '目前看不出必须补的配置'}；"
+        "开写/重写前我对齐了各章**写作要点**与每条要点**关联的配置要素**，"
+        f"{'下面卡片列出了 ' + str(n) + ' 处还空着' if n else '目前看不出必须补的配置'}；"
         "补上后检索会更准，**不补也可以先写**（正文里会用待补充占位）。"
-        "（此检查仅在开始写作前进行。）"
     )
     return reply, display_items, registry
 
@@ -877,19 +911,28 @@ def supplement_check_card(
     items: list[dict[str, Any]] | None = None,
     readonly: bool = False,
     home: Path | None = None,
+    resume_action: str = "",
+    chapter_key: str = "",
+    write_mode: str = "",
 ) -> ChatCard | None:
     display_items = gaps_still_open_for_task(task, list(items or []), home=home)
     if not display_items:
         return None
+    resume = str(resume_action or "").strip() or "start_writing"
+    ck = str(chapter_key or "").strip()
+    mode = str(write_mode or "").strip()
     return ChatCard(
         type="writing_supplement_check",
-        title="开写前待补充提示",
+        title="写作前待补充提示",
         payload={
             "task_id": task.id,
             "chapter_keys": list(chapter_keys or []),
             "writing_pace": str(writing_pace or "").strip(),
             "items": display_items,
             "readonly": bool(readonly),
+            "resume_action": resume,
+            "chapter_key": ck,
+            "_write_mode": mode,
         },
     )
 
@@ -924,6 +967,8 @@ def supplement_gate_needed(
 ) -> bool:
     if force_skip:
         return False
+    if home is not None:
+        task = _reload_writing_task(home, task)
     keys = [str(k).strip() for k in (chapter_keys or []) if str(k).strip()]
     scope = supplement_batch_scope(task.id, keys)
     reg = load_registry(session)

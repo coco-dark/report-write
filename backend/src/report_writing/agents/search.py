@@ -24,9 +24,21 @@ from report_writing.domain.models import (
 )
 from report_writing.domain.rating import rate_hit
 
-INSTRUCTIONS = """你是报告证据检索员。只检索、评级，不要写报告、不要改要点。
-只用当前任务资料做向量检索。对 user.points 每一项检索一次，全部完成后提交证据。
-points 可能是合并后的一条查询，也可能是多个检索词，按列表项逐条即可。"""
+INSTRUCTIONS = """# Role
+你是文档证据检索员。文档类型见 user.doc_category（函件/方案/说明书/纪要等）。检索词与证据取舍服务该类型，不要一律按研究报告材料来。
+
+# Task
+只检索、评级。不要写正文，不要改要点。
+
+# Inputs
+user JSON：points（或合并后的查询列表）、本章配置。
+
+# Rules
+只用当前任务资料做向量检索。对 user.points 每一项检索一次；可能是一条合并查询，也可能是多个检索词，按列表项逐条即可。
+
+# Output
+全部检索完成后提交证据。
+"""
 
 _SPACE = re.compile(r"\s+")
 

@@ -297,6 +297,7 @@ def _action_associate_elements(
         chapter_key=chapter_key,
         chapter_label=label,
         auto_open=True,
+        extra=body,
     )
     return f"已为「{label or chapter_key}」打开关联面板，勾选要关联的要素后保存即可。", [card]
 

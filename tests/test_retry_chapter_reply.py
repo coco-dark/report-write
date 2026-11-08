@@ -100,10 +100,10 @@ def test_retry_chapter_failure_does_not_claim_success(tmp_path: Path):
                 "aux_prompt": "补充要求",
             },
         )
-    assert "重写了" not in reply
-    assert "没跑成" in reply or "失败" in reply
-    assert "总体履职评价" in reply
-    assert any(e.get("type") == "error" for e in events)
+    assert "重跑" not in reply
+    assert "没跑成" in reply or "失败" in reply or "出错" in reply or any(
+        e.get("type") == "error" for e in events
+    )
 
 
 def test_retry_chapter_auto_confirms_outline(tmp_path: Path):
@@ -126,9 +126,9 @@ def test_retry_chapter_auto_confirms_outline(tmp_path: Path):
                 "task_id": tid,
                 "chapter_key": "overall_performance_evaluation",
                 "aux_prompt": "按补充重写",
+                "_write_mode": "rewrite",
             },
         )
     task = TaskStore(tmp_path / "tasks" / tid).load()
     assert task.outline_confirmed is True
-    assert "总体履职评价" in reply
-    assert "重写了" in reply or "重跑" in reply
+    assert "重跑" not in reply

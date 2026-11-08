@@ -557,6 +557,9 @@ def outline_from_payload(chapters: list[dict], *, model=None) -> OutlineTree:
                 elements=elements,
                 structure_only=bool(item.get("structure_only")),
                 fixed_output=bool(item.get("fixed_output")),
+                presence=str(item.get("presence") or "always"),
+                compose=str(item.get("compose") or "hybrid"),
+                extracts=list(item.get("extracts") or []),
                 search_terms_separate=bool(item.get("search_terms_separate")),
             )
         )
@@ -587,6 +590,12 @@ def outline_from_brief_chapters(chapters: list) -> OutlineTree:
             "element_ids": list(getattr(item, "element_ids", None) or []),
             "structure_only": bool(getattr(item, "structure_only", False)),
             "fixed_output": bool(getattr(item, "fixed_output", False)),
+            "presence": str(getattr(item, "presence", "") or "always"),
+            "compose": str(getattr(item, "compose", "") or "hybrid"),
+            "extracts": [
+                x.to_dict() if hasattr(x, "to_dict") else x
+                for x in (getattr(item, "extracts", None) or [])
+            ],
             "search_terms_separate": bool(getattr(item, "search_terms_separate", False)),
             "elements": [
                 element.to_dict() if hasattr(element, "to_dict") else element
@@ -720,6 +729,9 @@ def assign_placeholder_keys(nodes: list[OutlineNode], *, model=None) -> list[Out
                 elements=list(node.elements or []),
                 structure_only=bool(getattr(node, "structure_only", False)),
                 fixed_output=bool(getattr(node, "fixed_output", False)),
+                presence=str(getattr(node, "presence", "") or "always"),
+                compose=str(getattr(node, "compose", "") or "hybrid"),
+                extracts=list(getattr(node, "extracts", None) or []),
                 search_terms_separate=bool(getattr(node, "search_terms_separate", False)),
             )
         )
@@ -816,6 +828,9 @@ def finalize_outline(
             elements=list(node.elements or []),
             structure_only=bool(getattr(node, "structure_only", False)),
             fixed_output=bool(getattr(node, "fixed_output", False)),
+            presence=str(getattr(node, "presence", "") or "always"),
+            compose=str(getattr(node, "compose", "") or "hybrid"),
+            extracts=list(getattr(node, "extracts", None) or []),
             search_terms_separate=bool(getattr(node, "search_terms_separate", False)),
         )
         ordered.append(item)

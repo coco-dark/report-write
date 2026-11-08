@@ -194,17 +194,33 @@ def _visible_text_len(html: str) -> int:
     return len(text.strip())
 
 
+def _draft_paragraphs_html(draft) -> str:
+    if draft is None:
+        return ""
+    paragraphs = getattr(draft, "paragraphs", None)
+    if paragraphs is None and isinstance(draft, dict):
+        paragraphs = draft.get("paragraphs")
+    parts: list[str] = []
+    for item in paragraphs or []:
+        text = ""
+        if isinstance(item, dict):
+            text = str(item.get("text") or "").strip()
+        else:
+            text = str(getattr(item, "text", "") or "").strip()
+        if text:
+            parts.append(ensure_html_fragment(text))
+    return "\n".join(parts).strip()
+
+
 def _chapter_body_html(state) -> str:
     from report_writing.domain.content_blocks import promote_tables_in_html
 
     if state is None:
         return ""
     official = (getattr(state, "official_text", None) or "").strip()
-    draft_html = ""
-    if state.draft and state.draft.paragraphs:
-        draft_html = "\n".join(
-            ensure_html_fragment(p.text) for p in state.draft.paragraphs if getattr(p, "text", None)
-        ).strip()
+    if not official and isinstance(state, dict):
+        official = str(state.get("official_text") or "").strip()
+    draft_html = _draft_paragraphs_html(getattr(state, "draft", None) if not isinstance(state, dict) else state.get("draft"))
     html = official or draft_html
     if _visible_text_len(html) < 1 and draft_html:
         html = draft_html
@@ -212,17 +228,50 @@ def _chapter_body_html(state) -> str:
     return promote_tables_in_html(html.strip()) if html.strip() else ""
 
 
+def _pick_chapter_state(
+    by_key: dict,
+    by_seq: dict,
+    by_title: dict,
+    *,
+    key: str,
+    sequence: str,
+    title: str,
+):
+    state = by_key.get(key)
+    if state is not None:
+        return state
+    seq = str(sequence or "").strip()
+    if seq and seq in by_seq:
+        return by_seq[seq]
+    name = str(title or "").strip()
+    if name and name in by_title:
+        return by_title[name]
+    return None
+
+
 def collect_chapters(task: WritingTask, *, confirmed_only: bool = True) -> list[RenderChapter]:
     """按章节序号（大纲顺序）收集正文，不按写作先后。"""
     from report_writing.domain.outline import _sequence_sort_key
 
-    by_key = {c.key: c for c in (task.chapters or []) if c.key}
+    states = list(task.chapters or [])
+    by_key = {c.key: c for c in states if c.key}
+    by_seq: dict = {}
+    by_title: dict = {}
+    for chapter in states:
+        title = str(getattr(chapter, "title", "") or "").strip()
+        if title and title not in by_title:
+            by_title[title] = chapter
     order: list[tuple[str, str, str]] = []
     if task.outline and task.outline.chapters:
         for node in task.outline.chapters:
             order.append((node.key, node.sequence or "", node.title or node.key))
+            seq = str(node.sequence or "").strip()
+            if seq and seq not in by_seq:
+                hit = by_key.get(node.key)
+                if hit is not None:
+                    by_seq[seq] = hit
     else:
-        for chapter in task.chapters or []:
+        for chapter in states:
             order.append((chapter.key, "", chapter.title or chapter.key))
 
     # 写作 clone 的 outline.chapters 可能被写成「写作先后」；预览/导出一律按序号
@@ -230,15 +279,19 @@ def collect_chapters(task: WritingTask, *, confirmed_only: bool = True) -> list[
 
     rows: list[RenderChapter] = []
     seen: set[str] = set()
+    used_states: set[str] = set()
     for key, sequence, title in order:
         if not key or key in seen:
             continue
         seen.add(key)
-        state = by_key.get(key)
+        state = _pick_chapter_state(by_key, by_seq, by_title, key=key, sequence=sequence, title=title)
         status = ""
         html = ""
         if state is not None:
+            used_states.add(str(getattr(state, "key", "") or ""))
             status = str(state.status.value if hasattr(state.status, "value") else state.status)
+            if status == ChapterStatus.SKIPPED.value:
+                continue
             if confirmed_only and state.status != ChapterStatus.CONFIRMED:
                 html = ""
             else:
@@ -248,6 +301,27 @@ def collect_chapters(task: WritingTask, *, confirmed_only: bool = True) -> list[
                 key=key,
                 sequence=sequence,
                 title=title or (state.title if state else key),
+                html=html,
+                status=status,
+            )
+        )
+    # 大纲缺 key 但已写正文：仍拼进预览，避免全文空白
+    for chapter in states:
+        ck = str(getattr(chapter, "key", "") or "").strip()
+        if not ck or ck in seen or ck in used_states:
+            continue
+        status = str(chapter.status.value if hasattr(chapter.status, "value") else chapter.status)
+        if status == ChapterStatus.SKIPPED.value:
+            continue
+        html = "" if (confirmed_only and chapter.status != ChapterStatus.CONFIRMED) else _chapter_body_html(chapter)
+        if _visible_text_len(html) < 1:
+            continue
+        seen.add(ck)
+        rows.append(
+            RenderChapter(
+                key=ck,
+                sequence="",
+                title=chapter.title or ck,
                 html=html,
                 status=status,
             )
@@ -291,10 +365,11 @@ def build_written_chapters_preview(
         key = str(item.key or "").strip()
         if not key:
             continue
-        if key in structure_keys:
-            continue
         body = (item.html or "").strip()
         has_body = _visible_text_len(body) > 0
+        # 仅目录且无正文才跳过；写过正文的章必须进预览
+        if key in structure_keys and not has_body:
+            continue
         if written_only and not has_body:
             continue
         written += 1 if has_body else 0
@@ -533,13 +608,16 @@ def llm_document_html(
             }
         )
     system = (
-        "你是报告排版编辑。根据给定的章节目录与各章 HTML 正文，输出一份完整、可直接用于转 Word 的 HTML 文档。\n"
-        "要求：\n"
+        "# Role\n你是文档排版编辑。\n"
+        "# Task\n根据给定的章节目录与各章 HTML 正文，输出一份完整、可直接用于转 Word 的 HTML 文档。"
+        "版式须符合该文档类型（函件、方案、说明书、纪要、报告等），不要一律套研究报告封面体例。\n"
+        "# Rules\n"
         "1. 只输出 HTML（可含 <!DOCTYPE html>），不要 Markdown 围栏，不要解释。\n"
         "2. 保留章节顺序与序号/标题层级（h1/h2/h3）。\n"
         "3. 尽量保留各章原有段落、列表、表格结构；不要编造原文没有的事实。\n"
         "4. 空正文的章节可省略或仅保留标题。\n"
         "5. 使用简洁语义化标签：h1-h3、p、ul/ol/li、table/tr/td、strong/em。\n"
+        "# Output\n完整 HTML 文档。"
     )
     user = (
         f"报告标题：{report_title or '未命名报告'}\n"

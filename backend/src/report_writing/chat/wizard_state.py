@@ -169,6 +169,24 @@ def partition_wizard_study(task: WritingTask | None) -> dict[str, list]:
     return {"analyzed": analyzed, "unanalyzed": unanalyzed, "structure": structure}
 
 
+def mark_wizard_past_outline_confirm(session: ChatSession) -> None:
+    """开写/重写后：会话向导不得再停在确认目录，避免回合收尾把确认卡贴回对话。"""
+    wiz = dict((session.freeform or {}).get("blueprint_wizard") or {})
+    if not wiz:
+        return
+    from report_writing.chat.wizard_loop_guard import normalized_wizard_step
+
+    step = normalized_wizard_step(str(wiz.get("step") or "").strip())
+    wiz["outline_confirmed"] = True
+    if wizard_step_index(step) < wizard_step_index("study"):
+        wiz["step"] = "study"
+        wiz.pop("trigger_outline_extract", None)
+        pending = str(wiz.get("pending_wizard_command") or "").strip()
+        if pending in {"go_outline_confirm", "re_extract_outline"}:
+            wiz.pop("pending_wizard_command", None)
+    session.freeform = {**(session.freeform or {}), "blueprint_wizard": wiz}
+
+
 def derive_blueprint_wizard_step(home: Path, blueprint_id: str) -> tuple[str, dict[str, Any]]:
     """根据蓝本任务实际进度推导向导步（单一事实来源）。"""
     from report_writing.chat.helpers import _load_task
@@ -191,8 +209,26 @@ def derive_blueprint_wizard_step(home: Path, blueprint_id: str) -> tuple[str, di
     extra["chapters"] = _chapter_preview(task)
     pending_study_early = list(getattr(task, "pending_study", None) or [])
     parts_probe = partition_wizard_study(task)
-    # 已有学习要点/草案时，即使确认位丢失也不得打回「确认目录」
-    study_already = bool(pending_study_early) or bool(parts_probe["analyzed"])
+    # 已有学习要点/草案/成稿时，即使确认位丢失也不得打回「确认目录」
+    writing_already = False
+    try:
+        from report_writing.domain.models import ChapterStatus
+
+        chapters = list(getattr(task, "chapters", None) or [])
+        done_statuses = {
+            ChapterStatus.AWAITING_CONFIRM,
+            ChapterStatus.CONFIRMED,
+            ChapterStatus.WRITING,
+            ChapterStatus.CHECKING,
+        }
+        writing_already = any(
+            bool(str(getattr(c, "draft_text", "") or "").strip())
+            or getattr(c, "status", None) in done_statuses
+            for c in chapters
+        )
+    except Exception:
+        writing_already = False
+    study_already = bool(pending_study_early) or bool(parts_probe["analyzed"]) or writing_already
     if not task.outline_confirmed and not study_already:
         return "outline_confirm", extra
     if not task.outline_confirmed and study_already:
@@ -319,6 +355,27 @@ def sync_blueprint_wizard_session(
     except Exception:
         pass
     step = clamp_wizard_step_regression(prev_step, step)
+    # 会话/任务已确认目录，或已有成稿：禁止再倒回确认目录（否则保存重写会贴回确认卡）
+    if normalized_wizard_step(step) == "outline_confirm":
+        session_confirmed = bool(wizard.get("outline_confirmed"))
+        task_confirmed = bool(extra.get("outline_confirmed"))
+        if not task_confirmed:
+            try:
+                from report_writing.chat.helpers import _load_task
+
+                prog_task = _load_task(home, progress_id)
+                task_confirmed = bool(
+                    prog_task and getattr(prog_task, "outline_confirmed", False)
+                )
+            except Exception:
+                task_confirmed = False
+        prev_ns = normalized_wizard_step(prev_step)
+        if session_confirmed or task_confirmed or wizard_step_index(prev_ns) >= wizard_step_index(
+            "study"
+        ):
+            step = "study"
+            wizard["outline_confirmed"] = True
+            extra["outline_confirmed"] = True
     # 有蓝本 id 时名称步必已完成；禁止 sync/migrate 残留把会话打回 meta
     if wizard_step_index(normalized_wizard_step(step)) <= wizard_step_index("meta"):
         step = "upload"
@@ -581,6 +638,12 @@ def finalize_wizard_cards_for_response(
 
     wiz = dict(session_wizard or {})
     truth_step = normalized_wizard_step(str(wiz.get("step") or ""))
+    # 已确认目录 / 已越过学习：勿把确认目录卡再合成进本轮回复
+    if truth_step in {"outline_confirm", "outline_done"} and bool(
+        wiz.get("outline_confirmed")
+    ):
+        truth_step = "study"
+        wiz["step"] = "study"
     ti = wizard_step_index(truth_step)
     truth_bid = str(wiz.get("blueprint_id") or session.blueprint_id or "").strip()
 

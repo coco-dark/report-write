@@ -36,27 +36,32 @@ from report_writing.domain.models import ChatActionPayload, ChatPayload, ChatPha
 
 _log = logging.getLogger(__name__)
 
-CONTROL_INSTRUCTIONS = """你是「智能文档协作」写文档总控，对用户自称小墨。
+CONTROL_INSTRUCTIONS = """# Role
+你是「智能文档协作」写文档总控，对用户自称小墨。
 
-工作方式：
-- 只调用当前已绑定的 Tool。何时调用、缺了怎么办、禁忌以各 Tool 的 description 为准；每个参数的必填/可选以该参数自己的 schema 说明为准。不要另写一份工具清单，不要对用户说出内部工具名。
-- 先读 user JSON：当前焦点文档、writing_brief、dialogue_full、session_goal、action。
-- 再读每次 Tool 返回的 ok / missing_slots / reply_hint / suggested_next_tools。
+# Task
+理解用户意图并调用当前已绑定的 Tool 推进写文档。不要检索、不要自己写章节正文、不要审稿。
+
+# Inputs
+用户消息为 JSON。先读焦点文档、writing_brief、dialogue_full、session_goal、action。
+再读每次 Tool 返回的 ok / missing_slots / reply_hint / suggested_next_tools。
+
+# Rules
+- 何时调用、缺了怎么办、禁忌以各 Tool 的 description 为准；参数必填/可选以该参数 schema 为准。不要另写工具清单，不要对用户说出内部工具名。
 - 槽位已齐就调；一句里有多步就连续调用。只补还缺的，不要重走开场流水线。
 - 口语就是这场对话。必填项能从当前这句话和上文拆出来再调；拆不出、填错或返回缺槽：用 reply_hint 接着问，或挂澄清卡等用户点选/下一条补上，再调同一 Tool。不要编造 id、章节、标题，不要假装已经办成。
-
-边界：
 - 没把握（指代、写还是学、多文档、破坏性动作）就挂澄清卡。禁止猜章节、代选蓝本、静默开写/删除/收录。
 - 寒暄、只看库、问怎么用：口头回应，不起名、不开空文档。
 - 「写一份××」当工作名即可推进。正式名只在用户明确起名或收录/导出时确认。整句口语不要当标题。
-- 用户点了按钮（action 非空）：本轮只调同名 Tool，payload 原样传入。
+- 用户点了按钮（action 非空）：本轮只调同名 Tool，payload 原样传入。对话里的动作指令（如「重写章节[1.1 标题]」）按该动作执行；用户直接打出同类指令与点按钮等价。
 - 调错了就按该 Tool 的 description 改调正确的，不要在错误工具里代做别的事。
 - 默认操作当前焦点文档。用户点名会话里另一份时，先切焦点再动手；新开一份不要切回旧文档。
 - 用户明确另开/再写一份（可同时「名字叫 X」）：立刻新开，不要再口头确认「是不是两份」；禁止在旧文档上开写或改名顶替。
 - 写盘落在当前文档车道。对话里的模版向导只改当前副本，收录才进蓝本库；库的维护在「蓝本管理」，对话不能删库蓝本。
 - 章检索、正文、核对引用由后台流水线做，对话里不要编造章节正文。
 
-语气：短、先接住再指路。已问过的不要再问。
+# Output
+需要办事：调用 Tool。需要说话：短、先接住再指路。已问过的不要再问。
 """
 
 def build_system_prompt(
@@ -117,6 +122,9 @@ _UI_SHORTCUT_ACTIONS = frozenset(
         "template_wizard",
         "pause_writing",
         "configure_chapter",
+        "get_chapter_info",
+        "generate_chapter_describes",
+        "generate_chapter_boilerplate",
         "add_chapter_element",
         "associate_elements",
         "collect_to_element_library",
@@ -357,7 +365,8 @@ def build_agent_user_text(
         body["recent_dialogue"] = summary
     if action:
         body["hint"] = (
-            f"用户点击了界面操作「{action}」：本轮必须调用同名 Tool 一次完成（payload 原样传入）；"
+            f"用户在界面点了按钮，对话指令是「{message or action}」。"
+            f"本轮必须调用 Tool「{action}」一次完成（payload 原样传入）；"
             "勿改用其它工具替代。"
         )
         if action == "save_freeform_as_blueprint" and home is not None:
@@ -435,6 +444,8 @@ _FINAL_TOOL_PRIORITY = (
 def _final_text(messages: list[Any], state: ChatControlState) -> str:
     tool_hints: dict[str, str] = {}
     last_tool_ok = True
+    last_awaiting = False
+    last_hint = ""
     for message in messages or []:
         if not isinstance(message, ToolMessage):
             continue
@@ -446,6 +457,8 @@ def _final_text(messages: list[Any], state: ChatControlState) -> str:
         hint = str((data or {}).get("reply_hint") or "").strip()
         if name and hint:
             tool_hints[name] = hint
+        last_hint = hint
+        last_awaiting = bool((data or {}).get("awaiting_user_choice"))
         # 遍历到最后一条 ToolMessage 时覆盖；用于观察闭环失败后采信模型改口
         last_tool_ok = bool((data or {}).get("ok", True))
     if last_tool_ok:
@@ -472,6 +485,9 @@ def _final_text(messages: list[Any], state: ChatControlState) -> str:
                         parts.append(str(getattr(item, "text", None) or item or ""))
                 content = "".join(parts)
             ai_text = str(content or "").strip()
+    # 待补充卡等用户点选：用工具原文，禁止模型改口成「要素还是空的」且丢掉卡片
+    if last_awaiting and last_hint:
+        return last_hint
     # Tool 失败后模型根据 missing_slots / reply_hint 改口：优先最终 AI 文本
     if not last_tool_ok and ai_text:
         return ai_text
@@ -590,6 +606,17 @@ def run_chat_control(
     act = (state.user_action or action or "").strip()
     reply = ""
     agent_fail_reply = ""
+    # 开写/重写按钮直接跑流水线，避免 ReAct 先聊一轮导致过程条丢在 done 之后
+    if act in {
+        "retry_chapter",
+        "retry_search_chapter",
+        "start_writing",
+        "write_analyzed_only",
+        "skip_writing_supplement_check",
+    }:
+        hit_reply = _try_ui_action_shortcut(state, user_text)
+        if hit_reply is not None:
+            return (hit_reply or "").strip() or "好的。"
     can_agent = hasattr(model, "bind_tools")
     if can_agent:
         try:
@@ -784,6 +811,20 @@ class ChatControlScriptModel(ScriptedChatModel):
             tip = tip.strip("「」《》\"'“”")[:160]
             if tip:
                 return self.call("set_session_meta", {"title": tip, "message": msg})
+
+        if not action and msg and any(
+            k in msg
+            for k in ("查看章节", "章节信息", "这章配置", "本章配置", "看看配置", "章节配置")
+        ) and "改" not in msg[:8]:
+            return self.call(
+                "get_chapter_info",
+                {"payload_json": json.dumps({"message": msg}, ensure_ascii=False)},
+            )
+        if not action and msg and "生成章节说明" in msg:
+            return self.call(
+                "generate_chapter_describes",
+                {"payload_json": json.dumps({"message": msg}, ensure_ascii=False)},
+            )
 
         hop = self._hop_suggested_next_tools(
             messages, phase or str(sess_snap.get("phase") or "")

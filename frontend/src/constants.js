@@ -15,7 +15,7 @@ export const STATUS_LABELS = {
   confirmed: "已写作",
   needs_human: "已写作",
   skipped: "已跳过",
-  studying: "分析中",
+  studying: "待开写",
   running: "进行中",
   completed: "已完成",
   done: "完成",
@@ -41,11 +41,12 @@ export const STEP_STATUS = {
   skipped: "跳过",
 };
 
+/** Ant Design Tag color（兼容旧 Element type 语义） */
 export function statusTagType(status) {
   if (status === "confirmed" || status === "completed" || status === "done" || status === "accept") return "success";
   if (status === "needs_human" || status === "awaiting_confirm" || status === "running" || status === "revise") return "warning";
-  if (status === "skipped") return "info";
-  return "";
+  if (status === "skipped") return "default";
+  return "default";
 }
 
 export function newTaskId() {

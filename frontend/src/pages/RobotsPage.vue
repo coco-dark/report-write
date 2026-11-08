@@ -5,7 +5,7 @@
         <h1>机器人</h1>
         <p>绑定蓝本、渲染模版、Word 样式、个人要素与资料库，以及对话 / 分析 / 写作提示词；对话页选择后统一使用。</p>
       </div>
-      <el-button type="primary" round @click="openCreate">新建机器人</el-button>
+      <a-button type="primary" @click="openCreate" shape="round">新建机器人</a-button>
     </header>
 
     <div v-if="listLoading" class="hint">加载中…</div>
@@ -28,158 +28,142 @@
         </div>
       </article>
     </div>
-    <el-empty v-if="!listLoading && !robots.length" description="还没有机器人，先新建一个" :image-size="80" />
+    <a-empty v-if="!listLoading && !robots.length" description="还没有机器人，先新建一个" :image-style="{ height: 80 }"  />
 
-    <el-dialog
-      v-model="dialog"
-      :title="existing ? '编辑机器人' : '新建机器人'"
-      width="780px"
-      destroy-on-close
-      class="robot-dialog"
-      @closed="onDialogClosed"
-    >
-      <el-steps :active="step" align-center finish-status="success" class="robot-steps">
-        <el-step title="基本信息" />
-        <el-step title="提示词" />
-        <el-step title="资源绑定" />
-      </el-steps>
+    <a-modal
+ v-model:open="dialog"
+ :title="existing ? '编辑机器人' : '新建机器人'"
+ width="780px"
+ class="robot-dialog"
+ @afterClose="onDialogClosed"
+ destroy-on-close centered>
+      <a-steps :current="step" class="robot-steps">
+        <a-step title="基本信息"  />
+        <a-step title="提示词"  />
+        <a-step title="资源绑定"  />
+      </a-steps>
 
       <div v-show="step === 0" class="step-pane">
-        <el-form label-position="top">
-          <el-form-item label="名称" required>
-            <el-input v-model="form.name" placeholder="如：安评写作助手" />
-          </el-form-item>
-          <el-form-item label="说明">
-            <el-input v-model="form.description" type="textarea" :rows="3" placeholder="用途说明：何时选用这个机器人" />
-          </el-form-item>
-        </el-form>
+        <a-form layout="vertical">
+          <a-form-item label="名称" required>
+            <a-input v-model:value="form.name" placeholder="如：安评写作助手" />
+          </a-form-item>
+          <a-form-item label="说明">
+            <a-textarea v-model:value="form.description" :rows="3" placeholder="用途说明：何时选用这个机器人" />
+          </a-form-item>
+        </a-form>
       </div>
 
       <div v-show="step === 1" class="step-pane">
-        <el-form label-position="top">
-          <el-form-item label="需求说明">
+        <a-form layout="vertical">
+          <a-form-item label="需求说明">
             <p class="hint tiny">用自然语言描述机器人要做什么、语气与边界；再点生成，由模型写出三套提示词，可继续手改。</p>
-            <el-input
-              v-model="promptDraft"
-              type="textarea"
+            <a-textarea
+              v-model:value="promptDraft"
               :rows="4"
               placeholder="例：面向安全预评价报告，对话要引导用户选蓝本与目录；分析时提取写法要点不要抄专名；写作输出完整 HTML…"
             />
             <div class="gen-bar">
-              <el-button type="primary" plain :loading="generating === 'all'" :disabled="!!generating" @click="generatePrompts('all')">
+              <a-button type="primary" :loading="generating === 'all'" :disabled="!!generating" @click="generatePrompts('all')">
                 生成全部提示词
-              </el-button>
-              <el-button :loading="generating === 'chat'" :disabled="!!generating" @click="generatePrompts('chat')">仅对话</el-button>
-              <el-button :loading="generating === 'study'" :disabled="!!generating" @click="generatePrompts('study')">仅分析</el-button>
-              <el-button :loading="generating === 'write'" :disabled="!!generating" @click="generatePrompts('write')">仅写作</el-button>
+              </a-button>
+              <a-button :loading="generating === 'chat'" :disabled="!!generating" @click="generatePrompts('chat')">仅对话</a-button>
+              <a-button :loading="generating === 'study'" :disabled="!!generating" @click="generatePrompts('study')">仅分析</a-button>
+              <a-button :loading="generating === 'write'" :disabled="!!generating" @click="generatePrompts('write')">仅写作</a-button>
             </div>
-          </el-form-item>
-          <el-form-item label="对话提示词">
-            <el-input v-model="form.chat_prompt" type="textarea" :rows="4" placeholder="空则使用系统默认对话提示" />
-          </el-form-item>
-          <el-form-item label="分析（study）提示词">
-            <el-input v-model="form.study_prompt" type="textarea" :rows="4" placeholder="空则使用默认 study 指令" />
-          </el-form-item>
-          <el-form-item label="写作（write）提示词">
-            <el-input v-model="form.write_prompt" type="textarea" :rows="4" placeholder="空则使用默认 write 指令" />
-          </el-form-item>
-        </el-form>
+          </a-form-item>
+          <a-form-item label="对话提示词">
+            <a-textarea v-model:value="form.chat_prompt" :rows="4" placeholder="空则使用系统默认对话提示" />
+          </a-form-item>
+          <a-form-item label="分析（study）提示词">
+            <a-textarea v-model:value="form.study_prompt" :rows="4" placeholder="空则使用默认 study 指令" />
+          </a-form-item>
+          <a-form-item label="写作（write）提示词">
+            <a-textarea v-model:value="form.write_prompt" :rows="4" placeholder="空则使用默认 write 指令" />
+          </a-form-item>
+        </a-form>
       </div>
 
       <div v-show="step === 2" class="step-pane">
-        <el-form label-position="top">
-          <el-form-item label="绑定蓝本">
-            <el-select v-model="form.blueprint_ids" multiple filterable clearable placeholder="多选蓝本" style="width: 100%">
-              <el-option
+        <a-form layout="vertical">
+          <a-form-item label="绑定蓝本">
+            <a-select v-model:value="form.blueprint_ids" allow-clear placeholder="多选蓝本" style="width: 100%" mode="multiple" show-search>
+              <a-select-option
                 v-for="item in blueprints"
                 :key="item.id"
-                :label="item.title || item.id"
-                :value="item.id"
-              />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="绑定渲染模版">
+                :value="item.id">{{ item.title || item.id }}</a-select-option>
+            </a-select>
+          </a-form-item>
+          <a-form-item label="绑定渲染模版">
             <p class="hint tiny">对话导出时仅展示此处勾选的渲染模版；不选则展示全部模版。</p>
-            <el-select
-              v-model="form.render_template_ids"
-              multiple
-              filterable
-              clearable
-              placeholder="多选渲染模版"
-              style="width: 100%"
-            >
-              <el-option v-for="item in renderTemplates" :key="item.id" :label="item.name" :value="item.id" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="绑定 Word 样式">
+            <a-select
+ v-model:value="form.render_template_ids"
+ allow-clear
+ placeholder="多选渲染模版"
+ style="width: 100%"
+ mode="multiple" show-search>
+              <a-select-option v-for="item in renderTemplates" :key="item.id" :value="item.id">{{ item.name }}</a-select-option>
+            </a-select>
+          </a-form-item>
+          <a-form-item label="绑定 Word 样式">
             <p class="hint tiny">对话导出 Word 时仅展示此处勾选的样式；不选则展示全部样式。</p>
-            <el-select
-              v-model="form.word_style_ids"
-              multiple
-              filterable
-              clearable
-              placeholder="多选 Word 样式"
-              style="width: 100%"
-            >
-              <el-option v-for="item in wordStyles" :key="item.id" :label="item.name" :value="item.id" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="绑定个人要素">
+            <a-select
+ v-model:value="form.word_style_ids"
+ allow-clear
+ placeholder="多选 Word 样式"
+ style="width: 100%"
+ mode="multiple" show-search>
+              <a-select-option v-for="item in wordStyles" :key="item.id" :value="item.id">{{ item.name }}</a-select-option>
+            </a-select>
+          </a-form-item>
+          <a-form-item label="绑定个人要素">
             <p class="hint tiny">对话关联要素、查看要素库时仅展示此处勾选；不选则选中该机器人时个人库为空（本任务要素仍可见）。</p>
-            <el-select
-              v-model="form.element_library_ids"
-              multiple
-              filterable
-              clearable
-              placeholder="多选要素库条目"
-              style="width: 100%"
-            >
-              <el-option
+            <a-select
+ v-model:value="form.element_library_ids"
+ allow-clear
+ placeholder="多选要素库条目"
+ style="width: 100%"
+ mode="multiple" show-search>
+              <a-select-option
                 v-for="item in elementLibrary"
                 :key="item.id"
-                :label="elementOptionLabel(item)"
-                :value="item.id"
-              />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="绑定资料库（资料包）">
+                :value="item.id">{{ elementOptionLabel(item) }}</a-select-option>
+            </a-select>
+          </a-form-item>
+          <a-form-item label="绑定资料库（资料包）">
             <p class="hint tiny">对话选资料包、查看资料库时仅展示已入库且勾选的资料包；不选则选中该机器人时资料库列表为空。</p>
-            <el-select
-              v-model="form.materials_pack_ids"
-              multiple
-              filterable
-              clearable
-              placeholder="多选已入库资料包"
-              style="width: 100%"
-            >
-              <el-option
+            <a-select
+ v-model:value="form.materials_pack_ids"
+ allow-clear
+ placeholder="多选已入库资料包"
+ style="width: 100%"
+ mode="multiple" show-search>
+              <a-select-option
                 v-for="item in materialsPacks"
                 :key="item.id"
-                :label="item.name || item.id"
-                :value="item.id"
-              />
-            </el-select>
-          </el-form-item>
-        </el-form>
+                :value="item.id">{{ item.name || item.id }}</a-select-option>
+            </a-select>
+          </a-form-item>
+        </a-form>
       </div>
 
       <template #footer>
         <div class="footer-row">
-          <el-button v-if="existing" type="danger" plain :loading="busy" @click="remove">删除</el-button>
+          <a-button v-if="existing" :loading="busy" @click="remove" danger>删除</a-button>
           <div class="footer-spacer" />
-          <el-button @click="dialog = false">取消</el-button>
-          <el-button v-if="step > 0" :disabled="busy || !!generating" @click="step -= 1">上一步</el-button>
-          <el-button v-if="step < 2" type="primary" @click="nextStep">下一步</el-button>
-          <el-button v-else type="primary" :loading="busy" @click="save">保存</el-button>
+          <a-button @click="dialog = false">取消</a-button>
+          <a-button v-if="step > 0" :disabled="busy || !!generating" @click="step -= 1">上一步</a-button>
+          <a-button v-if="step < 2" type="primary" @click="nextStep">下一步</a-button>
+          <a-button v-else type="primary" :loading="busy" @click="save">保存</a-button>
         </div>
       </template>
-    </el-dialog>
+    </a-modal>
   </div>
 </template>
 
 <script setup>
 import { onMounted, reactive, ref } from "vue";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessage, ElMessageBox } from "../ui.js";
 
 import { request } from "../api";
 

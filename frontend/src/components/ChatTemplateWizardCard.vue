@@ -11,75 +11,74 @@
             <span>{{ item.id }}</span>
           </div>
           <div class="pick-actions">
-            <el-button size="small" round :disabled="disabled || busy" @click="pickExisting(item.id)">
+            <a-button size="small" :disabled="disabled || busy" @click="pickExisting(item.id)" shape="round">
               选用
-            </el-button>
-            <el-button size="small" round :disabled="disabled || busy" @click="editExisting(item.id)">
+            </a-button>
+            <a-button size="small" :disabled="disabled || busy" @click="editExisting(item.id)" shape="round">
               编辑
-            </el-button>
+            </a-button>
           </div>
         </div>
       </div>
-      <el-button class="chat-action-btn" type="primary" round :disabled="disabled" @click="goEdit">
+      <a-button class="chat-action-btn" type="primary" :disabled="disabled" @click="goEdit" shape="round">
         新建{{ resourceLabel }}
-      </el-button>
+      </a-button>
     </div>
 
     <div v-else-if="step === 'edit' && resource === 'render_template'" class="pane">
-      <el-form label-position="top" size="small">
-        <el-form-item label="名称">
-          <el-input v-model="renderForm.name" :disabled="disabled" />
-        </el-form-item>
-        <el-form-item label="说明">
-          <el-input v-model="renderForm.desc" type="textarea" :rows="2" :disabled="disabled" />
-        </el-form-item>
-        <el-form-item label="模版 HTML（占位符 {{章节key}}）">
-          <el-input v-model="renderForm.html" type="textarea" :rows="8" :disabled="disabled" />
-        </el-form-item>
-      </el-form>
-      <el-button class="chat-action-btn" type="primary" round :loading="busy" :disabled="disabled" @click="saveRender">
+      <a-form layout="vertical" size="small">
+        <a-form-item label="名称">
+          <a-input v-model:value="renderForm.name" :disabled="disabled" />
+        </a-form-item>
+        <a-form-item label="说明">
+          <a-textarea v-model:value="renderForm.desc" :rows="2" :disabled="disabled" />
+        </a-form-item>
+        <a-form-item label="模版 HTML（占位符 {{章节key}}）">
+          <a-textarea v-model:value="renderForm.html" :rows="8" :disabled="disabled" />
+        </a-form-item>
+      </a-form>
+      <a-button class="chat-action-btn" type="primary" :loading="busy" :disabled="disabled" @click="saveRender" shape="round">
         保存并绑定到机器人
-      </el-button>
+      </a-button>
     </div>
 
     <div v-else-if="step === 'edit' && resource === 'word_style'" class="pane">
-      <el-form label-position="top" size="small">
-        <el-form-item label="名称">
-          <el-input v-model="styleForm.name" :disabled="disabled" />
-        </el-form-item>
-        <el-form-item label="说明">
-          <el-input v-model="styleForm.desc" type="textarea" :rows="2" :disabled="disabled" />
-        </el-form-item>
-        <el-form-item label="正文字号 (pt)">
-          <el-input-number v-model="styleForm.bodySize" :min="9" :max="18" :disabled="disabled" />
-        </el-form-item>
-        <el-form-item label="正文字体">
-          <el-input v-model="styleForm.bodyFont" placeholder="宋体" :disabled="disabled" />
-        </el-form-item>
-      </el-form>
-      <el-button class="chat-action-btn" type="primary" round :loading="busy" :disabled="disabled" @click="saveStyle">
+      <a-form layout="vertical" size="small">
+        <a-form-item label="名称">
+          <a-input v-model:value="styleForm.name" :disabled="disabled" />
+        </a-form-item>
+        <a-form-item label="说明">
+          <a-textarea v-model:value="styleForm.desc" :rows="2" :disabled="disabled" />
+        </a-form-item>
+        <a-form-item label="正文字号 (pt)">
+          <a-input-number v-model:value="styleForm.bodySize" :min="9" :max="18" :disabled="disabled"  />
+        </a-form-item>
+        <a-form-item label="正文字体">
+          <a-input v-model:value="styleForm.bodyFont" placeholder="宋体" :disabled="disabled" />
+        </a-form-item>
+      </a-form>
+      <a-button class="chat-action-btn" type="primary" :loading="busy" :disabled="disabled" @click="saveStyle" shape="round">
         保存并绑定到机器人
-      </el-button>
+      </a-button>
     </div>
 
     <div v-else-if="step === 'done'" class="pane">
       <p class="hint done-hint">✓ {{ resourceLabel }}已绑定。导出请点页面底部「下载 Word」，或下方按钮。</p>
-      <el-button
-        class="chat-action-btn"
-        type="primary"
-        round
-        :disabled="disabled"
-        @click="emit('export-word')"
-      >
+      <a-button
+ class="chat-action-btn"
+ type="primary"
+ :disabled="disabled"
+ @click="emit('export-word')"
+ shape="round">
         下载 Word
-      </el-button>
+      </a-button>
     </div>
   </div>
 </template>
 
 <script setup>
 import { computed, onMounted, reactive, ref } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage } from "../ui.js";
 
 import { request } from "../api";
 import ChatFlowPipeline from "./ChatFlowPipeline.vue";

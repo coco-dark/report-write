@@ -23,47 +23,44 @@
     <p v-else class="card-hint">目录为空，请点「重新生成」或由助手重新起草。</p>
     <div class="confirm-actions">
       <template v-if="editable">
-        <el-button class="chat-action-btn" round :loading="busy" :disabled="disabled" @click="$emit('regenerate')">
+        <a-button class="chat-action-btn" :loading="busy" :disabled="disabled" @click="$emit('regenerate')" shape="round">
           重新生成
-        </el-button>
-        <el-button
-          class="chat-action-btn"
-          type="primary"
-          round
-          :loading="busy"
-          :disabled="disabled || !chapterCount"
-          @click="$emit('confirm')"
-        >
+        </a-button>
+        <a-button
+ class="chat-action-btn"
+ type="primary"
+ :loading="busy"
+ :disabled="disabled || !chapterCount"
+ @click="$emit('confirm')"
+ shape="round">
           确认大纲并继续
-        </el-button>
-        <el-button
-          v-if="canCollectBlueprint"
-          class="chat-action-btn"
-          round
-          :loading="busy"
-          :disabled="disabled || !chapterCount"
-          @click="$emit('collect-blueprint')"
-        >
+        </a-button>
+        <a-button
+ v-if="canCollectBlueprint"
+ class="chat-action-btn"
+ :loading="busy"
+ :disabled="disabled || !chapterCount"
+ @click="$emit('collect-blueprint')"
+ shape="round">
           收录到蓝本库
-        </el-button>
+        </a-button>
       </template>
       <template v-else>
-        <el-button class="chat-action-btn" type="primary" round :loading="busy" :disabled="disabled" @click="$emit('reopen')">
+        <a-button class="chat-action-btn" type="primary" :loading="busy" :disabled="disabled" @click="$emit('reopen')" shape="round">
           修改大纲
-        </el-button>
-        <el-button class="chat-action-btn" round :loading="busy" :disabled="disabled" @click="$emit('regenerate')">
+        </a-button>
+        <a-button class="chat-action-btn" :loading="busy" :disabled="disabled" @click="$emit('regenerate')" shape="round">
           重新生成
-        </el-button>
-        <el-button
-          v-if="canCollectBlueprint"
-          class="chat-action-btn"
-          round
-          :loading="busy"
-          :disabled="disabled || !chapterCount"
-          @click="$emit('collect-blueprint')"
-        >
+        </a-button>
+        <a-button
+ v-if="canCollectBlueprint"
+ class="chat-action-btn"
+ :loading="busy"
+ :disabled="disabled || !chapterCount"
+ @click="$emit('collect-blueprint')"
+ shape="round">
           收录到蓝本库
-        </el-button>
+        </a-button>
       </template>
     </div>
   </div>

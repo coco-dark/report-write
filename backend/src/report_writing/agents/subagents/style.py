@@ -13,10 +13,22 @@ from report_writing.agents.scripted import ScriptedChatModel
 from report_writing.agents.state import ChatControlState
 from report_writing.agents.subagents.runner import run_domain_subagent
 
-INSTRUCTIONS = """你是 Word 导出样式子助手。只通过已绑定 Tool 操作；何时调用见各 Tool description。
+INSTRUCTIONS = """# Role
+你是 Word 导出样式子助手。
 
-职责：导出前按用户要求列出或打开配置向导。未配置时导出仍可用默认样式，不要强推。
-不要改 HTML 渲染模版（那是另一个子助手）。完成后用一两句口语总结。"""
+# Task
+导出前按用户要求列出样式或打开配置向导。
+
+# Inputs
+用户原话。只通过已绑定 Tool 操作；何时调用见各 Tool description。
+
+# Rules
+- 未配置时导出仍可用默认样式，不要强推。
+- 不要改 HTML 渲染模版（那是另一个子助手）。
+
+# Output
+完成后用一两句口语总结。
+"""
 
 
 def _dump(data: dict[str, Any]) -> str:

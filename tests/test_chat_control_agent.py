@@ -251,7 +251,7 @@ def _bind_robot_blueprints(home: Path, robot_id: str, *blueprint_ids: str) -> No
     update_robot(home, robot_id, data)
 
 
-def test_step_mode_progress_shows_focus_chapter_only():
+def test_step_mode_progress_shows_written_chapters_only():
     from report_writing.chat import WRITING_PACE_STEP, _visible_progress_chapters
 
     rows = [
@@ -259,21 +259,22 @@ def test_step_mode_progress_shows_focus_chapter_only():
         *[{"key": f"c{i}", "status": "pending", "has_draft": False, "steps": []} for i in range(2, 112)],
     ]
     visible, collapsed = _visible_progress_chapters(rows, pace=WRITING_PACE_STEP)
-    assert [r["key"] for r in visible] == ["c1", "c2"]
-    assert visible[1].get("is_next") is True
-    assert collapsed == 109
+    assert [r["key"] for r in visible] == ["c1"]
+    assert collapsed == 110
 
 
-def test_batch_mode_progress_lists_all_chapters():
+def test_batch_mode_progress_hides_unwritten_chapters():
     from report_writing.chat import WRITING_PACE_BATCH, _visible_progress_chapters
 
     rows = [
         {"key": "c1", "status": "awaiting_confirm", "has_draft": True, "steps": []},
         {"key": "c2", "status": "pending", "has_draft": False, "steps": []},
+        {"key": "c3", "status": "writing", "has_draft": False, "steps": [{"step": "write"}], "is_running": True},
+        {"key": "c4", "status": "confirmed", "has_draft": False, "steps": []},  # 无正文不算已写
     ]
     visible, collapsed = _visible_progress_chapters(rows, pace=WRITING_PACE_BATCH)
-    assert len(visible) == 2
-    assert collapsed == 0
+    assert [r["key"] for r in visible] == ["c1", "c3"]
+    assert collapsed == 2
 
 
 def test_filter_outline_keeps_ancestors_only():

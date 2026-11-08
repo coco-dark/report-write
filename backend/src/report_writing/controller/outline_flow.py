@@ -291,6 +291,70 @@ def _merge_outline_keep_existing(
     return merged
 
 
+def _preserve_chapter_element_bindings(
+    existing: list[OutlineNode],
+    incoming: list[OutlineNode],
+) -> list[OutlineNode]:
+    """整树 PUT / 短列表合并时：空 element_ids 不得冲掉已落盘关联。
+
+    切会话、进度卡、关联后回写目录都可能带上空数组；取消关联走专用接口。
+    """
+    old_by = {
+        str(node.key or "").strip(): node
+        for node in existing
+        if str(getattr(node, "key", "") or "").strip()
+    }
+
+    def _restore_point_links(old_node: OutlineNode, new_node: OutlineNode) -> None:
+        old_items = list(getattr(old_node, "point_items", None) or [])
+        new_items = list(getattr(new_node, "point_items", None) or [])
+        if not old_items or not new_items:
+            return
+        by_id: dict[str, str] = {}
+        by_text: dict[str, str] = {}
+        for row in old_items:
+            if not isinstance(row, dict):
+                continue
+            eid = str(row.get("element_id") or "").strip()
+            if not eid:
+                continue
+            rid = str(row.get("id") or "").strip()
+            if rid:
+                by_id[rid] = eid
+            text = str(row.get("text") or "").strip()
+            if text:
+                by_text[text] = eid
+        restored = False
+        next_items = []
+        for row in new_items:
+            if not isinstance(row, dict):
+                next_items.append(row)
+                continue
+            nxt = dict(row)
+            if not str(nxt.get("element_id") or "").strip():
+                eid = by_id.get(str(nxt.get("id") or "").strip()) or by_text.get(
+                    str(nxt.get("text") or "").strip()
+                )
+                if eid:
+                    nxt["element_id"] = eid
+                    restored = True
+            next_items.append(nxt)
+        if restored:
+            new_node.point_items = next_items
+
+    for node in incoming:
+        key = str(getattr(node, "key", "") or "").strip()
+        old = old_by.get(key)
+        if old is None:
+            continue
+        new_ids = [str(x).strip() for x in (node.element_ids or []) if str(x).strip()]
+        old_ids = [str(x).strip() for x in (old.element_ids or []) if str(x).strip()]
+        if not new_ids and old_ids:
+            node.element_ids = list(old_ids)
+        _restore_point_links(old, node)
+    return incoming
+
+
 def maybe_restore_outline_from_source_blueprint(task_dir: Path, task: WritingTask) -> WritingTask:
     """写作副本若被裁成源蓝本的小子集，从源蓝本补回缺失章（保留副本上已分析/已写字段）。"""
     from report_writing.controller.study_flow import _ensure_brief_ready
@@ -373,6 +437,7 @@ def save_outline(
                 len(incoming_keys),
             )
             incoming = _merge_outline_keep_existing(existing, incoming)
+    incoming = _preserve_chapter_element_bindings(existing, incoming)
     tree = outline_from_payload([item.to_dict() for item in incoming])
     task.outline = tree
     from report_writing.domain.point_items_sync import normalize_chapter_point_items_on_node
@@ -750,10 +815,13 @@ def _outline_polish_with_llm(tree: OutlineTree, toc_slice: str, *, model=None) -
         sent = entries[:180]
         payload = json.dumps(sent, ensure_ascii=False)
     prompt = (
-        "你是报告目录校对助手。根据【目录区原文】修正【待校对列表】："
-        "删除明显不是目录的句子；修正错乱序号与标题；保留全部真实章节与子节；"
-        "不要合并章节、不要编造。只返回 JSON 数组，字段 sequence、title、level。\n\n"
-        f"【目录区原文】\n{excerpt}\n\n【待校对列表】\n{payload}"
+        "# Role\n你是报告目录校对助手。\n"
+        "# Task\n根据目录区原文修正待校对列表：删除明显不是目录的句子；修正错乱序号与标题；"
+        "保留全部真实章节与子节；不要合并章节、不要编造。\n"
+        "# Inputs\n"
+        f"<toc_source>\n{excerpt}\n</toc_source>\n"
+        f"<draft_outline>\n{payload}\n</draft_outline>\n"
+        "# Output\n只返回 JSON 数组，字段 sequence、title、level。"
     )
     try:
         message = model.invoke(prompt)

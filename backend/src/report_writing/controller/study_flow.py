@@ -111,6 +111,9 @@ def _lock_brief_to_outline(brief, tree: OutlineTree) -> None:
         chapter.structure_only = bool(getattr(node, "structure_only", False))
         chapter.fixed_output = bool(getattr(node, "fixed_output", False))
         chapter.search_terms_separate = bool(getattr(node, "search_terms_separate", False))
+        from report_writing.domain.chapter_compose import copy_compose_fields
+
+        copy_compose_fields(chapter, node)
         blocks = _content_blocks_of(node)
         chapter.content_blocks = blocks
 
@@ -159,6 +162,9 @@ def _brief_from_outline(task) -> "WritingBrief":
                 element_ids=list(node.element_ids or []),
                 structure_only=structure_only,
                 fixed_output=fixed_output,
+                presence=str(getattr(node, "presence", "") or "always"),
+                compose=str(getattr(node, "compose", "") or "hybrid"),
+                extracts=list(getattr(node, "extracts", None) or []),
                 search_terms_separate=bool(getattr(node, "search_terms_separate", False)),
             )
         )
@@ -249,6 +255,9 @@ def _ensure_brief_ready(task) -> None:
                         element_ids=list(node.element_ids or []),
                         structure_only=structure_only,
                         fixed_output=fixed_output,
+                        presence=str(getattr(node, "presence", "") or "always"),
+                        compose=str(getattr(node, "compose", "") or "hybrid"),
+                        extracts=list(getattr(node, "extracts", None) or []),
                         search_terms_separate=bool(getattr(node, "search_terms_separate", False)),
                     )
                 )
@@ -799,20 +808,32 @@ def auto_study_selected_chapters(
             span_head = "\n".join(span_paras[:3])
             if _excerpt_foreign_sequence(span_head, node.sequence or ""):
                 span_paras = None
+        # 单章粘贴常无「4.1.1 标题」行：切段失败时回退全文，否则会跳过模型并沿用旧简述
+        single_chapter = len(selected) == 1
         excerpt, matched_ok = _best_chapter_excerpt(
             text,
             sequence=node.sequence or "",
             title=node.title or "",
             span_paragraphs=span_paras,
-            # 有明确序号时禁止回退全文，否则模型易从同名其它章摘参考正文
-            allow_full_fallback=len(selected) == 1 and not (node.sequence or "").strip(),
+            allow_full_fallback=single_chapter,
             heading_index=heading_index,
         )
+        if (
+            not matched_ok
+            and single_chapter
+            and (text or "").strip()
+            and not bool(getattr(node, "structure_only", False))
+        ):
+            excerpt = (text or "").strip()[:CHAPTER_EXCERPT_MAX_CHARS]
+            matched_ok = True
         points: list[str] = []
         keywords: list[str] = []
         describes = ""
         content_blocks: list = []
         project_slots: list = []
+        presence = str(getattr(node, "presence", "") or "always")
+        compose = str(getattr(node, "compose", "") or "hybrid")
+        boilerplate_text = ""
         user_structure_only = bool(getattr(node, "structure_only", False))
         structure_only = user_structure_only
         if on_event is not None:
@@ -853,11 +874,39 @@ def auto_study_selected_chapters(
             located_excerpt = excerpt
             # 大纲未标仅目录：始终生成要点；启发式/模型不得把 structure_only 改回 True
             # （用户在文档副本取消「仅目录」后，分析不得再盖成目录节点）
-            points, keywords, describes, raw_blocks, _reference_text, _parsed_so, project_slots = parse_points_and_keywords(
-                excerpt, title=node.title, sequence=node.sequence or "", model=model
+            node_compose = str(getattr(node, "compose", "") or "").strip()
+            node_presence = str(getattr(node, "presence", "") or "").strip()
+            already_configured = bool(list(getattr(node, "points", None) or []) or list(getattr(node, "point_items", None) or []))
+            points, keywords, describes, raw_blocks, analyzed_reference, _parsed_so, project_slots, presence, compose = parse_points_and_keywords(
+                excerpt,
+                title=node.title,
+                sequence=node.sequence or "",
+                model=model,
+                compose=node_compose,
+                presence=node_presence,
+                compose_locked=already_configured and bool(node_compose),
+                category=str(getattr(task, "category", "") or ""),
+            )
+            from report_writing.domain.chapter_compose import (
+                COMPOSE_TEMPLATE_FILL,
+                normalize_compose,
             )
             from report_writing.domain.point_items_sync import merge_project_slots_into_points
 
+            if normalize_compose(compose) == COMPOSE_TEMPLATE_FILL:
+                analyzed = (analyzed_reference or "").strip()
+                if "{{" in analyzed or "｛｛" in analyzed:
+                    boilerplate_text = analyzed
+                else:
+                    from report_writing.domain.boilerplate import ensure_boilerplate_text
+
+                    filled = ensure_boilerplate_text(
+                        analyzed or excerpt,
+                        slots=project_slots,
+                        title=node.title,
+                        model=model,
+                    )
+                    boilerplate_text = (filled.text or "").strip()
             points = merge_project_slots_into_points(points, project_slots)
             structure_only = False
             content_blocks = [
@@ -867,8 +916,9 @@ def auto_study_selected_chapters(
                 keywords = _keywords_from_title_points(node.title, points)
             # 可写章分析完成至少落 1 条要点，避免 UI 仍显示「待分析」
             if not points:
-                tip = (node.title or "").strip() or label
-                points = [f"围绕「{tip}」交代清楚相关内容、依据与本章要点"]
+                from report_writing.domain.compose_analysis import default_points_for_compose
+
+                points = default_points_for_compose(node.title or label, compose)
             # 参考正文只认定位切段；模型常把同名章（如 7.4）写进 reference_text，一律不采信
             excerpt = located_excerpt[:CHAPTER_EXCERPT_MAX_CHARS]
         elif not user_structure_only and not (matched_ok and excerpt.strip()):
@@ -928,6 +978,9 @@ def auto_study_selected_chapters(
             accepted=True,
             structure_only=structure_only,
             project_slots=list(project_slots or []),
+            presence=presence,
+            compose=compose,
+            boilerplate=boilerplate_text,
         )
         drafts.append(draft)
         # 范围学习：学完一章立刻落盘，文档窗可「运行一章定位一章」看到已分析/要点
@@ -1016,7 +1069,6 @@ def _apply_study_drafts_to_outline(task, drafts: list) -> set[str]:
     from report_writing.domain.models import AutoStudyDraft, ContentBlock
     from report_writing.domain.point_items_sync import (
         apply_points_to_outline_node,
-        aux_prompt_from_project_slots,
     )
 
     if task.outline is None:
@@ -1048,16 +1100,9 @@ def _apply_study_drafts_to_outline(task, drafts: list) -> set[str]:
                     node,
                     list(draft.points),
                     raw_point_items=raw_items if isinstance(raw_items, list) else None,
+                    replace=True,
                 )
             slots = list(getattr(draft, "project_slots", None) or [])
-            if slots and not structure_only:
-                existing_aux = (getattr(node, "aux_prompt", None) or "").strip()
-                if not existing_aux or "【建议补充资料】" not in existing_aux:
-                    node.aux_prompt = aux_prompt_from_project_slots(
-                        list(node.points or draft.points or []),
-                        slots,
-                        existing=existing_aux,
-                    )
             draft_keywords = [
                 item.strip() for item in (getattr(draft, "keywords", None) or []) if str(item).strip()
             ]
@@ -1073,13 +1118,49 @@ def _apply_study_drafts_to_outline(task, drafts: list) -> set[str]:
                     item if isinstance(item, ContentBlock) else ContentBlock.model_validate(item)
                     for item in blocks
                 ]
-        if (draft.describes or "").strip():
+        # 本轮写出了要点：简述以草案为准（空串则清掉旧串章简述，禁止 pick 旧文残留）
+        if not structure_only and list(getattr(draft, "points", None) or []):
+            node.describes = (draft.describes or "").strip()
+        elif (draft.describes or "").strip():
             node.describes = draft.describes.strip()
+        if getattr(draft, "presence", None):
+            node.presence = str(draft.presence)
+        if getattr(draft, "compose", None):
+            node.compose = str(draft.compose)
+        slots = list(getattr(draft, "project_slots", None) or [])
+        if slots:
+            from report_writing.domain.chapter_compose import extracts_from_slots
+
+            node.extracts = extracts_from_slots(slots)
+        elif not structure_only and list(getattr(draft, "points", None) or []):
+            # 新要点已不含串章槽位时，清掉旧 extracts，避免文档窗仍显示接地元数据
+            node.extracts = []
         excerpt = (draft.sample_excerpt or "").strip()
-        if excerpt:
-            existing = (getattr(node, "reference_text", None) or "").strip()
-            if (not existing) or _excerpt_foreign_sequence(existing, node.sequence or ""):
-                node.reference_text = excerpt[:CHAPTER_EXCERPT_MAX_CHARS]
+        boilerplate = str(getattr(draft, "boilerplate", "") or "").strip()
+        from report_writing.domain.boilerplate import prepare_reference_from_analysis
+        from report_writing.domain.chapter_compose import COMPOSE_FIXED, normalize_compose
+        from report_writing.domain.content_blocks import ensure_html_fragment
+
+        mode = normalize_compose(getattr(draft, "compose", None) or getattr(node, "compose", None))
+        source = (boilerplate if mode not in {"auto_generate", COMPOSE_FIXED} else "") or excerpt
+        if source and (
+            not (getattr(node, "reference_text", None) or "").strip()
+            or _excerpt_foreign_sequence(str(getattr(node, "reference_text", "") or ""), node.sequence or "")
+        ):
+            prepared = prepare_reference_from_analysis(
+                source[:CHAPTER_EXCERPT_MAX_CHARS],
+                compose=mode,
+                slots=list(getattr(draft, "project_slots", None) or []),
+                title=node.title or "",
+            )
+            node.reference_text = ensure_html_fragment(prepared) if prepared else source[:CHAPTER_EXCERPT_MAX_CHARS]
+        if mode == COMPOSE_FIXED:
+            node.compose = COMPOSE_FIXED
+            node.fixed_output = True
+            node.points = []
+            node.point_items = []
+            node.describes = ""
+            node.aux_prompt = ""
     # 学要点只写内容，冻结已确认目录的父子/ key
     task.outline = finalize_outline(list(task.outline.chapters), preserve_parents=True)
     if task.outline.chapters:

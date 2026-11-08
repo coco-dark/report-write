@@ -90,7 +90,13 @@ export async function readStream(response, onEvent, { signal } = {}) {
       buffer = parts.pop() || "";
       for (const part of parts) {
         const line = part.split("\n").find((item) => item.startsWith("data: "));
-        if (line) onEvent(JSON.parse(line.slice(6)));
+        if (line) {
+          try {
+            onEvent(JSON.parse(line.slice(6)));
+          } catch {
+            /* 单条 SSE 损坏时继续读后续过程事件 */
+          }
+        }
       }
     }
   } catch (error) {

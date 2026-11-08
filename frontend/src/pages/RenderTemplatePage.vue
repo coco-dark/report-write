@@ -5,7 +5,7 @@
         <h1>渲染模版</h1>
         <p>个人渲染模版（仅本账号）· 用 <code v-text="'{{' + '章节key' + '}}'" /> 占位填充章节 HTML，导出 Word；无模版时由大模型生成整篇 HTML。</p>
       </div>
-      <el-button type="primary" round @click="openCreate">新建模版</el-button>
+      <a-button type="primary" @click="openCreate" shape="round">新建模版</a-button>
     </header>
 
     <div v-if="loading" class="hint">加载中…</div>
@@ -22,20 +22,20 @@
           <strong>{{ item.name }}</strong>
           <p>{{ item.desc || "暂无说明" }}</p>
           <div class="meta">
-            <el-tag size="small" effect="plain">{{ item.format || "DOCX" }}</el-tag>
+            <a-tag size="small">{{ item.format || "DOCX" }}</a-tag>
             <span>{{ item.updated }}</span>
           </div>
         </div>
       </article>
     </div>
-    <el-empty v-if="!loading && !templates.length" description="还没有渲染模版" :image-size="72" />
+    <a-empty v-if="!loading && !templates.length" description="还没有渲染模版" :image-style="{ height: 72 }"  />
 
     <section v-if="current" class="detail">
       <div class="detail-head">
         <h2>{{ current.name }}</h2>
         <div class="detail-actions">
-          <el-button size="small" @click="openEdit">编辑</el-button>
-          <el-button size="small" type="danger" plain @click="removeCurrent">删除</el-button>
+          <a-button size="small" @click="openEdit">编辑</a-button>
+          <a-button size="small" @click="removeCurrent" danger>删除</a-button>
         </div>
       </div>
       <ul class="meta-list">
@@ -55,34 +55,33 @@
       <pre class="html-preview">{{ current.html || "（无 HTML）" }}</pre>
     </section>
 
-    <el-dialog v-model="dialog" :title="form.id ? '编辑渲染模版' : '新建渲染模版'" width="720px" destroy-on-close>
-      <el-form label-position="top">
-        <el-form-item label="名称">
-          <el-input v-model="form.name" placeholder="如：安评正文 A4" />
-        </el-form-item>
-        <el-form-item label="说明">
-          <el-input v-model="form.desc" type="textarea" :rows="2" />
-        </el-form-item>
-        <el-form-item label="模版 HTML（含占位符）">
-          <el-input
-            v-model="form.html"
-            type="textarea"
-            :autosize="{ minRows: 10, maxRows: 22 }"
+    <a-modal v-model:open="dialog" :title="form.id ? '编辑渲染模版' : '新建渲染模版'" width="720px" destroy-on-close centered>
+      <a-form layout="vertical">
+        <a-form-item label="名称">
+          <a-input v-model:value="form.name" placeholder="如：安评正文 A4" />
+        </a-form-item>
+        <a-form-item label="说明">
+          <a-textarea v-model:value="form.desc" :rows="2" />
+        </a-form-item>
+        <a-form-item label="模版 HTML（含占位符）">
+          <a-textarea
+            v-model:value="form.html"
+            :auto-size="{ minRows: 10, maxRows: 22 }"
             placeholder="<h1>报告</h1>&#10;<h2>{{title:ch-1}}</h2>&#10;{{ch-1}}"
           />
-        </el-form-item>
-      </el-form>
+        </a-form-item>
+      </a-form>
       <template #footer>
-        <el-button @click="dialog = false">取消</el-button>
-        <el-button type="primary" :loading="busy" @click="submitForm">保存</el-button>
+        <a-button @click="dialog = false">取消</a-button>
+        <a-button type="primary" :loading="busy" @click="submitForm">保存</a-button>
       </template>
-    </el-dialog>
+    </a-modal>
   </div>
 </template>
 
 <script setup>
 import { computed, onMounted, reactive, ref } from "vue";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessage, ElMessageBox } from "../ui.js";
 
 import { request } from "../api";
 

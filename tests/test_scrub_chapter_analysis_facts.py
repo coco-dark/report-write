@@ -52,7 +52,7 @@ def test_parse_payload_keeps_slots_separate_from_points():
       "content_blocks": [],
       "reference_text": "襄阳连云220千伏输变电工程采用SFSZ-50000。"
     }"""
-    points, keywords, describes, _blocks, reference, structure, style, slots = (
+    points, keywords, describes, _blocks, reference, structure, style, slots, _presence, _compose = (
         _parse_points_keywords_payload(raw)
     )
     assert structure is False

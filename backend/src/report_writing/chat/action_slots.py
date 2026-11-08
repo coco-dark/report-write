@@ -11,6 +11,8 @@ ACTION_SLOT_SOURCE = "action_slots"
 # tool -> 必填槽位（有 task 上下文时）
 _REQUIRED_SLOTS: dict[str, tuple[str, ...]] = {
     "configure_chapter": ("chapter_key",),
+    "get_chapter_info": ("chapter_key",),
+    "generate_chapter_describes": ("chapter_key",),
     "add_chapter_element": ("chapter_key",),
     "associate_elements": ("chapter_key",),
     "dissociate_chapter_element": ("chapter_key", "element_id"),
@@ -27,6 +29,8 @@ _REQUIRED_SLOTS: dict[str, tuple[str, ...]] = {
 
 _TOOL_QUESTIONS: dict[str, str] = {
     "configure_chapter": "你想改哪一章的配置？点一下，或者说章节号也行。",
+    "get_chapter_info": "要看哪一章的配置？点一下，或者说章节号也行。",
+    "generate_chapter_describes": "给哪一章生成章节说明？点一下，或者说章节号也行。",
     "add_chapter_element": "加到哪一章？点一下，或者说章节号就行。",
     "associate_elements": "关联到哪一章？点一下，或者说章节号就行。",
     "dissociate_chapter_element": "要取消哪一章、哪个要素的关联？",

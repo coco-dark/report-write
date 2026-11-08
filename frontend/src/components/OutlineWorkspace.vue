@@ -12,39 +12,37 @@
         <span class="card-title">章节目录</span>
         <span class="hint">树形结构 · 点击节点在下方拓扑中定位</span>
       </div>
-      <el-tree
-        class="outline-chapter-tree"
-        :data="chapterTreeData"
-        node-key="key"
-        default-expand-all
-        highlight-current
-        :expand-on-click-node="false"
-        :current-node-key="currentChapterKey"
-        @node-click="onChapterTreeClick"
-      >
+      <UiTree
+ class="outline-chapter-tree"
+ :data="chapterTreeData"
+ node-key="key"
+ default-expand-all
+ highlight-current
+ :expand-on-click-node="false"
+ :current-node-key="currentChapterKey"
+ @node-click="onChapterTreeClick"
+ >
         <template #default="{ data }">
           <span class="tree-seq">{{ data.sequence || "—" }}</span>
           <span class="tree-title">{{ data.title || data.key }}</span>
-          <el-button
-            v-if="confirmed"
-            link
-            type="primary"
-            size="small"
-            class="tree-link-btn"
-            @click.stop="openElementLinkForKey(data.key)"
-          >
+          <a-button
+ v-if="confirmed"
+ size="small"
+ class="tree-link-btn"
+ @click.stop="openElementLinkForKey(data.key)"
+ type="link">
             关联要素{{ (data.element_ids || []).length ? `（${data.element_ids.length}）` : "" }}
-          </el-button>
+          </a-button>
         </template>
-      </el-tree>
+      </UiTree>
     </div>
 
     <div v-if="nodes.length" class="canvas-card">
       <div class="canvas-toolbar">
-        <el-button size="small" :disabled="confirmed || busy" @click="addNode">新增章节</el-button>
-        <el-button size="small" :disabled="busy" @click="startNewElement">新增要素</el-button>
-        <el-button size="small" :disabled="!nodes.length" @click="relayout">重新排版</el-button>
-        <el-button size="small" text :disabled="busy || !nodes.length" @click="$emit('copy')">复制目录</el-button>
+        <a-button size="small" :disabled="confirmed || busy" @click="addNode">新增章节</a-button>
+        <a-button size="small" :disabled="busy" @click="startNewElement">新增要素</a-button>
+        <a-button size="small" :disabled="!nodes.length" @click="relayout">重新排版</a-button>
+        <a-button size="small" :disabled="busy || !nodes.length" @click="$emit('copy')" type="text">复制目录</a-button>
         <span class="hint">共 {{ nodes.length }} 章 · {{ elementNodes.length }} 要素 · 章节连到要素建立关联</span>
       </div>
       <div class="canvas">
@@ -70,46 +68,44 @@
       </div>
     </div>
 
-    <el-empty v-else description="生成目录大纲后，这里显示可交互拓扑图" :image-size="72" />
+    <a-empty v-else description="生成目录大纲后，这里显示可交互拓扑图" :image-style="{ height: 72 }"  />
 
-    <el-dialog
-      v-model="dialogVisible"
-      :title="dialogTitle"
-      width="760px"
-      destroy-on-close
-      class="node-dialog"
-      align-center
-      @closed="$emit('dialog-closed')"
-    >
-      <el-form v-if="draft" label-position="top">
-        <el-tabs v-model="chapterTab" class="chapter-tabs">
-          <el-tab-pane label="运行结果" name="run">
+    <a-modal
+ v-model:open="dialogVisible"
+ :title="dialogTitle"
+ width="760px"
+ class="node-dialog"
+ @afterClose="$emit('dialog-closed')"
+ destroy-on-close centered>
+      <a-form v-if="draft" layout="vertical">
+        <a-tabs v-model:activeKey="chapterTab" class="chapter-tabs">
+          <a-tab-pane tab="运行结果" key="run">
             <div v-if="chapterRunState" class="run-result">
               <div class="run-result-banner">
                 <strong>本章运行结果</strong>
-                <el-tag size="small" :type="runStatusType">{{ runStatusLabel }}</el-tag>
+                <a-tag size="small" :color="runStatusType">{{ runStatusLabel }}</a-tag>
                 <span v-if="adoptedEvidence.length">采纳证据 {{ adoptedEvidence.length }}</span>
               </div>
               <p v-if="chapterRunState.human_note" class="hint field-hint">说明：{{ chapterRunState.human_note }}</p>
               <div v-if="runHtml" class="html-draft" v-html="runHtml" />
-              <el-empty v-else description="尚未生成正文（可能检索未采纳证据，或尚未运行完成）" :image-size="64" />
+              <a-empty v-else description="尚未生成正文（可能检索未采纳证据，或尚未运行完成）" :image-style="{ height: 64 }"  />
               <details v-if="(chapterRunState.evidence || []).length" class="evidence-box">
                 <summary>证据卡片（{{ chapterRunState.evidence.length }}）</summary>
                 <ul>
                   <li v-for="card in chapterRunState.evidence" :key="card.id">
-                    <el-tag size="small" :type="card.adopted ? 'success' : 'info'">
+                    <a-tag size="small" :color="card.adopted ? 'success' : 'default'">
                       {{ card.adopted ? "采纳" : "未采纳" }}
-                    </el-tag>
+                    </a-tag>
                     <span class="ev-src">{{ card.source_file || "—" }}</span>
                     <p class="ev-excerpt">{{ card.excerpt }}</p>
                   </li>
                 </ul>
               </details>
             </div>
-            <el-empty v-else description="本章还没有运行记录，点下方「运行本章」开始" :image-size="64" />
-          </el-tab-pane>
+            <a-empty v-else description="本章还没有运行记录，点下方「运行本章」开始" :image-style="{ height: 64 }"  />
+          </a-tab-pane>
 
-          <el-tab-pane label="分析结果" name="result">
+          <a-tab-pane tab="分析结果" key="result">
             <div class="study-result-banner">
               <strong>本章分析结果</strong>
               <span>
@@ -119,29 +115,27 @@
                 版式块 {{ (draft.content_blocks || []).length }}
               </span>
             </div>
-            <el-form-item label="本章简述">
-              <el-input
-                v-model="draft.describes"
-                type="textarea"
+            <a-form-item label="本章简述">
+              <a-textarea
+                v-model:value="draft.describes"
                 :rows="3"
                 placeholder="尚未生成简述；可在「重新解析」粘贴原文生成"
               />
-            </el-form-item>
-            <el-form-item label="写作要点">
+            </a-form-item>
+            <a-form-item label="写作要点">
               <p class="hint field-hint">一行一条，可直接改写。</p>
               <ol v-if="pointsList.length" class="points-view">
                 <li v-for="(line, index) in pointsList" :key="index">{{ line }}</li>
               </ol>
-              <el-empty v-else description="暂无写作要点" :image-size="56" />
-              <el-input
-                v-model="pointsText"
-                type="textarea"
+              <a-empty v-else description="暂无写作要点" :image-style="{ height: 56 }"  />
+              <a-textarea
+                v-model:value="pointsText"
                 :rows="6"
                 class="points-edit"
                 placeholder="编辑要点：一行一条"
               />
-            </el-form-item>
-            <el-form-item label="版式块（文字 / 表格 / 图片占位）">
+            </a-form-item>
+            <a-form-item label="版式块（文字 / 表格 / 图片占位）">
               <ul v-if="(draft.content_blocks || []).length" class="block-list">
                 <li v-for="(block, index) in draft.content_blocks" :key="`${block.kind}-${index}`">
                   <strong>{{ blockKindLabel(block.kind) }}</strong>
@@ -155,9 +149,9 @@
                   }}</pre>
                 </li>
               </ul>
-              <el-empty v-else description="暂无版式块（表格结构等）" :image-size="56" />
-            </el-form-item>
-            <el-form-item :label="draft.fixed_output ? '固定正文' : '参考正文'">
+              <a-empty v-else description="暂无版式块（表格结构等）" :image-style="{ height: 56 }"  />
+            </a-form-item>
+            <a-form-item :label="draft.fixed_output ? '固定正文' : '参考正文'">
               <p class="hint field-hint">
                 {{
                   draft.fixed_output
@@ -165,149 +159,140 @@
                     : "高权重参考写法：描述方式、写作特点与格式；事实仍以检索证据为准，勿照抄参考里的专名/数据。"
                 }}
               </p>
-              <el-input
+              <ChapterHtmlEditor
                 v-model="draft.reference_text"
-                type="textarea"
-                :rows="6"
-                :placeholder="draft.fixed_output ? '粘贴本章固定原文（将按原文输出）' : '粘贴本章参考正文（样板原文节选）'"
+                :placeholder="draft.fixed_output ? '粘贴本章固定原文（将按原文输出）' : '粘贴本章参考正文（样板原文节选，可从 Word 复制）'"
+                :min-height="160"
+                :max-height="360"
               />
-            </el-form-item>
-          </el-tab-pane>
+            </a-form-item>
+          </a-tab-pane>
 
-          <el-tab-pane label="节点配置" name="config">
-            <el-row :gutter="12">
-              <el-col :span="8">
-                <el-form-item label="章节序号">
-                  <el-input v-model="draft.sequence" placeholder="如 1.2" :disabled="confirmed" />
-                </el-form-item>
-              </el-col>
-              <el-col :span="8">
-                <el-form-item label="层级">
-                  <el-input-number v-model="draft.level" :min="1" :max="8" style="width: 100%" />
-                </el-form-item>
-              </el-col>
-              <el-col :span="8">
-                <el-form-item label="上级节点">
-                  <el-select v-model="draft.parent" clearable placeholder="无（顶级）" style="width: 100%">
-                    <el-option
+          <a-tab-pane tab="节点配置" key="config">
+            <a-row :gutter="12">
+              <a-col :span="8">
+                <a-form-item label="章节序号">
+                  <a-input v-model:value="draft.sequence" placeholder="如 1.2" :disabled="confirmed" />
+                </a-form-item>
+              </a-col>
+              <a-col :span="8">
+                <a-form-item label="层级">
+                  <a-input-number v-model:value="draft.level" :min="1" :max="8" style="width: 100%"  />
+                </a-form-item>
+              </a-col>
+              <a-col :span="8">
+                <a-form-item label="上级节点">
+                  <a-select v-model:value="draft.parent" allow-clear placeholder="无（顶级）" style="width: 100%">
+                    <a-select-option
                       v-for="item in parentOptions"
                       :key="item.key"
-                      :label="`${item.sequence || '—'} ${item.title}`"
-                      :value="item.key"
-                    />
-                  </el-select>
-                </el-form-item>
-              </el-col>
-            </el-row>
-            <el-form-item label="标题">
-              <el-input v-model="draft.title" />
-            </el-form-item>
-            <el-form-item label="占位符 key">
+                      :value="item.key">{{ `${item.sequence || '—'} ${item.title}` }}</a-select-option>
+                  </a-select>
+                </a-form-item>
+              </a-col>
+            </a-row>
+            <a-form-item label="标题">
+              <a-input v-model:value="draft.title" />
+            </a-form-item>
+            <a-form-item label="占位符 key">
               <p class="hint field-hint">模版占位用；由章节名中译英生成，可改。勿与其它章节重复。</p>
-              <el-input v-model="draft.key" placeholder="如 substation_site" />
-            </el-form-item>
-            <el-form-item label="仅目录节点">
-              <el-switch
-                v-model="draft.structure_only"
-                active-text="开"
-                inactive-text="关"
-                @change="onStructureOnlyChange"
-              />
+              <a-input v-model:value="draft.key" placeholder="如 substation_site" />
+            </a-form-item>
+            <a-form-item label="仅目录节点">
+              <a-switch
+ v-model:checked="draft.structure_only"
+ checked-children="开"
+ inchecked-children="关"
+ @change="onStructureOnlyChange"
+  />
               <p class="hint field-hint">
                 开启后本节点只作目录标题，不用解析、不检索、不写正文；正文由子节展开。
               </p>
-            </el-form-item>
-            <el-form-item v-if="!draft.structure_only" label="固定内容输出">
-              <el-switch v-model="draft.fixed_output" active-text="开" inactive-text="关" />
+            </a-form-item>
+            <a-form-item v-if="!draft.structure_only" label="固定内容输出">
+              <a-switch v-model:checked="draft.fixed_output" checked-children="开" inchecked-children="关"  />
               <p class="hint field-hint">
                 开启后跳过资料检索，按「分析结果」里的固定正文调用大模型原样输出。
               </p>
-            </el-form-item>
-            <el-form-item v-if="!draft.structure_only && !draft.fixed_output" label="辅助提示词">
+            </a-form-item>
+            <a-form-item v-if="!draft.structure_only && !draft.fixed_output" label="辅助提示词">
               <p class="hint field-hint">
                 硬约束，优先于要点/参考正文；只写写法与体裁，不要写工程名、站名、投资额等项目元数据。
                 例：只输出表格内容，不要文字叙述。
               </p>
-              <el-input
-                v-model="draft.aux_prompt"
-                type="textarea"
+              <a-textarea
+                v-model:value="draft.aux_prompt"
                 :rows="3"
                 placeholder="如：只输出表格，不要导语、结语或其它文字（勿填项目实例）"
               />
-            </el-form-item>
+            </a-form-item>
             <div class="elements-block">
               <div class="paste-head">
                 <span class="paste-title">关联要素</span>
-                <el-button size="small" type="primary" plain @click="openElementLinkFromDraft">
+                <a-button size="small" type="primary" @click="openElementLinkFromDraft">
                   从列表管理关联
-                </el-button>
+                </a-button>
               </div>
               <p class="hint field-hint">
                 要素内容在拓扑「新增要素」或要素节点里配置；本章只勾选要启用的要素。也可在图上把章节连到要素。
               </p>
               <ul v-if="draftLinkedElements.length" class="linked-preview">
                 <li v-for="el in draftLinkedElements" :key="el.id">
-                  <el-tag size="small" effect="plain">{{ elementKindLabel(el.kind) }}</el-tag>
+                  <a-tag size="small">{{ elementKindLabel(el.kind) }}</a-tag>
                   <span>{{ el.name || el.id }}</span>
                 </li>
               </ul>
-              <el-empty v-else description="未关联要素" :image-size="48" />
+              <a-empty v-else description="未关联要素" :image-style="{ height: 48 }"  />
             </div>
-          </el-tab-pane>
+          </a-tab-pane>
 
-          <el-tab-pane label="重新解析" name="parse">
+          <a-tab-pane tab="重新解析" key="parse">
             <div v-if="draft.structure_only" class="parse-box">
-              <el-empty description="目录节点无需解析，正文由子节展开" :image-size="64" />
+              <a-empty description="目录节点无需解析，正文由子节展开" :image-style="{ height: 64 }"  />
             </div>
             <div v-else class="parse-box">
               <div class="paste-head"><span class="paste-title">粘贴原文 · 生成简述、写法要点与表格结构</span></div>
-              <el-input
-                v-model="sampleText"
-                type="textarea"
+              <a-textarea
+                v-model:value="sampleText"
                 :rows="8"
                 placeholder="粘贴该章原文（可含表格描述）；模型提炼写法与表格结构"
               />
               <div class="paste-actions">
-                <el-button
-                  type="primary"
-                  plain
-                  :loading="parsing"
-                  :disabled="!sampleText.trim() || parsing || busy"
-                  @click="parsePoints"
-                >
+                <a-button
+ type="primary"
+ :loading="parsing"
+ :disabled="!sampleText.trim() || parsing || busy"
+ @click="parsePoints"
+ >
                   用 LLM 解析
-                </el-button>
+                </a-button>
               </div>
             </div>
-          </el-tab-pane>
-        </el-tabs>
-      </el-form>
+          </a-tab-pane>
+        </a-tabs>
+      </a-form>
       <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button
-          type="success"
-          plain
-          :loading="busy"
-          :disabled="busy"
-          title="仅运行当前章节"
-          @click="runCurrent(false)"
-        >
+        <a-button @click="dialogVisible = false">取消</a-button>
+        <a-button
+ :loading="busy"
+ :disabled="busy"
+ title="仅运行当前章节"
+ @click="runCurrent(false)"
+ type="default" class="btn-success">
           运行本章
-        </el-button>
-        <el-button
-          type="success"
-          link
-          :loading="busy"
-          :disabled="busy"
-          title="运行本章及所有子章节"
-          @click="runCurrent(true)"
-        >
+        </a-button>
+        <a-button
+ :loading="busy"
+ :disabled="busy"
+ title="运行本章及所有子章节"
+ @click="runCurrent(true)"
+ type="link">
           含子章
-        </el-button>
-        <el-button v-if="!confirmed" type="danger" plain @click="removeCurrent">删除节点</el-button>
-        <el-button type="primary" :loading="saving" :disabled="saving || busy" @click="saveDialog">保存</el-button>
+        </a-button>
+        <a-button v-if="!confirmed" @click="removeCurrent" danger>删除节点</a-button>
+        <a-button type="primary" :loading="saving" :disabled="saving || busy" @click="saveDialog">保存</a-button>
       </template>
-    </el-dialog>
+    </a-modal>
 
     <ChapterElementAssociateDialog
       v-model="elementLinkVisible"
@@ -326,17 +311,14 @@
       @confirm="onElementLinkConfirm"
     />
 
-    <el-dialog
-      v-model="elementDialogVisible"
-      :title="elementDialogIsNew ? '新增要素' : '编辑要素节点'"
-      width="760px"
-      destroy-on-close
-      append-to-body
-      align-center
-      class="element-node-dialog"
-      @closed="onElementDialogClosed"
-    >
-      <el-form v-if="elementDraft" label-position="top">
+    <a-modal
+ v-model:open="elementDialogVisible"
+ :title="elementDialogIsNew ? '新增要素' : '编辑要素节点'"
+ width="760px"
+ class="element-node-dialog"
+ @afterClose="onElementDialogClosed"
+ destroy-on-close centered>
+      <a-form v-if="elementDraft" layout="vertical">
         <ElementConfigFields
           v-model="elementDraft"
           :ref-target-options="refTargetOptions"
@@ -344,13 +326,13 @@
           :task-id="taskId"
           :element-id="elementDraft?.id"
         />
-      </el-form>
+      </a-form>
       <template #footer>
-        <el-button @click="elementDialogVisible = false">取消</el-button>
-        <el-button v-if="!elementDialogIsNew" type="danger" plain @click="removeElementDraft">删除</el-button>
-        <el-button type="primary" @click="saveElementDraft">保存</el-button>
+        <a-button @click="elementDialogVisible = false">取消</a-button>
+        <a-button v-if="!elementDialogIsNew" @click="removeElementDraft" danger>删除</a-button>
+        <a-button type="primary" @click="saveElementDraft">保存</a-button>
       </template>
-    </el-dialog>
+    </a-modal>
   </div>
 </template>
 
@@ -360,10 +342,11 @@ import { Controls } from "@vue-flow/controls";
 import { useVueFlow, VueFlow } from "@vue-flow/core";
 import { MiniMap } from "@vue-flow/minimap";
 import { computed, markRaw, nextTick, ref, watch } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage } from "../ui.js";
 
 import { request } from "../api";
 import { STATUS_LABELS } from "../constants";
+import ChapterHtmlEditor from "./ChapterHtmlEditor.vue";
 import ChapterElementAssociateDialog from "./ChapterElementAssociateDialog.vue";
 import ElementConfigFields from "./ElementConfigFields.vue";
 import ChapterFlowNode from "./ChapterFlowNode.vue";
@@ -580,8 +563,8 @@ const runStatusType = computed(() => {
   const status = chapterRunState.value?.status || "";
   if (status === "confirmed" || status === "awaiting_confirm") return "success";
   if (status === "needs_human" || status === "skipped") return "warning";
-  if (status === "searching" || status === "writing" || status === "checking") return "";
-  return "info";
+  if (status === "searching" || status === "writing" || status === "checking") return "processing";
+  return "default";
 });
 const hasRunResult = computed(() => Boolean(runHtml.value || (chapterRunState.value?.evidence || []).length));
 const parentOptions = computed(() => nodes.value.filter((item) => item.key !== draft.value?.key));
@@ -1357,7 +1340,7 @@ async function parsePoints() {
 }
 .outline-tree-card {
   flex-shrink: 0;
-  border: 1px solid var(--ay-line, var(--el-border-color-lighter));
+  border: 1px solid var(--ay-line, var(--ay-line));
   border-radius: var(--ay-radius-lg, 12px);
   background: #fff;
   padding: 10px 12px 8px;
@@ -1376,20 +1359,20 @@ async function parsePoints() {
   font-size: 14px;
 }
 .outline-chapter-tree {
-  --el-tree-node-content-height: 30px;
+  
   background: transparent;
 }
 .outline-chapter-tree .tree-seq {
   display: inline-block;
   min-width: 2.2em;
   margin-right: 6px;
-  color: var(--el-text-color-secondary);
+  color: var(--ay-muted);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 .outline-chapter-tree .tree-title {
   font-size: 13px;
-  color: var(--el-text-color-primary);
+  color: var(--ay-ink);
 }
 .outline-shell.treeAbove.canvasOnly .canvas-card {
   flex: 1 1 auto;
@@ -1413,14 +1396,14 @@ async function parsePoints() {
 .hint,
 .field-hint {
   margin: 4px 0 0;
-  color: var(--el-text-color-secondary);
+  color: var(--ay-muted);
   font-size: 13px;
   line-height: 1.5;
 }
 .field-hint {
   margin-bottom: 6px;
 }
-.chapter-tabs :deep(.el-tabs__header) {
+.chapter-tabs :deep(.ant-tabs-nav) {
   margin-bottom: 12px;
 }
 .study-result-banner,
@@ -1453,7 +1436,7 @@ async function parsePoints() {
   max-height: 420px;
   overflow: auto;
   padding: 12px;
-  border: 1px solid var(--el-border-color-lighter);
+  border: 1px solid var(--ay-line);
   border-radius: 8px;
   background: #fff;
 }
@@ -1465,14 +1448,14 @@ async function parsePoints() {
 }
 .html-draft :deep(th),
 .html-draft :deep(td) {
-  border: 1px solid var(--el-border-color);
+  border: 1px solid var(--ay-line);
   padding: 4px 8px;
 }
 .html-draft :deep(.image-placeholder) {
   margin: 8px 0;
   padding: 12px;
-  border: 1px dashed var(--el-border-color);
-  color: var(--el-text-color-secondary);
+  border: 1px dashed var(--ay-line);
+  color: var(--ay-muted);
   text-align: center;
 }
 .evidence-box {
@@ -1491,13 +1474,13 @@ async function parsePoints() {
 }
 .evidence-box li {
   padding: 8px 10px;
-  border: 1px solid var(--el-border-color-lighter);
+  border: 1px solid var(--ay-line);
   border-radius: 8px;
   background: #fafbfc;
 }
 .ev-src {
   margin-left: 8px;
-  color: var(--el-text-color-secondary);
+  color: var(--ay-muted);
   font-size: 12px;
 }
 .ev-excerpt {
@@ -1511,7 +1494,7 @@ async function parsePoints() {
   padding: 10px 10px 10px 28px;
   max-height: 280px;
   overflow: auto;
-  border: 1px solid var(--el-border-color-lighter);
+  border: 1px solid var(--ay-line);
   border-radius: 8px;
   background: #fafbfc;
   font-size: 13px;
@@ -1545,7 +1528,7 @@ async function parsePoints() {
 }
 .block-list li {
   padding: 8px 10px;
-  border: 1px solid var(--el-border-color-lighter);
+  border: 1px solid var(--ay-line);
   border-radius: 8px;
   font-size: 13px;
   line-height: 1.45;
@@ -1555,7 +1538,7 @@ async function parsePoints() {
   align-items: baseline;
 }
 .block-note {
-  color: var(--el-text-color-secondary);
+  color: var(--ay-muted);
   flex: 1 1 100%;
 }
 .tree-link-btn {
@@ -1577,7 +1560,7 @@ async function parsePoints() {
   font-size: 13px;
 }
 .tools {
-  border: 1px solid var(--el-border-color-lighter);
+  border: 1px solid var(--ay-line);
   border-radius: 10px;
   overflow: hidden;
 }
@@ -1589,7 +1572,7 @@ async function parsePoints() {
 .elements-block {
   margin-top: 8px;
   padding: 12px;
-  border: 1px dashed var(--el-border-color);
+  border: 1px dashed var(--ay-line);
   border-radius: 10px;
   background: #fafbfc;
 }
@@ -1618,7 +1601,7 @@ async function parsePoints() {
   display: none;
 }
 .canvas-card {
-  border: 1px solid var(--ay-line, var(--el-border-color-lighter));
+  border: 1px solid var(--ay-line, var(--ay-line));
   border-radius: var(--ay-radius-lg, 12px);
   overflow: hidden;
   background: #fff;
@@ -1636,7 +1619,7 @@ async function parsePoints() {
   gap: 8px;
   align-items: center;
   padding: 10px 12px;
-  border-bottom: 1px solid var(--ay-line, var(--el-border-color-lighter));
+  border-bottom: 1px solid var(--ay-line, var(--ay-line));
   flex-shrink: 0;
   background: #fbfcfe;
 }
@@ -1655,14 +1638,14 @@ async function parsePoints() {
 </style>
 
 <style>
-/* append-to-body 要素弹窗需盖在 Vue Flow 之上 */
+/* 要素弹窗需盖在 Vue Flow 之上 */
 .element-node-dialog {
   z-index: 4000 !important;
 }
 .element-card {
   margin-top: 10px;
   padding: 10px;
-  border: 1px solid var(--el-border-color-lighter);
+  border: 1px solid var(--ay-line);
   border-radius: 8px;
   background: #fff;
 }

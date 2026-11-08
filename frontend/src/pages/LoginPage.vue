@@ -7,23 +7,23 @@
       </div>
     </header>
     <div class="card-pane narrow">
-      <el-form label-position="top" @submit.prevent="submit">
-        <el-form-item label="用户名">
-          <el-input v-model="form.username" placeholder="3–32 位字母、数字或下划线" autocomplete="username" />
-        </el-form-item>
-        <el-form-item label="密码">
-          <el-input v-model="form.password" type="password" show-password autocomplete="current-password" />
-        </el-form-item>
-        <el-button type="primary" :loading="busy" native-type="submit">登录</el-button>
-        <el-button link type="primary" @click="goRegister">没有账号？去注册</el-button>
-      </el-form>
+      <a-form layout="vertical" @submit.prevent="submit">
+        <a-form-item label="用户名">
+          <a-input v-model:value="form.username" placeholder="3–32 位字母、数字或下划线" autocomplete="username" />
+        </a-form-item>
+        <a-form-item label="密码">
+          <a-input-password v-model:value="form.password" autocomplete="current-password" />
+        </a-form-item>
+        <a-button type="primary" :loading="busy" html-type="submit">登录</a-button>
+        <a-button @click="goRegister" type="link">没有账号？去注册</a-button>
+      </a-form>
     </div>
   </div>
 </template>
 
 <script setup>
 import { inject, reactive, ref } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage } from "../ui.js";
 
 import { request, setAuth } from "../api";
 

@@ -15,6 +15,7 @@ from report_writing.agents.react import run_react, tool_result
 from report_writing.agents.scripted import ScriptedChatModel, tool_payloads
 from report_writing.domain.models import (
     MAX_REVISIONS,
+    WRITE_SCORE_PASS,
     ChapterDraft,
     ChapterRequirement,
     CheckAction,
@@ -24,14 +25,31 @@ from report_writing.domain.models import (
 )
 from report_writing.domain.rating import _NUMBER
 
-INSTRUCTIONS = """你是报告检查员。先核对草稿，再根据 findings 选择通过、退回改写或交人工。
-不要检索，不要自己重写正文。
-退回改写时 comments 含段落 index 和 message；交人工必须给 reason。
+INSTRUCTIONS = """# Role
+你是资深文档审稿人。文档类型见 user.doc_category（函件、方案、说明书、纪要、合同、述职、报告等）。不要用研究报告标准去卡函件或说明书。
 
-若 user 中 knowledge_fallback 为 true：表示本章无知识库采纳证据、已按要点写骨架正文。
-此时只要 paragraphs 非空且对 points 有结构性覆盖，应 prefer accept（或 revise 润色），
-不要因缺少项目专名/投资额等证据而 needs_human，也不要要求「正文必须为空」。
-仅当 paragraphs 仍为空或完全未触及任何要点时，才 needs_human。"""
+# Task
+先核对草稿，再根据 findings 选择通过、退回改写或交人工。不要检索，不要自己重写正文。
+
+# Inputs
+user JSON：draft、points、describes、writing_strategy、knowledge_fallback、evidence。
+
+# Checks
+- 是否按 points 的组成部分顺序成文，而不是把要点指令句贴成提纲。
+- 版式是否与 describes / 要点中的「版式」相符（该表出表、该条列出条列）。
+- 是否串写邻章专题。
+
+# Strategy scale
+- template_fill / fixed：骨架或原文输出，不要因缺证据/未改写而 needs_human。
+- auto_generate 或 knowledge_fallback=true：无项目专名也可 accept；不要因缺投资额等证据交人工。paragraphs 非空且对 points 有结构性覆盖时 prefer accept（或 revise 润色）。仅当正文为空或完全未触及组成块时才 needs_human。
+- source_only：无资料支撑的事实句才记 citation；不要要求照抄参考正文。
+- hybrid：主题无关未写入可接受（uncovered_points）；不要因「没写无关专题」退回。
+
+# Output
+- 通过：accept
+- 退回改写：revise，comments 含段落 index 与 message
+- 交人工：needs_human，必须给 reason
+"""
 
 
 class CheckScriptModel(ScriptedChatModel):
@@ -65,8 +83,14 @@ def run_check(
     *,
     knowledge_fallback: bool = False,
 ) -> CheckResult:
-    if getattr(requirement, "fixed_output", False):
-        return CheckResult(action=CheckAction.ACCEPT, reason="固定内容输出，跳过事实核对")
+    from report_writing.domain.chapter_compose import COMPOSE_FIXED, COMPOSE_TEMPLATE_FILL, compose_mode
+
+    mode = compose_mode(requirement)
+    if getattr(requirement, "fixed_output", False) or mode in {COMPOSE_TEMPLATE_FILL, COMPOSE_FIXED}:
+        return attach_writing_score(
+            CheckResult(action=CheckAction.ACCEPT, reason="固定/填槽输出，跳过事实核对"),
+            [],
+        )
 
     @tool(
         "verify",
@@ -101,13 +125,18 @@ def run_check(
     def revise(
         comments: Annotated[list[dict], Field(description="必填。每项含段落 index 与 message。")],
     ) -> str:
-        if revision_count >= MAX_REVISIONS:
-            result = CheckResult(action=CheckAction.NEEDS_HUMAN, reason="退回次数已达上限")
-            return json.dumps(result.to_dict(), ensure_ascii=False)
         stored = [
             ParagraphComment(index=int(item["index"]), message=str(item.get("message") or ""))
             for item in comments
         ]
+        # 达上限仍保留缺陷意见，供下一轮（人工重试）写作改正
+        if revision_count >= MAX_REVISIONS:
+            result = CheckResult(
+                action=CheckAction.NEEDS_HUMAN,
+                reason="退回次数已达上限",
+                comments=stored,
+            )
+            return json.dumps(result.to_dict(), ensure_ascii=False)
         return json.dumps(CheckResult(action=CheckAction.REVISE, comments=stored).to_dict(), ensure_ascii=False)
 
     @tool(
@@ -124,9 +153,13 @@ def run_check(
     user = json.dumps(
         {
             "points": requirement.points,
+            "describes": requirement.describes,
             "boundary": requirement.boundary,
             "revision_count": revision_count,
+            "max_revisions": MAX_REVISIONS,
+            "write_score_pass": WRITE_SCORE_PASS,
             "knowledge_fallback": bool(knowledge_fallback),
+            "writing_strategy": compose_mode(requirement),
             "evidence_adopted_count": len([c for c in evidence if c.adopted]),
             "draft": draft.to_dict(),
         },
@@ -134,11 +167,91 @@ def run_check(
     )
     result = run_react(chosen, [verify, accept, revise, needs_human], INSTRUCTIONS, user, f"check-{requirement.key}")
     messages = result["messages"]
+    checked: CheckResult | None = None
     for name in ("needs_human", "revise", "accept"):
         payloads = [json.loads(message.content) for message in messages if getattr(message, "name", None) == name]
         if payloads:
-            return CheckResult.from_dict(payloads[-1])
-    return CheckResult.from_dict(tool_result(messages, "accept"))
+            checked = CheckResult.from_dict(payloads[-1])
+            break
+    if checked is None:
+        checked = CheckResult.from_dict(tool_result(messages, "accept"))
+    findings = inspect_draft(requirement, evidence, draft, knowledge_fallback=knowledge_fallback)
+    checked = enrich_check_with_findings(checked, findings)
+    return attach_writing_score(checked, findings)
+
+
+def enrich_check_with_findings(result: CheckResult, findings: list[dict] | None) -> CheckResult:
+    """把核对 findings / reason 固化进 comments，下一轮写作才能看到缺陷。"""
+    comments = list(result.comments or [])
+    seen = {(int(c.index), str(c.message or "").strip()) for c in comments}
+    for item in findings or []:
+        if not isinstance(item, dict):
+            continue
+        msg = str(item.get("message") or "").strip()
+        if not msg:
+            continue
+        raw_idx = item.get("index")
+        try:
+            idx = int(raw_idx) if raw_idx is not None and str(raw_idx).strip() != "" else -1
+        except (TypeError, ValueError):
+            idx = -1
+        key = (idx, msg)
+        if key in seen:
+            continue
+        comments.append(ParagraphComment(index=idx, message=msg))
+        seen.add(key)
+    reason = str(result.reason or "").strip()
+    if reason and (-1, reason) not in seen and not any(str(c.message or "").strip() == reason for c in comments):
+        comments.append(ParagraphComment(index=-1, message=reason))
+    if not reason and comments:
+        reason = str(comments[0].message or "").strip()
+    return result.model_copy(update={"comments": comments, "reason": reason})
+
+
+def revision_feedback_from_checks(checks: list[CheckResult] | None) -> list[ParagraphComment]:
+    """取最近一次未通过检查的缺陷，交给下一轮写作。"""
+    rows = [item for item in (checks or []) if isinstance(item, CheckResult)]
+    for item in reversed(rows):
+        if item.action == CheckAction.ACCEPT:
+            continue
+        out = list(item.comments or [])
+        reason = str(item.reason or "").strip()
+        if reason and not any(str(c.message or "").strip() == reason for c in out):
+            out.append(ParagraphComment(index=-1, message=reason))
+        return out
+    return []
+
+
+def compute_writing_score(findings: list[dict] | None, action: CheckAction | str) -> int:
+    """根据核对 findings 与最终动作估一个 0–100 写作分，供进度卡展示。"""
+    act = action.value if isinstance(action, CheckAction) else str(action or "").strip()
+    rows = [item for item in (findings or []) if isinstance(item, dict)]
+    score = 100
+    for item in rows:
+        kind = str(item.get("kind") or "")
+        if kind in {"coverage", "uncovered"}:
+            score -= 22
+        elif kind == "boundary":
+            score -= 16
+        elif kind == "number":
+            score -= 10
+        elif kind == "citation":
+            score -= 8
+        else:
+            score -= 6
+    score = max(0, min(100, score))
+    if act == CheckAction.ACCEPT.value:
+        return max(score, WRITE_SCORE_PASS) if score >= WRITE_SCORE_PASS - 5 else score
+    if act == CheckAction.REVISE.value:
+        return min(score, WRITE_SCORE_PASS - 1)
+    # needs_human
+    return min(score, max(0, WRITE_SCORE_PASS - 15))
+
+
+def attach_writing_score(result: CheckResult, findings: list[dict] | None) -> CheckResult:
+    score = compute_writing_score(findings, result.action)
+    below = score < WRITE_SCORE_PASS
+    return result.model_copy(update={"score": int(score), "below_threshold": bool(below)})
 
 
 def inspect_draft(
@@ -148,7 +261,12 @@ def inspect_draft(
     *,
     knowledge_fallback: bool = False,
 ) -> list[dict]:
-    if getattr(requirement, "fixed_output", False):
+    from report_writing.domain.chapter_compose import COMPOSE_FIXED, COMPOSE_TEMPLATE_FILL, compose_mode
+
+    if getattr(requirement, "fixed_output", False) or compose_mode(requirement) in {
+        COMPOSE_TEMPLATE_FILL,
+        COMPOSE_FIXED,
+    }:
         return []
     adopted = {card.id: card for card in evidence if card.adopted}
     findings: list[dict] = []
@@ -200,16 +318,34 @@ def inspect_draft(
             )
     covered = "\n".join(paragraph.text for paragraph in draft.paragraphs)
     for point in requirement.points:
-        if point in draft.uncovered_points or point in covered:
+        if point in draft.uncovered_points or f"待补充：{point}" in draft.uncovered_points:
             continue
-        if knowledge_fallback and (point in covered or f"待补充：{point}" in draft.uncovered_points):
+        if any(needle and needle in covered for needle in _point_coverage_needles(point)):
             continue
-        findings.append({"kind": "coverage", "message": f"要点「{point}」未写入正文，也未标为待补充"})
+        findings.append({"kind": "coverage", "message": f"组成块「{point}」未写入正文，也未标为待补充"})
     if knowledge_fallback and draft.paragraphs and not any(
         f.get("kind") == "coverage" and "正文为空" in f.get("message", "") for f in findings
     ):
         findings = [f for f in findings if f.get("kind") != "uncovered"]
     return findings
+
+
+def _point_coverage_needles(point: str) -> list[str]:
+    """正文不必回显整句要点指令；组成块名或要点前半句出现即视为覆盖。"""
+    text = str(point or "").strip()
+    if not text:
+        return []
+    needles = [text]
+    m = re.match(r"【([^】]+)】", text)
+    if m:
+        label = m.group(1).strip()
+        if label:
+            needles.append(label)
+    head = re.split(r"[；;]", text, 1)[0].strip()
+    head = re.sub(r"^【[^】]+】", "", head).strip()
+    if head and len(head) >= 4:
+        needles.append(head[:24])
+    return needles
 
 
 def _banned_titles(requirement: ChapterRequirement) -> list[str]:

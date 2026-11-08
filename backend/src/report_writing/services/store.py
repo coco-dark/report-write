@@ -64,16 +64,15 @@ class TaskStore:
             self._invalidate_doc_outline(task, tid)
             return
         self.directory.mkdir(parents=True, exist_ok=True)
-        # 文档副本（w*）落盘带 _saved_at，读时与 MySQL 比新旧，避免库表旧稿盖回刚保存的章节配置
+        # 写作副本以 MySQL 为准：先写库再镜像磁盘，避免对话读库、流水线读盘各拿一份
         disk_payload = _stamp_saved_at(task.to_dict())
-        self.path.write_text(json.dumps(disk_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        saved_at = str(disk_payload.get("_saved_at") or "")
         if is_writing_task_id(tid):
             try:
                 from report_writing.services.writing_task_catalog import save_writing_task
 
-                save_writing_task(task, saved_at=str(disk_payload.get("_saved_at") or ""))
+                save_writing_task(task, saved_at=saved_at)
             except Exception as error:
-                # 磁盘已是新稿；MySQL 失败时不要静默留下旧 document，否则下次 load 会优先读到旧库
                 _log.warning("writing task MySQL save failed for %s: %s", tid, error)
                 try:
                     from report_writing.services.writing_task_catalog import clear_writing_task_document
@@ -81,6 +80,7 @@ class TaskStore:
                     clear_writing_task_document(tid)
                 except Exception:
                     pass
+        self.path.write_text(json.dumps(disk_payload, ensure_ascii=False, indent=2), encoding="utf-8")
         # 非蓝本写后统一失效（catalog 可能 no-op；重复 invalidate 无害）
         self._invalidate_doc_outline(task, tid)
 
@@ -99,7 +99,6 @@ class TaskStore:
     def load(self) -> WritingTask:
         tid = str(self.directory.name or "").strip()
         if is_writing_task_id(tid):
-            disk_raw = _read_json_file(self.path)
             mysql_raw = None
             try:
                 from report_writing.services.writing_task_catalog import load_writing_task_document
@@ -107,13 +106,9 @@ class TaskStore:
                 mysql_raw = load_writing_task_document(tid)
             except Exception:
                 mysql_raw = None
-            disk_at = _saved_at_of(disk_raw)
-            mysql_at = _saved_at_of(mysql_raw)
-            # 有磁盘稿时：比 _saved_at，平手或磁盘更新则用磁盘（本机刚 PUT 的章节配置）
-            if disk_raw is not None and (not mysql_raw or disk_at >= mysql_at):
-                return WritingTask.from_dict(disk_raw)
             if mysql_raw is not None:
                 return WritingTask.from_dict(mysql_raw)
+            disk_raw = _read_json_file(self.path)
             if disk_raw is not None:
                 return WritingTask.from_dict(disk_raw)
             raise TaskNotFoundError(tid)

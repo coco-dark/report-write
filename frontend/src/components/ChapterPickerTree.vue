@@ -1,38 +1,38 @@
 <template>
   <div class="chapter-picker-tree">
     <div class="picker-toolbar">
-      <el-button size="small" text :disabled="busy || disabled" @click="selectAll(true)">
+      <a-button size="small" :disabled="busy || disabled" @click="selectAll(true)" type="text">
         {{ purpose === "study" ? "全选可学章" : "全选可写章" }}
-      </el-button>
-      <el-button size="small" text :disabled="busy || disabled" @click="selectAll(false)">清空</el-button>
+      </a-button>
+      <a-button size="small" :disabled="busy || disabled" @click="selectAll(false)" type="text">清空</a-button>
       <span class="picker-count">已选 {{ selectedKeys.length }} 章</span>
     </div>
     <div v-if="loading" class="picker-loading">正在加载章节树…</div>
-    <el-alert v-else-if="error" type="error" :title="error" show-icon :closable="false" class="picker-error" />
-    <el-tree
-      v-else
-      ref="treeRef"
-      class="picker-tree"
-      :data="treeData"
-      node-key="key"
-      show-checkbox
-      :default-expand-all="flatCount <= 40"
-      :expand-on-click-node="false"
-      :props="{ label: 'label', children: 'children', disabled: 'disabled' }"
-      @check="onCheck"
-    >
+    <a-alert v-else-if="error" type="error" :message="error" :closable="false" class="picker-error" show-icon />
+    <UiTree
+ v-else
+ ref="treeRef"
+ class="picker-tree"
+ :data="treeData"
+ node-key="key"
+ show-checkbox
+ :default-expand-all="flatCount <= 40"
+ :expand-on-click-node="false"
+ :props="{ label: 'label', children: 'children', disabled: 'disabled' }"
+ @check="onCheck"
+ >
       <template #default="{ data }">
         <span class="picker-tree-row">
           <span class="seq">{{ data.sequence || "" }}</span>
           <span class="name">{{ data.title }}</span>
-          <el-tag v-if="data.structure_only" size="small" effect="plain">目录</el-tag>
-          <el-tag v-else-if="data.unanalyzed" size="small" type="info" effect="plain">未分析</el-tag>
-          <el-tag v-else-if="data.studied" size="small" type="success" effect="plain">已学</el-tag>
-          <el-tag v-else-if="data.selectable && purpose !== 'study'" size="small" type="success" effect="plain">可写</el-tag>
-          <el-tag v-else-if="data.selectable && purpose === 'study'" size="small" type="primary" effect="plain">可学</el-tag>
+          <a-tag v-if="data.structure_only" size="small">目录</a-tag>
+          <a-tag v-else-if="data.unanalyzed" size="small" color="default">未分析</a-tag>
+          <a-tag v-else-if="data.studied" size="small" color="success">已学</a-tag>
+          <a-tag v-else-if="data.selectable && purpose !== 'study'" size="small" color="success">可写</a-tag>
+          <a-tag v-else-if="data.selectable && purpose === 'study'" size="small" color="blue">可学</a-tag>
         </span>
       </template>
-    </el-tree>
+    </UiTree>
   </div>
 </template>
 

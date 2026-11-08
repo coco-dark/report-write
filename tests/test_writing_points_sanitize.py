@@ -4,6 +4,7 @@ from report_writing.domain.models import OutlineNode
 from report_writing.domain.point_items_sync import (
     aux_prompt_for_writing_from_node,
     chapter_has_pending_supplements,
+    chapter_has_writing_config,
     points_for_writing_from_node,
     strip_supplement_markers,
 )
@@ -36,6 +37,19 @@ def test_aux_drops_supplement_block_when_ready():
     assert "【建议补充资料】" not in aux
     assert "待补充" not in aux
     assert "分条列出核心职责" in aux
+
+
+def test_points_for_writing_falls_back_when_items_have_no_text():
+    node = OutlineNode(
+        title="评价结果",
+        point_items=[{"id": "p0"}, {"id": "p1", "text": "  "}],
+        points=["对评价中发现的问题给出结论"],
+        describes="1. 注意与表述方式。",
+    )
+    assert points_for_writing_from_node(node) == ["对评价中发现的问题给出结论"]
+    assert chapter_has_writing_config(node)
+    empty = OutlineNode(title="空章", points=[], point_items=[], describes="")
+    assert not chapter_has_writing_config(empty)
 
 
 def test_strip_supplement_markers():

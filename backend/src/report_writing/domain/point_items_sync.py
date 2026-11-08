@@ -76,20 +76,45 @@ def writing_text_for_point_row(row: dict[str, Any]) -> str:
     return strip_supplement_markers(text)
 
 
+def _raw_points_from_node(node: Any) -> list[str]:
+    return [str(p or "").strip() for p in list(getattr(node, "points", None) or []) if str(p or "").strip()]
+
+
 def points_for_writing_from_node(node: Any) -> list[str]:
     """写作/同步 brief 用的要点：已关联要素或无待补标记的行去掉占位符。"""
     items = list(getattr(node, "point_items", None) or [])
-    if items:
-        lines = [
-            writing_text_for_point_row(r)
-            for r in items
-            if isinstance(r, dict)
-        ]
-        return [t for t in lines if t]
-    raw = [str(p or "").strip() for p in list(getattr(node, "points", None) or []) if str(p or "").strip()]
-    if any(text_needs_supplement(p) for p in raw):
-        return raw
-    return [strip_supplement_markers(p) for p in raw if strip_supplement_markers(p)]
+    lines: list[str] = []
+    for row in items:
+        if isinstance(row, dict):
+            text = writing_text_for_point_row(row)
+        else:
+            text = str(row or "").strip()
+        if text:
+            lines.append(text)
+    # point_items 有壳没正文时不能把副本已保存的 points 丢掉
+    if not lines:
+        raw = _raw_points_from_node(node)
+        if any(text_needs_supplement(p) for p in raw):
+            return raw
+        return [strip_supplement_markers(p) for p in raw if strip_supplement_markers(p)]
+    return lines
+
+
+def chapter_has_writing_config(node: Any) -> bool:
+    """副本已配写作要点、章节说明或参考正文，即视为已配置（勿报「要点为空」）。"""
+    if points_for_writing_from_node(node):
+        return True
+    if _raw_points_from_node(node):
+        return True
+    if str(getattr(node, "describes", "") or "").strip():
+        return True
+    if str(getattr(node, "generate", "") or "").strip():
+        return True
+    if str(getattr(node, "reference_text", "") or "").strip():
+        return True
+    if str(getattr(node, "aux_prompt", "") or "").strip():
+        return True
+    return False
 
 
 _AUX_SUPPLEMENT_HEADER_RE = re.compile(r"【建议补充资料】[\s\S]*?(?=\n\n|\Z)")
@@ -108,6 +133,7 @@ def sanitize_writing_meta_text(text: str, *, allow_supplement_markers: bool) -> 
 
 
 def aux_prompt_for_writing_from_node(node: Any) -> str:
+    """仅回传用户手填的补充提示词。写作要点走 points / point_write_plan，勿并进 aux。"""
     items = list(getattr(node, "point_items", None) or [])
     pending = (
         chapter_has_pending_supplements(items)
@@ -116,12 +142,8 @@ def aux_prompt_for_writing_from_node(node: Any) -> str:
     )
     aux = str(getattr(node, "aux_prompt", "") or "").strip()
     if pending:
-        return aux[:800]
-    cleaned = sanitize_writing_meta_text(aux, allow_supplement_markers=False)
-    body = "\n".join(points_for_writing_from_node(node)[:12]).strip()
-    if body:
-        return (cleaned + "\n\n" + body).strip()[:800] if cleaned else body[:800]
-    return cleaned[:800]
+        return aux
+    return sanitize_writing_meta_text(aux, allow_supplement_markers=False)
 
 
 def describes_for_writing_from_node(node: Any) -> str:
@@ -133,7 +155,64 @@ def describes_for_writing_from_node(node: Any) -> str:
     )
     if not pending:
         desc = re.sub(r"需填报处[^。；;\n]*[。；;]?", "", desc)
-    return desc[:500]
+    return desc
+
+
+def build_point_write_plan(
+    point_items: list[Any] | None,
+    element_results: list[Any] | None,
+    *,
+    points: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """写作载荷：每条要点绑定其关联要素取值，供模型按「格式规则 + 要素内容」成表。"""
+    by_id: dict[str, dict[str, Any]] = {}
+    for row in list(element_results or []):
+        if not isinstance(row, dict):
+            continue
+        eid = str(row.get("id") or "").strip()
+        if eid:
+            by_id[eid] = row
+    items = [row for row in list(point_items or []) if isinstance(row, dict)]
+    plan: list[dict[str, Any]] = []
+    if items:
+        for i, row in enumerate(items):
+            text = writing_text_for_point_row(row)
+            if not text:
+                continue
+            eid = str(row.get("element_id") or "").strip()
+            el = by_id.get(eid) if eid else None
+            value = str((el or {}).get("value") or "").strip()
+            plan.append(
+                {
+                    "index": len(plan) + 1,
+                    "point": text,
+                    "slot": human_label(row.get("slot"), row.get("element_name")),
+                    "element_id": eid,
+                    "element_name": human_label(
+                        (el or {}).get("name"), row.get("element_name"), row.get("slot")
+                    ),
+                    "element_value": value,
+                    "has_element": bool(eid and value),
+                }
+            )
+        return plan
+    # 无 point_items 时按 points 顺序占位，要素仅作章级补充
+    for i, line in enumerate(list(points or [])):
+        text = str(line or "").strip()
+        if not text:
+            continue
+        plan.append(
+            {
+                "index": len(plan) + 1,
+                "point": text,
+                "slot": "",
+                "element_id": "",
+                "element_name": "",
+                "element_value": "",
+                "has_element": False,
+            }
+        )
+    return plan
 
 
 def pending_supplement_slots(items: list[Any] | None) -> list[str]:
@@ -172,26 +251,37 @@ def sync_point_items_from_points(
     points: list[str],
     prev_items: list[Any] | None,
 ) -> list[dict[str, Any]]:
-    """保存要点文本时：按行更新 point_items，同索引保留 element_id / slot / id。"""
+    """保存要点文本时：按行更新 point_items，同索引保留 element_id / slot / id。
+
+    若同索引旧行文本与新要点明显不同（重分析换内容），不继承旧 slot/要素，
+    避免「评价单元」要点行仍挂着「水平接地体」待补标签。
+    """
     prev = [x for x in list(prev_items or []) if isinstance(x, dict)]
     out: list[dict[str, Any]] = []
     lines = [str(p or "").strip() for p in list(points or []) if str(p or "").strip()]
     for i, line in enumerate(lines):
         prev_row = prev[i] if i < len(prev) else {}
+        prev_text = str(prev_row.get("text") or prev_row.get("label") or "").strip()
+        same_line = bool(prev_text) and (prev_text == line or prev_text in line or line in prev_text)
         pid = str(prev_row.get("id") or prev_row.get("key") or f"p{i}").strip() or f"p{i}"
-        slot = str(prev_row.get("slot") or prev_row.get("element_name") or "").strip()
+        if same_line:
+            slot = str(prev_row.get("slot") or prev_row.get("element_name") or "").strip()
+        else:
+            slot = ""
+            pid = f"p{i}"
         if not slot:
             slot = parse_slot_from_text(line)
-        needs = text_needs_supplement(line) or bool(prev_row.get("needs_supplement"))
+        # 仅按当前正文判定待补；用户改成普通要点后不得继承旧 needs_supplement
+        needs = text_needs_supplement(line)
         row: dict[str, Any] = {"id": pid, "text": line}
         if slot:
             row["slot"] = slot
-        eid = str(prev_row.get("element_id") or "").strip()
+        eid = str(prev_row.get("element_id") or "").strip() if same_line else ""
         if eid:
             row["element_id"] = eid
         elif needs:
             row["needs_supplement"] = True
-        ename = human_label(prev_row.get("element_name"), slot)
+        ename = human_label(prev_row.get("element_name") if same_line else "", slot)
         if ename:
             row["element_name"] = ename
         out.append(row)
@@ -226,7 +316,10 @@ def normalize_llm_point_item(row: Any, index: int = 0) -> dict[str, Any] | None:
     slot = human_label(row.get("slot"), row.get("element_name")) or parse_slot_from_text(text)
     if slot:
         out["slot"] = slot
-    if text_needs_supplement(text) or row.get("needs_supplement"):
+    # 显式 False + 正文无占位 → 普通要点（可不关联要素）
+    if row.get("needs_supplement") is False and not text_needs_supplement(text):
+        pass
+    elif text_needs_supplement(text) or row.get("needs_supplement"):
         out["needs_supplement"] = True
     eid = str(row.get("element_id") or "").strip()
     if eid:
@@ -339,9 +432,13 @@ def apply_points_to_outline_node(
     points: list[str] | None,
     *,
     raw_point_items: list[Any] | None = None,
+    replace: bool = False,
 ) -> None:
-    """同时写入 node.points 与 node.point_items（OutlineNode 或兼容属性）。"""
-    prev = list(getattr(node, "point_items", None) or [])
+    """同时写入 node.points 与 node.point_items（OutlineNode 或兼容属性）。
+
+    replace=True：重分析整表替换，不按旧行索引继承 slot/要素（否则接地行会留在评价单元章）。
+    """
+    prev = [] if replace else list(getattr(node, "point_items", None) or [])
     pts, items = merge_generated_point_items(points, raw_point_items, prev_items=prev)
     node.points = pts
     node.point_items = items
@@ -446,6 +543,14 @@ def chapter_point_items_from_payload(
                 items.append(norm)
         if not items:
             items = sync_point_items_from_points(points, raw_items)
+        elif points:
+            items_text = "\n".join(
+                str((row or {}).get("text") or "").strip() for row in items if str((row or {}).get("text") or "").strip()
+            )
+            points_text = "\n".join(points)
+            if points_text and items_text and points_text != items_text:
+                # 以 points 正文为准，但按旧行继承 element_id/slot（去掉待补标记后文本仍算同一行）
+                items = sync_point_items_from_points(points, items)
     else:
         items = sync_point_items_from_points(points, [])
     eids = [str(x).strip() for x in (item.get("element_ids") or []) if str(x).strip()]

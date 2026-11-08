@@ -78,6 +78,44 @@ def mark_materials_pack_skipped(session: ChatSession, task_id: str, *, skipped: 
     session.freeform = ff
 
 
+def _session_writing_copy(
+    home: Path,
+    session: ChatSession,
+    task: WritingTask | None,
+    *,
+    blueprint_id: str = "",
+) -> WritingTask | None:
+    """已有文档副本时，资料包应绑到 w* 而不是蓝本预选。"""
+    from report_writing.chat.helpers import _load_task
+
+    if task is not None and not _is_blueprint_only_task(task):
+        return task
+    bp = (
+        blueprint_id
+        or str(getattr(session, "blueprint_id", "") or "")
+        or (str(getattr(task, "source_blueprint_id", "") or "") if task is not None else "")
+        or (str(task.id) if task is not None and _is_blueprint_only_task(task) else "")
+    ).strip()
+    copy_id = ""
+    try:
+        from report_writing.chat.session_documents import _writing_copy_id_for_blueprint
+        from report_writing.services.task_ids import is_writing_task_id
+
+        if bp:
+            copy_id = _writing_copy_id_for_blueprint(session, bp)
+        sess_tid = str(getattr(session, "task_id", "") or "").strip()
+        if not copy_id and is_writing_task_id(sess_tid):
+            copy_id = sess_tid
+    except Exception:
+        copy_id = ""
+    if not copy_id:
+        return None
+    loaded = _load_task(home, copy_id)
+    if loaded is None or _is_blueprint_only_task(loaded):
+        return None
+    return loaded
+
+
 def _is_blueprint_only_task(task: WritingTask | None) -> bool:
     """蓝本库条目（尚未 clone 成写作文档）。"""
     if task is None:
@@ -144,6 +182,53 @@ def clear_pending_materials_pack(
         by_bp.pop(bp, None)
     ff["pending_materials_pack_by_blueprint"] = by_bp
     session.freeform = ff
+
+
+def resolve_writing_materials_pack_id(
+    home: Path,
+    session: ChatSession,
+    task: WritingTask | None,
+) -> str:
+    """写作文档已绑、会话预选、或本蓝本仅有一份待入库包时，视为已配置。"""
+    if task is not None:
+        pid = str(getattr(task, "materials_pack_id", "") or "").strip()
+        if pid:
+            return pid
+    bp = str(
+        getattr(session, "blueprint_id", "")
+        or (getattr(task, "source_blueprint_id", "") if task is not None else "")
+        or ""
+    ).strip()
+    pid = peek_pending_materials_pack(session, blueprint_id=bp)
+    if pid:
+        return pid
+    try:
+        from report_writing.services.materials_pack import list_packs
+
+        related: list = []
+        wid = str(getattr(task, "id", "") or "").strip() if task is not None else ""
+        for pack in list_packs(home, in_library=False):
+            owners = [str(x).strip() for x in (getattr(pack, "blueprint_ids", None) or []) if str(x).strip()]
+            if bp and bp in owners:
+                related.append(pack)
+            elif wid and wid in owners:
+                related.append(pack)
+        if len(related) == 1:
+            return str(getattr(related[0], "id", "") or "").strip()
+        with_files = [
+            p
+            for p in related
+            if any(
+                str(getattr(f, "file_name", "") or "").strip()
+                or str(getattr(f, "file_id", "") or "").strip()
+                for f in list(getattr(p, "slots_fill", None) or [])
+            )
+        ]
+        if len(with_files) == 1:
+            return str(getattr(with_files[0], "id", "") or "").strip()
+    except Exception:
+        pass
+    return ""
 
 
 def materials_pack_gate_satisfied(session: ChatSession, task: WritingTask | None) -> bool:
@@ -714,8 +799,10 @@ def apply_materials_pack_choice(
         from report_writing.services.robots import assert_materials_pack_in_robot_scope
 
         assert_materials_pack_in_robot_scope(home, session.robot_id or "", pack_id)
-        # 已有写作文档：直接绑定
-        if task is not None and not _is_blueprint_only_task(task):
+        # 已有写作文档：直接绑定（payload 空 task_id 时勿把 clone 误判成蓝本预选）
+        bind_task = _session_writing_copy(home, session, task, blueprint_id=bp)
+        if bind_task is not None:
+            task = bind_task
             task.materials_pack_id = pack_id
             mark_materials_pack_skipped(session, task.id, skipped=False)
             TaskStore(home / "tasks" / task.id).save(task)
@@ -790,7 +877,9 @@ def apply_materials_pack_choice(
             blueprint_id=bp,
         )
         # 已有写作文档：直接绑定
-        if task is not None and not _is_blueprint_only_task(task):
+        bind_task = _session_writing_copy(home, session, task, blueprint_id=bp)
+        if bind_task is not None:
+            task = bind_task
             task.materials_pack_id = pack.id
             mark_materials_pack_skipped(session, task.id, skipped=False)
             TaskStore(home / "tasks" / task.id).save(task)

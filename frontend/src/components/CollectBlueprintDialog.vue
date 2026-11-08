@@ -1,53 +1,47 @@
 <template>
-  <el-dialog
-    :model-value="modelValue"
-    :title="dialogTitle"
-    width="480px"
-    destroy-on-close
-    :close-on-click-modal="false"
-    @close="onCancel"
-  >
+  <a-modal
+ :open="modelValue"
+ :title="dialogTitle"
+ width="480px"
+ :mask-closable="false"
+ @update:open="(open) => !open && onCancel()"
+ @cancel="onCancel"
+ destroy-on-close centered>
     <p v-if="duplicateHint" class="dup-hint">{{ duplicateHint }}</p>
-    <el-form label-position="top" @submit.prevent>
-      <el-form-item label="蓝本名称" required>
-        <el-input
-          v-model="form.title"
+    <a-form layout="vertical" @submit.prevent>
+      <a-form-item label="蓝本名称" required>
+        <a-input
+          v-model:value="form.title"
           maxlength="80"
-          show-word-limit
+          show-count
           placeholder="如：安全预评价正文蓝本"
           @keyup.enter="onConfirm"
         />
-      </el-form-item>
-      <el-form-item label="分类" required>
-        <el-input v-model="form.category" maxlength="40" placeholder="如：安全评价" />
-      </el-form-item>
-      <el-form-item label="标签" required>
-        <el-select
-          ref="tagsSelectRef"
-          v-model="form.tags"
-          multiple
-          filterable
-          allow-create
-          default-first-option
-          collapse-tags
-          collapse-tags-tooltip
-          placeholder="至少填一个；输入后回车，或直接点收录"
-          style="width: 100%"
-        >
-          <el-option v-for="t in knownTags" :key="t" :label="t" :value="t" />
-        </el-select>
-      </el-form-item>
-    </el-form>
+      </a-form-item>
+      <a-form-item label="分类" required>
+        <a-input v-model:value="form.category" maxlength="40" placeholder="如：安全评价" />
+      </a-form-item>
+      <a-form-item label="标签" required>
+        <a-select
+ ref="tagsSelectRef"
+ v-model:value="form.tags"
+ placeholder="至少填一个；输入后回车，或直接点收录"
+ style="width: 100%"
+ mode="tags" show-search>
+          <a-select-option v-for="t in knownTags" :key="t" :value="t">{{ t }}</a-select-option>
+        </a-select>
+      </a-form-item>
+    </a-form>
     <template #footer>
-      <el-button @click="onCancel">取消</el-button>
-      <el-button type="primary" :loading="busy" @click="onConfirm">收录</el-button>
+      <a-button @click="onCancel">取消</a-button>
+      <a-button type="primary" :loading="busy" @click="onConfirm">收录</a-button>
     </template>
-  </el-dialog>
+  </a-modal>
 </template>
 
 <script setup>
 import { computed, reactive, ref, watch } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage } from "../ui.js";
 
 import { authHeaders, request } from "../api";
 

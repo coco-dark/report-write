@@ -490,7 +490,20 @@ def apply_chat_ui_state(session: ChatSession, body) -> ChatSession:
                 list(getattr(msg, "cards", None) or []),
                 list(item.get("cards") or []),
             )
-            msg.cards = cards
+            from report_writing.chat.cards import slim_progress_card_payload
+            from report_writing.domain.models import ChatCard
+
+            slimmed_cards = []
+            for card in cards:
+                if getattr(card, "type", "") == "progress":
+                    payload = slim_progress_card_payload(dict(getattr(card, "payload", None) or {}))
+                    if isinstance(card, ChatCard):
+                        slimmed_cards.append(card.model_copy(update={"payload": payload}))
+                    else:
+                        slimmed_cards.append(card)
+                else:
+                    slimmed_cards.append(card)
+            msg.cards = slimmed_cards
         messages[index] = msg
         session.messages = messages
     from report_writing.chat.dialogue import drop_assistant_echo_user_messages

@@ -67,6 +67,8 @@ from report_writing.chat.actions import (
     _action_confirm_chapter,
     _action_confirm_all_chapters,
     _action_configure_chapter,
+    _action_get_chapter_info,
+    _action_generate_chapter_describes,
     _action_add_chapter_element,
     _action_retry_chapter,
     _action_retry_search_chapter,
@@ -82,6 +84,8 @@ from report_writing.chat.orchestrator import handle_chat
 __all__ = [
     '_action_add_chapter_element',
     '_action_configure_chapter',
+    '_action_get_chapter_info',
+    '_action_generate_chapter_describes',
     '_apply_add_chapter_element',
     '_action_confirm_all_chapters',
     '_action_confirm_chapter',

@@ -127,6 +127,29 @@ def test_preview_orders_by_sequence_not_writing_order():
     assert 0 <= pos_scale < pos_site < pos_nature
 
 
+def test_preview_includes_written_structure_only_and_key_mismatch():
+    task = WritingTask(
+        id="wPreviewMismatch",
+        title="预览对齐",
+        outline=OutlineTree(
+            chapters=[
+                OutlineNode(key="outline-71", sequence="7.1", title="主要危险、有害因素评价结果", structure_only=True),
+            ]
+        ),
+        chapters=[
+            ChapterState(
+                key="write-71",
+                title="主要危险、有害因素评价结果",
+                status=ChapterStatus.CONFIRMED,
+                official_text="<p>在完成危险、有害因素辨识与分析的基础上。</p>",
+            )
+        ],
+    )
+    out = build_written_chapters_preview(task, written_only=True, confirmed_only=False)
+    assert out["written_count"] >= 1
+    assert "辨识与分析" in out["html"]
+
+
 def test_preview_keeps_html_table():
     task = WritingTask(
         id="wPreviewTable",
@@ -176,3 +199,24 @@ def test_promote_space_aligned_engineering_table():
     promoted = promote_tables_in_html(legacy)
     assert "<table" in promoted
     assert "电压等级" in promoted
+
+
+def test_plain_original_converts_to_html_paragraphs_and_table():
+    html = ensure_html_fragment(
+        "根据本工程的可行性研究报告划分评价单元。\n"
+        "为避免重复性评价，将各侧变电站合并。\n"
+        "表4.2-1 本工程安全评价单元划分\n"
+        "序号  评价单元  评价子单元\n"
+        "1  变电站工程单元  站址、总平面布置\n"
+        "2  架空线路工程单元  路径、气象条件\n"
+    )
+    assert html.count("<p>") >= 2
+    assert "<table" in html
+    assert "根据本工程" in html
+    assert "变电站工程单元" in html
+
+
+def test_plain_list_converts_to_ol():
+    html = ensure_html_fragment("1. 变电站工程单元\n2. 架空线路工程单元\n3. 作业环境单元")
+    assert "<ol>" in html
+    assert html.count("<li>") == 3

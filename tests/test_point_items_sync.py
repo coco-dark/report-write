@@ -27,12 +27,12 @@ def test_merge_project_slots_into_points():
 
 def test_sync_preserves_element_id_by_index():
     prev = [
-        {"id": "p0", "text": "旧", "element_id": "el-1", "slot": "项目名"},
+        {"id": "p0", "text": "新文本（待补充：项目名）", "element_id": "el-1", "slot": "项目名"},
     ]
-    items = sync_point_items_from_points(["新文本（待补充：项目名）"], prev)
+    items = sync_point_items_from_points(["新文本"], prev)
     assert len(items) == 1
     assert items[0]["element_id"] == "el-1"
-    assert items[0]["text"].startswith("新文本")
+    assert items[0]["text"] == "新文本"
     assert items[0].get("needs_supplement") is not True
 
 
@@ -65,6 +65,38 @@ def test_points_from_items():
     items = [{"id": "a", "text": "line1"}, {"text": "line2"}]
     assert sync_points_from_point_items(items) == ["line1", "line2"]
     assert points_from_point_items(items) == ["line1", "line2"]
+
+
+def test_stripped_writing_points_keep_element_id():
+    from report_writing.domain.models import OutlineNode
+    from report_writing.domain.point_items_sync import (
+        apply_points_to_outline_node,
+        chapter_point_items_from_payload,
+        points_for_writing_from_node,
+    )
+
+    node = OutlineNode(
+        title="建设规模",
+        points=["按本项目填写特性表（待补充：建设规模）"],
+        point_items=[
+            {
+                "id": "p0",
+                "text": "按本项目填写特性表（待补充：建设规模）",
+                "slot": "建设规模",
+                "element_id": "el-scale",
+                "element_name": "建设规模",
+            }
+        ],
+        element_ids=["el-scale"],
+    )
+    stripped = points_for_writing_from_node(node)
+    assert stripped == ["按本项目填写特性表"]
+    items = chapter_point_items_from_payload(
+        {"points": stripped, "point_items": list(node.point_items)}
+    )
+    assert items[0].get("element_id") == "el-scale"
+    apply_points_to_outline_node(node, stripped)
+    assert node.point_items[0].get("element_id") == "el-scale"
 
 
 def test_outline_from_payload_keeps_point_items_element_id():

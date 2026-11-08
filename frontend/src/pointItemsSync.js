@@ -28,6 +28,14 @@ export function textNeedsSupplement(text) {
   return SUPPLEMENT_TODO_RE.test(String(text || ""));
 }
 
+/** 去掉「（待补充：…）」等占位，便于改成不强制关联要素的普通要点 */
+export function stripSupplementMarkers(text) {
+  let t = String(text || "").replace(SUPPLEMENT_TODO_RE, "");
+  t = t.replace(/\s{2,}/g, " ").trim();
+  t = t.replace(/[，,；;]\s*[，,；;]+/g, "，");
+  return t.replace(/^[，,；;\s]+|[，,；;\s]+$/g, "").trim();
+}
+
 export function pointsFromPointItems(items) {
   const out = [];
   for (const row of items || []) {
@@ -49,13 +57,17 @@ export function syncPointItemsFromPoints(points, prevItems) {
   const out = [];
   lines.forEach((line, i) => {
     const prevRow = prev[i] || {};
-    const id = String(prevRow.id || prevRow.key || `p${i}`).trim() || `p${i}`;
-    let slot = humanLabel(prevRow.slot, prevRow.element_name);
+    const prevText = String(prevRow.text || prevRow.label || "").trim();
+    const sameLine = Boolean(prevText) && (prevText === line || prevText.includes(line) || line.includes(prevText));
+    let id = String(prevRow.id || prevRow.key || `p${i}`).trim() || `p${i}`;
+    let slot = sameLine ? humanLabel(prevRow.slot, prevRow.element_name) : "";
+    if (!sameLine) id = `p${i}`;
+    // 仅按当前正文判定待补；用户已改成普通要点后，不得再继承旧 needs_supplement
     if (!slot) slot = parseSlotFromText(line);
-    const needs = textNeedsSupplement(line) || Boolean(prevRow.needs_supplement);
+    const needs = textNeedsSupplement(line);
     const row = { id, text: line };
     if (slot) row.slot = slot;
-    const eid = String(prevRow.element_id || "").trim();
+    const eid = sameLine ? String(prevRow.element_id || "").trim() : "";
     if (eid) {
       row.element_id = eid;
       const ename = humanLabel(prevRow.element_name, slot);
@@ -120,11 +132,16 @@ export function normalizePointItemRow(row, index = 0) {
   const out = { id, text };
   const slot = humanLabel(row.slot, row.element_name) || parseSlotFromText(text);
   if (slot) out.slot = slot;
-  if (textNeedsSupplement(text) || row.needs_supplement) out.needs_supplement = true;
+  // 显式 false + 正文无占位 → 普通要点（可不关联要素）
+  if (row.needs_supplement === false && !textNeedsSupplement(text)) {
+    /* keep plain */
+  } else if (textNeedsSupplement(text) || row.needs_supplement) {
+    out.needs_supplement = true;
+  }
   const eid = String(row.element_id || "").trim();
   if (eid) {
     out.element_id = eid;
-    out.needs_supplement = false;
+    delete out.needs_supplement;
     const ename = humanLabel(row.element_name, slot);
     if (ename) out.element_name = ename;
   }
@@ -240,8 +257,11 @@ export function elementIdsFromPointItems(items) {
   return out;
 }
 
-/** 章节配置表格：优先 point_items，否则由 points 生成 */
+/** 章节配置表格：优先与 points 一致的 point_items，否则由 points 生成 */
 export function pointItemsFromChapter(node, ch, cfg) {
+  const pick = (a, b) => (Array.isArray(a) && a.length ? a : Array.isArray(b) ? b : []);
+  const points = pick(node?.points, pick(ch?.points, cfg?.points));
+  const lines = (points || []).map((p) => String(p || "").trim()).filter(Boolean);
   const outlineSources = [
     node?.point_items,
     ch?.point_items,
@@ -250,11 +270,16 @@ export function pointItemsFromChapter(node, ch, cfg) {
     ch?.config?.point_items,
   ];
   if (outlineSources.some((a) => Array.isArray(a))) {
-    return pickPointItemsAuthoritative(outlineSources);
+    const items = pickPointItemsAuthoritative(outlineSources);
+    if (!lines.length) return items;
+    const itemsText = pointsFromPointItems(items).join("\n");
+    const pointsText = lines.join("\n");
+    // 重分析后 points 已更新、旧 point_items 未换：以 points 为准，避免左右结果不一致
+    if (pointsText && itemsText && pointsText !== itemsText) {
+      return syncPointItemsFromPoints(lines, items);
+    }
+    return items;
   }
-  const pick = (a, b) => (Array.isArray(a) && a.length ? a : Array.isArray(b) ? b : []);
-  const points = pick(node?.points, pick(ch?.points, cfg?.points));
-  const lines = (points || []).map((p) => String(p || "").trim()).filter(Boolean);
   return syncPointItemsFromPoints(lines, []);
 }
 

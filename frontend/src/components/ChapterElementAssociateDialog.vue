@@ -1,16 +1,13 @@
 <template>
-  <el-dialog
-    :model-value="modelValue"
-    width="780px"
-    destroy-on-close
-    append-to-body
-    align-center
-    class="chapter-element-associate-dialog"
-    :z-index="4800"
-    @update:model-value="$emit('update:modelValue', $event)"
-    @open="onOpen"
-  >
-    <template #header>
+  <a-modal
+ :open="modelValue"
+ width="780px"
+ class="chapter-element-associate-dialog"
+ :z-index="4800"
+ @update:open="$emit('update:modelValue', $event)"
+ @afterOpenChange="(open) => open && onOpen()"
+ destroy-on-close centered>
+    <template #title>
       <div class="dlg-head">
         <span class="dlg-title">{{
           associateScope === "point" ? "为本条写作要点关联要素" : "为本章关联要素"
@@ -19,132 +16,140 @@
       </div>
     </template>
 
-    <el-alert type="info" :closable="false" show-icon class="intro-alert">
-      {{
+    <a-alert
+      type="info"
+      :closable="false"
+      class="intro-alert"
+      show-icon
+      :message="
         seedCreateDraft
-          ? "已根据待补项预填要素信息，请核对后保存并关联到本条要点；也可切到「选择关联」勾选已有要素。"
-          : associateScope === "point"
-            ? "所选要素只关联到当前写作要点，不会自动挂到整章或其它要点。"
-            : "所选要素关联到整章（章级），不会自动挂到各条写作要点；要点内请单独点「关联要素」。"
-      }}
-    </el-alert>
+          ? '已根据待补项预填要素信息，请核对后保存并关联到本条要点；也可切到「选择关联」勾选已有要素。'
+          : associateScope === 'point'
+            ? '所选要素只关联到当前写作要点，不会自动挂到整章或其它要点。'
+            : '所选要素关联到整章（章级），不会自动挂到各条写作要点；要点内请单独点「关联要素」。'
+      "
+    />
 
     <div class="nav-actions" role="group" aria-label="快捷查看">
-      <el-button round plain size="small" @click="goViewElements">查看要素</el-button>
-      <el-button round plain size="small" @click="goViewMaterials">查看资料库</el-button>
+      <a-button size="small" @click="goViewElements" shape="round">查看要素</a-button>
+      <a-button size="small" @click="goViewMaterials" shape="round">查看资料库</a-button>
     </div>
 
     <section class="linked-strip">
-      <span class="linked-label">已关联 <strong>{{ localLinkedIds.length }}</strong> 个</span>
+      <span class="linked-label">
+        已关联{{ associateScope === "point" ? "要点要素" : "章节要素" }}
+        <strong>{{ localLinkedIds.length }}</strong> 个
+        <em class="scope-pill" :class="associateScope === 'point' ? 'point' : 'chapter'">
+          {{ associateScope === "point" ? "要点" : "章" }}
+        </em>
+      </span>
       <div v-if="linkedElements.length" class="linked-chips">
-        <el-tag
-          v-for="el in linkedElements"
-          :key="el.id"
-          closable
-          size="small"
-          @close="unlinkOne(el.id)"
-        >
+        <a-tag
+ v-for="el in linkedElements"
+ :key="el.id"
+ closable
+ size="small"
+ @close="unlinkOne(el.id)"
+ >
+          <span class="chip-scope">{{ associateScope === "point" ? "要点" : "章" }}</span>
           {{ el.name || el.id }} · {{ elementKindLabel(el.kind) }}
-        </el-tag>
+        </a-tag>
       </div>
-      <span v-else class="linked-empty">尚未关联，请在下方添加</span>
+      <span v-else class="linked-empty">
+        {{ associateScope === "point" ? "本条要点尚未关联要素" : "本章尚未关联章节要素" }}，请在下方添加
+      </span>
     </section>
 
-    <el-tabs v-model="activeTab" class="main-tabs">
-      <el-tab-pane label="选择关联" name="pick">
+    <a-tabs v-model:activeKey="activeTab" class="main-tabs">
+      <a-tab-pane tab="选择关联" key="pick">
         <section class="block">
           <div class="block-head">
             <span class="block-title">个人要素库</span>
-            <el-input v-model="libraryFilter" size="small" clearable placeholder="搜索名称 / 分类" class="filter-input" />
+            <a-input v-model:value="libraryFilter" size="small" allow-clear placeholder="搜索名称 / 分类" class="filter-input" />
           </div>
-          <el-empty v-if="!libraryCandidates.length" description="个人库暂无可用条目" :image-size="48" />
-          <el-scrollbar v-else max-height="200px" class="pick-scroll">
-            <el-checkbox-group v-model="libraryPickChecked" class="pick-list">
+          <a-empty v-if="!libraryCandidates.length" description="个人库暂无可用条目" :image-style="{ height: 48 }"  />
+          <div v-else class="pick-scroll" style="max-height:200px;overflow:auto">
+            <a-checkbox-group v-model:value="libraryPickChecked" class="pick-list">
               <label v-for="el in libraryCandidates" :key="el.id" class="pick-row">
-                <el-checkbox :label="el.id">
+                <a-checkbox :value="el.id">
                   <span class="pick-name">{{ el.name || el.id }}</span>
-                  <el-tag v-if="el.category" size="small" type="warning" effect="plain">{{ el.category }}</el-tag>
-                  <el-tag size="small" type="info" effect="plain">{{ elementKindLabel(el.kind) }}</el-tag>
+                  <a-tag v-if="el.category" size="small" color="warning">{{ el.category }}</a-tag>
+                  <a-tag size="small" color="default">{{ elementKindLabel(el.kind) }}</a-tag>
                   <span class="pick-summary">{{ el.purpose || elementSummary(el) }}</span>
-                </el-checkbox>
+                </a-checkbox>
               </label>
-            </el-checkbox-group>
-          </el-scrollbar>
-          <el-button
-            v-if="libraryPickChecked.length"
-            type="primary"
-            plain
-            size="small"
-            class="pick-add-btn"
-            @click="addLibraryPicked"
-          >
+            </a-checkbox-group>
+          </div>
+          <a-button
+ v-if="libraryPickChecked.length"
+ type="primary"
+ size="small"
+ class="pick-add-btn"
+ @click="addLibraryPicked"
+ >
             导入并关联（{{ libraryPickChecked.length }}）
-          </el-button>
+          </a-button>
         </section>
 
         <section class="block">
           <div class="block-head">
             <span class="block-title">本任务其它要素</span>
-            <el-input v-model="filterText" size="small" clearable placeholder="搜索名称" class="filter-input" />
+            <a-input v-model:value="filterText" size="small" allow-clear placeholder="搜索名称" class="filter-input" />
           </div>
-          <el-empty v-if="!pickCandidates.length" description="没有可关联的其它任务要素" :image-size="48" />
-          <el-scrollbar v-else max-height="180px" class="pick-scroll">
-            <el-checkbox-group v-model="pickChecked" class="pick-list">
+          <a-empty v-if="!pickCandidates.length" description="没有可关联的其它任务要素" :image-style="{ height: 48 }"  />
+          <div v-else class="pick-scroll" style="max-height:180px;overflow:auto">
+            <a-checkbox-group v-model:value="pickChecked" class="pick-list">
               <label v-for="el in pickCandidates" :key="el.id" class="pick-row">
-                <el-checkbox :label="el.id">
+                <a-checkbox :value="el.id">
                   <span class="pick-name">{{ el.name || el.id }}</span>
-                  <el-tag size="small" type="info" effect="plain">{{ elementKindLabel(el.kind) }}</el-tag>
+                  <a-tag size="small" color="default">{{ elementKindLabel(el.kind) }}</a-tag>
                   <span class="pick-summary">{{ elementSummary(el) }}</span>
-                </el-checkbox>
+                </a-checkbox>
               </label>
-            </el-checkbox-group>
-          </el-scrollbar>
-          <el-button
-            v-if="pickChecked.length"
-            type="primary"
-            plain
-            size="small"
-            class="pick-add-btn"
-            @click="addPicked"
-          >
+            </a-checkbox-group>
+          </div>
+          <a-button
+ v-if="pickChecked.length"
+ type="primary"
+ size="small"
+ class="pick-add-btn"
+ @click="addPicked"
+ >
             关联所选（{{ pickChecked.length }}）
-          </el-button>
+          </a-button>
         </section>
-      </el-tab-pane>
+      </a-tab-pane>
 
-      <el-tab-pane v-if="allowCreate" label="新建并关联" name="create">
+      <a-tab-pane v-if="allowCreate" tab="新建并关联" key="create">
         <p v-if="configureHint" class="tab-hint">{{ configureHint }}</p>
         <p class="tab-hint">与要素库相同配置表单；保存后才会写入任务并自动勾到本章。</p>
-        <el-button type="primary" plain @click="openCreateElementDialog">+ 配置新要素</el-button>
+        <a-button type="primary" @click="openCreateElementDialog">+ 配置新要素</a-button>
         <ul v-if="stagedConfigured.length" class="staged-list">
           <li v-for="el in stagedConfigured" :key="el.id">
-            <el-tag size="small">{{ elementKindLabel(el.kind) }}</el-tag>
+            <a-tag size="small">{{ elementKindLabel(el.kind) }}</a-tag>
             {{ el.name || el.id }}
           </li>
         </ul>
-      </el-tab-pane>
-    </el-tabs>
+      </a-tab-pane>
+    </a-tabs>
 
     <template #footer>
-      <el-button round plain @click="goViewElements">查看要素</el-button>
-      <el-button round plain @click="goViewMaterials">查看资料库</el-button>
-      <el-button @click="$emit('update:modelValue', false)">取消</el-button>
-      <el-button type="primary" @click="confirm">确定</el-button>
+      <a-button @click="goViewElements" shape="round">查看要素</a-button>
+      <a-button @click="goViewMaterials" shape="round">查看资料库</a-button>
+      <a-button @click="$emit('update:modelValue', false)">取消</a-button>
+      <a-button type="primary" @click="confirm">确定</a-button>
     </template>
-  </el-dialog>
+  </a-modal>
 
   <!-- 与关联弹窗同级挂到 body，z-index 更高，避免被「为本章关联要素」挡住 -->
-  <el-dialog
-    v-model="createDialogVisible"
-    title="配置新要素"
-    width="760px"
-    destroy-on-close
-    append-to-body
-    align-center
-    :z-index="5200"
-    class="chapter-element-create-dialog"
-  >
-    <el-form v-if="createDraft" label-position="top">
+  <a-modal
+ v-model:open="createDialogVisible"
+ title="配置新要素"
+ width="760px"
+ :z-index="5200"
+ class="chapter-element-create-dialog"
+ destroy-on-close centered>
+    <a-form v-if="createDraft" layout="vertical">
       <ElementConfigFields
         v-model="createDraft"
         show-library-meta
@@ -156,17 +161,17 @@
         :task-id="taskId"
         :element-id="createDraft?.id"
       />
-    </el-form>
+    </a-form>
     <template #footer>
-      <el-button @click="createDialogVisible = false">取消</el-button>
-      <el-button type="primary" @click="saveCreateElement">保存并关联本章</el-button>
+      <a-button @click="createDialogVisible = false">取消</a-button>
+      <a-button type="primary" @click="saveCreateElement">保存并关联本章</a-button>
     </template>
-  </el-dialog>
+  </a-modal>
 </template>
 
 <script setup>
-import { computed, inject, nextTick, ref } from "vue";
-import { ElMessage } from "element-plus";
+import { computed, inject, nextTick, ref, watch } from "vue";
+import { ElMessage } from "../ui.js";
 import { request } from "../api";
 import ElementConfigFields from "./ElementConfigFields.vue";
 import {
@@ -287,18 +292,15 @@ function applySeedCreateDraft() {
   if (!seed || typeof seed !== "object") return;
   const kind = String(seed.kind || "kv").trim() || "kv";
   const base = blankElementDraft(kind, { library: true });
-  createDraft.value = {
+  const merged = {
     ...base,
     ...seed,
-    id: `el-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+    kind,
+    id: String(seed.id || "").trim() || `el-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
   };
-  if (createDraft.value.kind === "kv") {
-    createDraft.value = normalizeKvElementDraft(createDraft.value);
-  }
+  createDraft.value = merged.kind === "kv" ? normalizeKvElementDraft(merged) : merged;
   activeTab.value = "create";
-  nextTick(() => {
-    createDialogVisible.value = true;
-  });
+  createDialogVisible.value = true;
 }
 
 function onOpen() {
@@ -317,6 +319,14 @@ function onOpen() {
     applySeedCreateDraft();
   }
 }
+
+watch(
+  () => [props.modelValue, props.seedCreateDraft],
+  ([open, seed]) => {
+    if (!open || !seed) return;
+    nextTick(() => applySeedCreateDraft());
+  }
+);
 
 function unlinkOne(id) {
   localLinkedIds.value = localLinkedIds.value.filter((x) => x !== id);
@@ -437,7 +447,7 @@ function confirm() {
 }
 .dlg-chapter {
   font-size: 13px;
-  color: var(--el-text-color-secondary);
+  color: var(--ay-muted);
 }
 .intro-alert {
   margin-bottom: 12px;
@@ -460,7 +470,28 @@ function confirm() {
   font-size: 13px;
 }
 .linked-label strong {
-  color: var(--el-color-primary);
+  color: var(--ay-blue);
+}
+.scope-pill {
+  display: inline-flex;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.5;
+  vertical-align: middle;
+}
+.scope-pill.chapter {
+  background: #ecfdf5;
+  color: #047857;
+  border: 1px solid #a7f3d0;
+}
+.scope-pill.point {
+  background: #eef2ff;
+  color: #4338ca;
+  border: 1px solid #c7d2fe;
 }
 .linked-chips {
   display: flex;
@@ -468,8 +499,18 @@ function confirm() {
   gap: 6px;
   flex: 1;
 }
+.chip-scope {
+  display: inline-block;
+  margin-right: 4px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #334155;
+  font-size: 10px;
+  font-weight: 700;
+}
 .linked-empty {
-  color: var(--el-text-color-secondary);
+  color: var(--ay-muted);
   font-size: 12px;
 }
 .main-tabs {
@@ -478,7 +519,7 @@ function confirm() {
 .tab-hint {
   margin: 0 0 12px;
   font-size: 12px;
-  color: var(--el-text-color-secondary);
+  color: var(--ay-muted);
   line-height: 1.45;
 }
 .block {
@@ -500,7 +541,7 @@ function confirm() {
   margin-left: auto;
 }
 .pick-scroll {
-  border: 1px solid var(--el-border-color-lighter);
+  border: 1px solid var(--ay-line);
   border-radius: 8px;
 }
 .pick-list {
@@ -511,13 +552,13 @@ function confirm() {
 .pick-row {
   display: block;
   padding: 8px 4px;
-  border-bottom: 1px solid var(--el-border-color-extra-light);
+  border-bottom: 1px solid var(--ay-line);
   cursor: pointer;
 }
 .pick-row:last-child {
   border-bottom: none;
 }
-.pick-row :deep(.el-checkbox) {
+.pick-row :deep(.ant-checkbox-wrapper) {
   align-items: flex-start;
   height: auto;
   white-space: normal;
@@ -529,7 +570,7 @@ function confirm() {
 .pick-summary {
   display: block;
   font-size: 12px;
-  color: var(--el-text-color-secondary);
+  color: var(--ay-muted);
   margin-top: 4px;
 }
 .pick-add-btn {
