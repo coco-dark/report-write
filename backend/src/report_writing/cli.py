@@ -172,6 +172,8 @@ def _run_serve(args: argparse.Namespace) -> None:
     if reload:
         kwargs["reload"] = True
         kwargs["reload_dirs"] = _serve_reload_dirs()
+        # 前端 build 写进 static/，不要触发热更新把进程打挂
+        kwargs["reload_excludes"] = ["**/static/**", "**/static/*"]
     uvicorn.run("report_writing.api:app", **kwargs)
 
 

@@ -291,6 +291,7 @@
             </p>
             <div
               v-else
+              ref="previewArticleEl"
               class="preview-article"
               v-html="previewHtml"
             />
@@ -3610,7 +3611,10 @@ function clearLocalOutlineState() {
 function applyPreviewPayload(tid, data) {
   previewLoadedTid.value = tid;
   previewHtml.value = applyPreviewOverlays(tid, String(data?.html || ""));
-  previewWrittenCount.value = Number(data?.written_count || 0);
+  previewWrittenCount.value = Math.max(
+    Number(data?.written_count || 0),
+    overlayWrittenCount(tid)
+  );
   previewChapterCount.value = Number(data?.chapter_count || 0);
   previewError.value = "";
   previewCacheByTask.set(tid, {
@@ -3618,9 +3622,12 @@ function applyPreviewPayload(tid, data) {
     written_count: previewWrittenCount.value,
     chapter_count: previewChapterCount.value,
   });
+  scrollPreviewToFocus();
 }
 
 const previewOverlayByChapter = new Map();
+const previewArticleEl = ref(null);
+let previewFocusKey = "";
 
 function escapePreviewRe(value) {
   return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -3644,12 +3651,45 @@ function previewChapterSectionHtml(key, title, html) {
   );
 }
 
+function previewTaskAliases(tid = "") {
+  const ids = new Set();
+  for (const value of [
+    tid,
+    previewTaskId.value,
+    outlineSourceTaskId(),
+    resolveWritingTaskId(),
+    activeDoc.value?.writingTaskId,
+    activeDoc.value?.taskId,
+    activeDoc.value?.blueprintId,
+  ]) {
+    const id = String(value || "").trim();
+    if (id) ids.add(id);
+  }
+  return ids;
+}
+
+function overlayWrittenCount(tid) {
+  const aliases = previewTaskAliases(tid);
+  let n = 0;
+  for (const [mapKey, row] of previewOverlayByChapter) {
+    if (!row?.html) continue;
+    if (![...aliases].some((id) => mapKey.startsWith(`${id}::`))) continue;
+    n += 1;
+  }
+  return n;
+}
+
 function applyPreviewOverlays(tid, html) {
   let out = String(html || "");
-  const prefix = `${tid}::`;
+  const aliases = previewTaskAliases(tid);
+  const seen = new Set();
   for (const [mapKey, row] of previewOverlayByChapter) {
-    if (!mapKey.startsWith(prefix) || !row?.html) continue;
-    const key = mapKey.slice(prefix.length);
+    if (!row?.html) continue;
+    const prefix = [...aliases].find((id) => mapKey.startsWith(`${id}::`));
+    if (!prefix) continue;
+    const key = mapKey.slice(prefix.length + 2);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
     const section = previewChapterSectionHtml(key, row.title, row.html);
     const re = new RegExp(
       `<section[^>]*data-chapter-key="${escapePreviewRe(key)}"[\\s\\S]*?</section>`,
@@ -3662,23 +3702,44 @@ function applyPreviewOverlays(tid, html) {
   return out;
 }
 
+function scrollPreviewToFocus() {
+  const ck = String(previewFocusKey || "").trim();
+  if (!ck) return;
+  nextTick(() => {
+    const root = previewArticleEl.value;
+    if (!root) return;
+    const node = root.querySelector(`[data-chapter-key="${ck}"]`);
+    if (node && typeof node.scrollIntoView === "function") {
+      node.scrollIntoView({ block: "start", behavior: "smooth" });
+    }
+  });
+}
+
 function upsertPreviewChapterHtml(tid, key, html, title = "") {
   const body = String(html || "").trim();
   const ck = String(key || "").trim();
-  const task = String(tid || previewTaskId.value || "").trim();
-  if (!task || !ck || !body) return;
-  previewOverlayByChapter.set(`${task}::${ck}`, { html: body, title: title || ck, at: Date.now() });
+  if (!ck || !body) return;
+  const row = { html: body, title: title || ck, at: Date.now() };
+  for (const id of previewTaskAliases(tid)) {
+    previewOverlayByChapter.set(`${id}::${ck}`, row);
+  }
+  previewFocusKey = ck;
+  const task = String(previewTaskId.value || tid || "").trim();
   if (!previewHtml.value) {
     previewHtml.value = `<article class="rw-draft-preview">${previewChapterSectionHtml(ck, title, body)}</article>`;
   } else {
     previewHtml.value = applyPreviewOverlays(task, previewHtml.value);
   }
-  previewLoadedTid.value = task;
-  previewCacheByTask.set(task, {
-    html: previewHtml.value,
-    written_count: previewWrittenCount.value || 1,
-    chapter_count: previewChapterCount.value || 1,
-  });
+  previewLoadedTid.value = task || previewLoadedTid.value;
+  previewWrittenCount.value = Math.max(previewWrittenCount.value || 0, overlayWrittenCount(task) || 1);
+  if (task) {
+    previewCacheByTask.set(task, {
+      html: previewHtml.value,
+      written_count: previewWrittenCount.value || 1,
+      chapter_count: previewChapterCount.value || 1,
+    });
+  }
+  scrollPreviewToFocus();
 }
 
 function clearPreviewState() {
@@ -4124,6 +4185,7 @@ function applyLocate(cmd) {
       selectChapter(key, tab, { mainView: mainView.value, skipMainView: true });
     }
     const liveHtml = String(cmd?.draftHtml || "").trim();
+    if (key) previewFocusKey = key;
     if (liveHtml && key) {
       upsertPreviewChapterHtml(
         String(cmd?.taskId || previewTaskId.value || "").trim(),

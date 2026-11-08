@@ -6670,7 +6670,7 @@ async function openChapterElementAssociate(taskId, ch) {
     taskId,
     chapterKey: ch.key,
     label: `${ch.sequence || ""} ${ch.title || ch.key}`.trim(),
-    linkedIds: (() => {
+    linkedIds: await (async () => {
       if (ctx) {
         const items = Array.isArray(ctx.pointItems) && ctx.pointItems.length
           ? ctx.pointItems
@@ -6686,7 +6686,7 @@ async function openChapterElementAssociate(taskId, ch) {
         const eid = String(row?.element_id || "").trim();
         return eid ? [eid] : [];
       }
-      return await collectChapterLinkedIds(taskId, ch, edit);
+      return collectChapterLinkedIds(taskId, ch, edit);
     })(),
     associateScope: ctx ? "point" : "chapter",
     seedCreateDraft,

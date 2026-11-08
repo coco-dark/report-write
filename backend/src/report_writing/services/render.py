@@ -15,7 +15,14 @@ from pydantic import Field
 from report_writing.domain.content_blocks import ensure_html_fragment
 from report_writing.domain.word_style import WordStyleSettings
 from report_writing.services.html_docx import html_to_docx_bytes
-from report_writing.domain.models import ChapterStatus, Entity, OutlineTree, RenderTemplateSummary, WritingTask
+from report_writing.domain.models import (
+    ChapterState,
+    ChapterStatus,
+    Entity,
+    OutlineTree,
+    RenderTemplateSummary,
+    WritingTask,
+)
 from report_writing.services.store import TaskStore
 
 _log = logging.getLogger(__name__)
@@ -845,6 +852,42 @@ def render_task_pdf(
     return data, result
 
 
+def apply_chapter_bodies_from_map(task: WritingTask, by_key: dict[str, str]) -> WritingTask:
+    """把章节表正文合进任务：空章补全文，缺章补进来；已有本轮草稿不覆盖。"""
+    if not by_key:
+        return task
+    chapters = list(task.chapters or [])
+    seen: set[str] = set()
+    for chapter in chapters:
+        key = str(getattr(chapter, "key", "") or "").strip()
+        if key:
+            seen.add(key)
+        local_official = (getattr(chapter, "official_text", None) or "").strip()
+        draft = getattr(chapter, "draft", None)
+        has_draft = bool(draft and getattr(draft, "paragraphs", None))
+        if local_official or has_draft:
+            continue
+        backup = str(by_key.get(key) or "").strip()
+        if backup:
+            chapter.official_text = backup
+    for key, text in by_key.items():
+        ck = str(key or "").strip()
+        body = str(text or "").strip()
+        if not ck or ck in seen or not body:
+            continue
+        seen.add(ck)
+        chapters.append(
+            ChapterState(
+                key=ck,
+                title=ck,
+                status=ChapterStatus.CONFIRMED,
+                official_text=body,
+            )
+        )
+    task.chapters = chapters
+    return task
+
+
 def _hydrate_chapters_from_db(task: WritingTask) -> WritingTask:
     """task.json 缺 official_text 时，从 MySQL 已确认章节表补全。"""
     from report_writing.infra.postgres import load_database_settings
@@ -865,17 +908,7 @@ def _hydrate_chapters_from_db(task: WritingTask) -> WritingTask:
     except Exception as error:
         _log.debug("hydrate chapters skipped: %s", error)
         return task
-    if not by_key:
-        return task
-    for chapter in task.chapters or []:
-        if (chapter.official_text or "").strip():
-            continue
-        if getattr(chapter, "draft", None) and getattr(chapter.draft, "paragraphs", None):
-            continue
-        backup = (by_key.get(chapter.key) or "").strip()
-        if backup:
-            chapter.official_text = backup
-    return task
+    return apply_chapter_bodies_from_map(task, by_key)
 
 
 def load_task(home: Path, task_id: str) -> WritingTask:

@@ -12,7 +12,38 @@ from report_writing.domain.models import (
     Paragraph,
     WritingTask,
 )
-from report_writing.services.render import build_written_chapters_preview
+from report_writing.services.render import apply_chapter_bodies_from_map, build_written_chapters_preview
+
+
+def test_hydrate_merges_missing_chapter_from_chapter_table():
+    """其它章已有正文时，章节表里刚确认的章仍要拼进预览。"""
+    task = WritingTask(
+        id="wPreviewHydrate",
+        title="新的安全报告",
+        outline=OutlineTree(
+            chapters=[
+                OutlineNode(key="c11", sequence="1.1", title="安全预评价目的"),
+                OutlineNode(key="c22", sequence="2.2", title="建设规模"),
+            ]
+        ),
+        chapters=[
+            ChapterState(
+                key="c11",
+                title="安全预评价目的",
+                status=ChapterStatus.CONFIRMED,
+                official_text="<p>旧稿目的</p>",
+            )
+        ],
+    )
+    apply_chapter_bodies_from_map(
+        task,
+        {"c22": "<table><tr><td>新建</td></tr></table>"},
+    )
+    out = build_written_chapters_preview(task, written_only=True, confirmed_only=False)
+    assert out["written_count"] == 2
+    assert "旧稿目的" in out["html"]
+    assert "新建" in out["html"]
+    assert 'data-chapter-key="c22"' in out["html"]
 
 
 def test_blueprint_preview_uses_writing_clone_bodies():
