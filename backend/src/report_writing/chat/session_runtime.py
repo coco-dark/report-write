@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,64 @@ WORKFLOW_WRITING = "writing"
 WORKFLOW_TEMPLATE = "template_wizard"
 WORKFLOW_EXPORT = "export"
 WORKFLOW_FREEFORM = "freeform"
+
+# 本轮 go_study / re_study 真正挂 trigger 时点亮。ContextVar 在线程池里可能丢，
+# 所以同时写到 wizard._arm_study_kick，供 SSE done 贴回；GET 快照会剥掉。
+STUDY_KICK_ARM_KEY = "_arm_study_kick"
+_study_kick_armed: ContextVar[bool] = ContextVar("rw_study_kick_armed", default=False)
+
+
+def arm_study_kick_this_turn(
+    session: ChatSession | None = None,
+    wizard: dict[str, Any] | None = None,
+) -> None:
+    _study_kick_armed.set(True)
+    if wizard is not None:
+        wizard[STUDY_KICK_ARM_KEY] = True
+    if session is None:
+        return
+    ff = dict(session.freeform or {})
+    live = dict(wizard if wizard is not None else (ff.get("blueprint_wizard") or {}))
+    live[STUDY_KICK_ARM_KEY] = True
+    session.freeform = {**ff, "blueprint_wizard": live}
+
+
+def disarm_study_kick_this_turn() -> None:
+    _study_kick_armed.set(False)
+
+
+def study_kick_armed_this_turn(live_wizard: dict[str, Any] | None = None) -> bool:
+    if _study_kick_armed.get():
+        return True
+    return dict(live_wizard or {}).get(STUDY_KICK_ARM_KEY) is True
+
+
+def clear_leftover_study_triggers(session: ChatSession) -> None:
+    """清掉向导里残留的分析自驱，禁止闲聊/开写把上一轮章节再跑一遍。"""
+    ff = dict(session.freeform or {})
+    wizard = dict(ff.get("blueprint_wizard") or {})
+    if not wizard:
+        return
+    changed = False
+    for key in (
+        "trigger_begin_study",
+        "trigger_chapter_study",
+        "chapter_study_keys",
+        "study_stream_active",
+        STUDY_KICK_ARM_KEY,
+    ):
+        if key in wizard:
+            wizard.pop(key, None)
+            changed = True
+    if not changed:
+        return
+    session.freeform = {**ff, "blueprint_wizard": wizard}
+
+
+def suppress_study_kick_for_document_scope(session: ChatSession) -> None:
+    """文档作用域澄清未决：禁止本轮把分析自驱贴给前端。"""
+    disarm_study_kick_this_turn()
+    clear_leftover_study_triggers(session)
 
 
 def _runtime_root(session: ChatSession) -> dict[str, Any]:
@@ -352,9 +411,14 @@ def derive_writing_workflow(home: Path, session: ChatSession) -> dict[str, Any]:
                     progress["needs_human"] += 1
                 elif status == ChapterStatus.PENDING:
                     progress["pending_write"] += 1
-            progress["running"] = (
-                phase == ChatPhase.WRITING.value and not bool(ff.get("writing_paused"))
-            )
+            inflight = {
+                ChapterStatus.SEARCHING,
+                ChapterStatus.WRITING,
+                ChapterStatus.CHECKING,
+            }
+            progress["running"] = any(
+                getattr(chapter, "status", None) in inflight for chapter in chapters
+            ) and not bool(ff.get("writing_paused"))
     return {
         "phase": phase,
         "task_id": tid,
@@ -480,9 +544,12 @@ def attach_turn_study_kick(
 
     GET / runtime_public_view 仍剥掉 trigger，避免刷新自动重跑；
     分析卡又不进气泡。若 done.blueprint_wizard 也剥掉，前端只收到口头回复、永远不开 study 流。
+    只在本轮真正挂过分析 trigger 时贴回，禁止把上一轮残留带到「写某一章」。
     """
     out = dict(public_wizard or {})
     live = dict(live_wizard or {})
+    if not study_kick_armed_this_turn(live):
+        return out
     keys = [
         str(k).strip()
         for k in list(live.get("trigger_chapter_study") or live.get("chapter_study_keys") or [])
@@ -532,8 +599,10 @@ def runtime_public_view(session: ChatSession, home: Path | None = None) -> dict[
         or bp.get("study_stream_active")
         or bp.get("trigger_outline_extract")
         or bp.get("outline_extract_active")
+        or bp.get(STUDY_KICK_ARM_KEY)
     ):
         bp = dict(bp)
+        bp.pop(STUDY_KICK_ARM_KEY, None)
         pending = str(bp.get("pending_wizard_command") or "").strip()
         keep_re_extract = pending == "re_extract_outline" or bool(
             bp.get("outline_extract_active")

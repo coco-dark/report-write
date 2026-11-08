@@ -150,6 +150,29 @@ def test_dispatch_add_element_when_llm_selects_add(tmp_path: Path):
     assert ((session.freeform or {}).get("blueprint_wizard") or {}).get("step") == "study"
 
 
+def test_hello_does_not_restudy_named_chapter(tmp_path: Path):
+    bid = _seed(tmp_path)
+    session = _session(bid)
+    reply, cards, _ = _dispatch(
+        tmp_path,
+        session,
+        "你好",
+        [
+            {
+                "tool": "re_study_chapters",
+                "args": {
+                    "chapter_keys": ["c1"],
+                    "chapter_sequences": ["1"],
+                    "study_method": "sample",
+                },
+            }
+        ],
+    )
+    assert "不按分析" in (reply or "")
+    assert not ((session.freeform or {}).get("blueprint_wizard") or {}).get("trigger_chapter_study")
+    assert not any(getattr(c, "type", "") == "blueprint_wizard" for c in (cards or []))
+
+
 def test_dispatch_study_chapter_not_write(tmp_path: Path):
     bid = _seed(tmp_path)
     session = _session(bid)

@@ -24,6 +24,7 @@ class ChapterStatus(str, Enum):
 class TaskStatus(str, Enum):
     STUDYING = "studying"
     RUNNING = "running"
+    IDLE = "idle"
     AWAITING_CONFIRM = "awaiting_confirm"
     COMPLETED = "completed"
 
@@ -124,6 +125,8 @@ class ChapterRequirement(Entity):
     knowledge_folder_ids: list[str] = Field(default_factory=list)
     element_ids: list[str] = Field(default_factory=list)
     element_results: list[dict[str, Any]] = Field(default_factory=list)
+    # 对话里用户说明的原文，写作时与要素同为内容依据；不据此生成/回填要素槽
+    content_basis: list[str] = Field(default_factory=list)
     structure_only: bool = False  # 纯目录节点：不写正文、不检索
     fixed_output: bool = False  # 固定内容：跳过检索，按 reference_text 原文输出
     presence: str = "always"  # always | if_materials（由写作策略派生）
@@ -632,6 +635,8 @@ class WritingTask(Entity):
     write_chapter_scope: list[str] = Field(default_factory=list)
     # 开写前/写后待补充项登记（与对话 registry 同步）
     writing_supplement_gaps: list[dict[str, Any]] = Field(default_factory=list)
+    # 开写时从对话摘录的原文内容依据（非整槽要素）
+    writing_content_basis: list[str] = Field(default_factory=list)
     user_id: str = ""
 
     def chapter(self, key: str) -> ChapterState:
@@ -641,19 +646,31 @@ class WritingTask(Entity):
         raise KeyError(key)
 
     def refresh_status(self) -> None:
+        """任务状态只跟章节流水线，禁止「还有没写的章」就标成正在写。"""
         if self.outline is not None and not self.outline_confirmed:
             self.status = TaskStatus.STUDYING
             return
         if self.brief is not None and not self.brief_confirmed:
             self.status = TaskStatus.STUDYING
             return
+        inflight = {
+            ChapterStatus.SEARCHING,
+            ChapterStatus.WRITING,
+            ChapterStatus.CHECKING,
+        }
+        awaiting = {ChapterStatus.AWAITING_CONFIRM, ChapterStatus.NEEDS_HUMAN}
+        done = {ChapterStatus.CONFIRMED, ChapterStatus.SKIPPED}
         statuses = [item.status for item in self.chapters]
-        if statuses and all(item in {ChapterStatus.CONFIRMED, ChapterStatus.SKIPPED} for item in statuses):
-            self.status = TaskStatus.COMPLETED
-        elif any(item == ChapterStatus.AWAITING_CONFIRM for item in statuses):
-            self.status = TaskStatus.AWAITING_CONFIRM
-        elif self.brief is not None:
+        if any(item in inflight for item in statuses):
             self.status = TaskStatus.RUNNING
+            return
+        if any(item in awaiting for item in statuses):
+            self.status = TaskStatus.AWAITING_CONFIRM
+            return
+        if statuses and all(item in done for item in statuses):
+            self.status = TaskStatus.COMPLETED
+            return
+        self.status = TaskStatus.IDLE
 
 
 class StudiedTemplate(Entity):

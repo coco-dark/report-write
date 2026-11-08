@@ -95,7 +95,9 @@ def test_go_study_after_confirm_does_not_ask_confirm(tmp_path: Path):
         blueprint_id=bid,
         freeform={"blueprint_wizard": {"blueprint_id": bid, "step": "study", "outline_confirmed": True}},
     )
-    reply, _cards = execute_wizard_command(tmp_path, session, "go_study")
+    reply, _cards = execute_wizard_command(
+        tmp_path, session, "go_study", study_method="sample"
+    )
     assert "还没确认" not in reply
     assert "确认目录" not in reply or "已经确认" in reply
     assert "学" in reply or "分析" in reply

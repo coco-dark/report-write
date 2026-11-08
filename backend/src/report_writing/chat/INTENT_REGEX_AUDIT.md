@@ -13,8 +13,11 @@
 | 写作中：要素/关联/查看库/记目标 | ReAct Tool；执行复用 `apply_writing_control_classification` |
 | 统一调度（非口语主路径） | `execute_dispatch_tool`（UI·clarify·单测；**禁止** `message_wants_*` 改写 tool） |
 | 澄清回复（全部 source） | `classify_clarify_reply_llm` / `classify_doc_name_reply_llm` → `clarify_flow.try_handle_pending_message` |
+| 写/分析范围槽 | `classify_write_*` / `classify_study_scope_llm`（Tool 已选后补槽） |
+| 向导 command | `resolve_wizard_action`（subagent） |
+| 要素 payload / 收录名 | `infer_element_payload_llm` / `extract_collect_element_name_llm` |
 
-**原则**：口语「用户要做什么」禁止正则短切；LLM 失败或 `none` → clarify / 总控 ReAct，不用正则猜工具。一切澄清口语（定名 / 改名 / 资料包名 / 学习范围 / 入口路径 / 写作确认等）必须结合对话上下文走模型；精确 UI 点选与「类型｜标题」等结构行除外。禁止把短句字面或短语别名当主判决。
+**原则**：口语「用户要做什么」只走总控 `create_agent`。入口 / 定名 / 无蓝本动作 / 记住目标 **不再** 整句 LLM 分类；结构行（`类型｜标题`、粘贴目录、名字叫…）可确定性兜底。已挂澄清卡的回复仍走 `classify_clarify_reply_llm`。
 
 ## 仍保留正则（非「用户动作」意图）
 

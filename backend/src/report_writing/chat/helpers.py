@@ -234,7 +234,8 @@ _CHAPTER_STATUS_LABEL = {
 }
 _TASK_STATUS_LABEL = {
     "studying": "分析中",
-    "running": "进行中",
+    "running": "正在写",
+    "idle": "待继续",
     "awaiting_confirm": "已写作",
     "completed": "已完成",
 }
@@ -508,12 +509,10 @@ def should_skip_reply_polish(
             pass
     if session is not None:
         phase = str(session.phase or "")
-        if phase.startswith("freeform") or phase in {
-            ChatPhase.INTENT.value,
-            ChatPhase.BLUEPRINT_SELECT.value,
-            "ready_to_write",
-            "writing",
-            "confirm_export",
+        # 写作中的进度/导出套话不改味；入口与无蓝本引导允许润色
+        if phase in {
+            ChatPhase.WRITING.value,
+            ChatPhase.CONFIRM_EXPORT.value,
         }:
             return True
     if cards:

@@ -41,49 +41,25 @@ def _dump(data: dict[str, Any]) -> str:
 
 def _obs_fail(
     *,
-    reply_hint: str,
+    reply_hint: str = "",
     missing_slots: list[str] | None = None,
     error: str = "",
     **extra: Any,
 ) -> str:
+    slots = [str(s).strip() for s in (missing_slots or []) if str(s).strip()]
     body: dict[str, Any] = {
         "ok": False,
-        "reply_hint": (reply_hint or "").strip(),
+        # 缺槽交给总控开口，不把套话塞进 reply_hint
+        "reply_hint": "" if slots else (reply_hint or "").strip(),
     }
-    if missing_slots:
-        body["missing_slots"] = list(missing_slots)
+    if slots:
+        body["missing_slots"] = slots
     if error:
         body["error"] = error
     body.update(extra)
+    if slots:
+        body["reply_hint"] = ""
     return _dump(body)
-
-
-def _hop_if_other_writing_control(
-    state: ChatControlState, expected_tool: str, message: str = ""
-) -> str | None:
-    """分类器点名其它写作控制 Tool 时只拒绝执行，不代跑。点选同名 action 不分类。"""
-    if (state.user_action or "").strip() == expected_tool:
-        return None
-    msg = (message or state.last_user_message or "").strip()
-    if not msg:
-        return None
-    from report_writing.chat.writing_control_route import suggest_other_writing_control_tool
-
-    clarify_invoke = _state_clarify_invoke(state)
-    suggestion = suggest_other_writing_control_tool(
-        state.home,
-        state.session,
-        msg,
-        expected_tool=expected_tool,
-        invoke=state.invoke,
-        clarify_invoke=clarify_invoke,
-    )
-    if suggestion is None:
-        return None
-    nxt = str(suggestion.get("tool") or "").strip()
-    if not nxt:
-        return None
-    return _obs_fail(reply_hint="这句更适合另一个动作，我按那个来。")
 
 
 def _dump_writing_control_result(
@@ -878,8 +854,7 @@ def build_chat_tools(state: ChatControlState) -> list:
         if not msg:
             return _obs_fail(
                 missing_slots=["message"],
-                reply_hint="跟我说一下要写什么，我再帮你找蓝本。",
-
+                reply_hint="",
             )
         named = is_writing_document_named(state.session)
         if not named:
@@ -1063,19 +1038,19 @@ def build_chat_tools(state: ChatControlState) -> list:
             }
         )
 
-    @tool("select_write_chapters", description="何时：开写前勾选要写的已分析章节。缺了：请用户勾选或点名章节，不要把未分析章塞进去。不要：代替 start_writing 直接写正文。")
+    @tool("select_write_chapters", description="何时：用户要写某一章/开写正文（点名序号或「刚才分析的那几章」）。不是分析要点。空 keys 由口语解析最近分析批。缺了：请勾选或点名；未分析则说明，不要改去分析。不要：问进度（用 get_writing_status）；已勾选后点「开始写作」用 start_writing；「写已分析的全部」用 write_analyzed_only；不要调 re_study_chapters / generate_freeform_points。")
     def select_write_chapters(blueprint_id: Annotated[str, Field(description="可选。已绑蓝本时可从会话取。")] = "", chapter_keys_json: Annotated[str, Field(description="必填语义。已分析章 key 的 JSON 数组。缺了请用户勾选或点名。")] = "[]") -> str:
         """
 
-        何时：开写前勾选要写的已分析章节。
+        何时：用户要写某一章/开写正文（点名序号或「刚才分析的那几章」）。不是分析要点。
 
-        必填：chapter_keys_json（已分析章的 key 列表）；已绑蓝本。
+        必填：chapter_keys_json（已分析章的 key 列表）；已绑蓝本。空数组时按用户原话解析（含最近分析批）。
 
         可选：blueprint_id（默认可从会话取）。
 
-        缺了：请用户勾选或点名章节，不要把未分析章塞进去。
+        缺了：请勾选或点名；未分析则说明，不要改去分析、不要把未分析章塞进去。
 
-        不要：代替 start_writing 直接写正文。
+        不要：问进度（用 get_writing_status）；已勾选后点「开始写作」用 start_writing；「写已分析的全部」用 write_analyzed_only；不要调 re_study_chapters / generate_freeform_points。
 
         """
         from report_writing.chat import _action_select_write_chapters
@@ -1090,7 +1065,14 @@ def build_chat_tools(state: ChatControlState) -> list:
         if not isinstance(keys, list):
             keys = []
         keys = [str(k).strip() for k in keys if str(k).strip()]
-        bid = (blueprint_id or state.session.blueprint_id or "").strip()
+        from report_writing.chat.session_documents import focus_bound_blueprint_id
+
+        bid = (
+            blueprint_id
+            or state.session.blueprint_id
+            or focus_bound_blueprint_id(state.session)
+            or ""
+        ).strip()
         if not keys:
             from report_writing.chat.write_chapter_intent import try_write_chapters_from_message
 
@@ -1099,7 +1081,7 @@ def build_chat_tools(state: ChatControlState) -> list:
                 state.session,
                 state.last_user_message or "",
                 emit=state.emit,
-                invoke=state.invoke,
+                invoke=_state_clarify_invoke(state) or state.invoke,
                 chapter_keys=None,
                 write_analyzed_only=False,
             )
@@ -1108,6 +1090,17 @@ def build_chat_tools(state: ChatControlState) -> list:
                 state.events.extend(events or [])
                 _set_cards(state, cards)
                 return _dump({"ok": True, "reply_hint": reply})
+            # oral None：多半是闲聊/问能力，不是选章；禁止再甩「还没勾选」或进度卡
+            if (state.last_user_message or "").strip():
+                return _obs_fail(
+                    missing_slots=[],
+                    reply_hint=(
+                        "这句不像在指定要写的章节。写作中可看右侧目录与配置；"
+                        "可以说写哪几章或「写已分析的」；问进度再说「写到哪了」。"
+                        "请口头回答用户，不要调用 get_writing_status。"
+                    ),
+                    blueprint_id=bid,
+                )
             sess_keys = [
                 str(k).strip()
                 for k in ((state.session.freeform or {}).get("write_chapter_keys") or [])
@@ -1123,9 +1116,12 @@ def build_chat_tools(state: ChatControlState) -> list:
             keys = sess_keys
         payload = {"blueprint_id": bid, "chapter_keys": keys}
         _emit_process(state, f"好的，按勾选的 {len(keys)} 章依次开写…")
-        reply, cards = _action_select_write_chapters(
-            state.home, state.session, payload, emit=state.emit, invoke=state.invoke
-        )
+        try:
+            reply, cards = _action_select_write_chapters(
+                state.home, state.session, payload, emit=state.emit, invoke=state.invoke
+            )
+        except ValueError as error:
+            return _obs_fail(reply_hint=str(error) or "现在还不能开写。")
         _set_cards(state, cards)
         types = _card_types(cards)
         if types & {"analysis_gate", "chapter_picker"}:
@@ -1146,17 +1142,19 @@ def build_chat_tools(state: ChatControlState) -> list:
             }
         )
 
-    @tool("write_analyzed_only", description="何时：用户只要写已经分析完的章节子集。缺了：没有已分析章就引导先分析，不要把未分析章硬开写。")
+    @tool("write_analyzed_only", description="何时：用户明确只要写已经分析完的章节（没点名「刚才那一批」）。缺了：没有已分析章就引导先分析，不要把未分析章硬开写。不要：指代「刚才分析的那几章」用 select_write_chapters；点名某一章用 select_write_chapters；问进度用 get_writing_status。")
     def write_analyzed_only(blueprint_id: Annotated[str, Field(description="可选。可从会话取。")] = "", chapter_keys_json: Annotated[str, Field(description="可选。指定子集；空则已分析全集。不要塞未分析章。")] = "[]") -> str:
         """
 
-        何时：用户只要写已经分析完的章节子集。
+        何时：用户明确只要写已经分析完的章节（没点名「刚才那一批」）。
 
         必填：无（可写已分析全集）；指定子集时 chapter_keys_json。
 
         可选：blueprint_id。
 
         缺了：没有已分析章就引导先分析，不要把未分析章硬开写。
+
+        不要：指代「刚才分析的那几章」或点名某一章用 select_write_chapters；问进度用 get_writing_status。
 
         """
         from report_writing.chat import _action_write_analyzed_only
@@ -1292,7 +1290,7 @@ def build_chat_tools(state: ChatControlState) -> list:
         return _dump(
             {
                 "ok": True,
-                "reply_hint": reply,
+                "reply_hint": "" if missing else reply,
                 "needs_doc_name": not named,
                 "missing_slots": missing or None,
             }
@@ -1465,19 +1463,19 @@ def build_chat_tools(state: ChatControlState) -> list:
         _set_cards(state, cards)
         return _dump({"ok": True, "reply_hint": reply})
 
-    @tool("start_writing", description="何时：用户说开始写、写这一章、「开始写作章节[序号 标题]」（已点明章节）。缺了：没说哪一章就问或让用户在文档窗勾选，不要猜第一章；多章未指定 pace 先澄清「一次写完 / 写一章看一章」。不要：路径未定不要硬开写；「改名叫 X 然后开始写」须先定名再开写。")
+    @tool("start_writing", description="何时：章节已勾选，或用户点「开始写作」/「开始写作章节[序号 标题]」。缺了：没说哪一章改走 select_write_chapters 或请勾选，不要猜第一章；多章未指定 pace 先澄清「一次写完 / 写一章看一章」。不要：口语刚点名要写哪几章时抢本工具（用 select_write_chapters）；不要分析要点；路径未定不要硬开写；「改名叫 X 然后开始写」须先定名再开写。")
     def start_writing(writing_pace: Annotated[str, Field(description="可选。batch=一次写完；step=写一章看一章。多章未指定时先问，不要猜。")] = "", chapter_keys_json: Annotated[str, Field(description="可选。章节 key 的 JSON 数组。没点名章节时不要猜第一章，用会话勾选/焦点章或先问。")] = "[]") -> str:
         """
 
-        何时：用户说开始写、写这一章（已点明章节）。
+        何时：章节已勾选，或用户点「开始写作」/「开始写作章节[序号 标题]」。
 
         必填：至少能确定要写哪些章（chapter_keys_json 或会话已勾选/焦点章）。
 
         可选：writing_pace=batch|step。
 
-        缺了：没说哪一章就问或让用户在文档窗勾选，不要猜第一章；多章未指定 pace 先澄清「一次写完 / 写一章看一章」。
+        缺了：没说哪一章改走 select_write_chapters 或请勾选，不要猜第一章；多章未指定 pace 先澄清「一次写完 / 写一章看一章」。
 
-        不要：路径未定不要硬开写；「改名叫 X 然后开始写」须先定名再开写。
+        不要：口语刚点名要写哪几章时抢本工具（用 select_write_chapters）；不要分析要点；路径未定不要硬开写；「改名叫 X 然后开始写」须先定名再开写。
 
         """
         from report_writing.chat import _action_start_writing
@@ -1535,24 +1533,32 @@ def build_chat_tools(state: ChatControlState) -> list:
             }
         )
 
-    @tool("get_writing_status", description="何时：用户问写到哪了、哪章待确认。不要：用本工具开写或改稿。")
+    @tool("get_writing_status", description="何时：用户明确问写到哪了、哪章待确认、看写作进度。返回 status_facts，reply_hint 为空：对用户说话按原话组织一两句，禁止复读进度套话。缺了：用户没问进度不要调。不要：开写或改稿；闲聊/「能干什么」/「现在怎么办」口头答；「刚才分析的那几章」走 select_write_chapters；看单章配置用 get_chapter_info。")
     def get_writing_status() -> str:
         """
 
-        何时：用户问写到哪了、哪章待确认。
+        何时：用户明确问写到哪了、哪章待确认、看写作进度。
 
         必填：无。
 
         可选：无。
 
-        不要：用本工具开写或改稿。
+        返回：status_facts；reply_hint 为空。对用户说话按原话组织一两句，禁止复读进度套话。
+
+        缺了：用户没问进度不要调。
+
+        不要：开写或改稿；闲聊/「能干什么」/「现在怎么办」口头答；「刚才分析的那几章」走 select_write_chapters；看单章配置用 get_chapter_info。
 
         """
         from report_writing.chat import _writing_status
+        from report_writing.chat.writing import writing_status_facts
+        from report_writing.chat.helpers import _load_task
 
-        reply, cards = _writing_status(state.home, state.session)
+        _reply, cards = _writing_status(state.home, state.session)
         _set_cards(state, cards)
-        return _dump({"ok": True, "reply_hint": reply})
+        task = _load_task(state.home, state.session.task_id) if state.session.task_id else None
+        facts = writing_status_facts(task)
+        return _dump({"ok": True, "reply_hint": "", "status_facts": facts})
 
     @tool("prepare_export_word", description="何时：用户要导出 Word。缺了：先对话定名，不要未定名就导出。")
     def prepare_export_word() -> str:
@@ -1712,7 +1718,7 @@ def build_chat_tools(state: ChatControlState) -> list:
         "get_chapter_info",
         description=(
             "何时：用户要查看某章配置（要点、章节说明、写作策略、参考正文、关联要素、是否已写）。"
-            "不要：用本工具改配置或开写；改配置用 configure_chapter。"
+            "不要：用本工具改配置或开写；改配置用 configure_chapter；问整篇写到哪了用 get_writing_status。"
             "缺了：问看哪一章；用户说「这章/本章」且文档窗有焦点章时可用焦点章。"
         ),
     )
@@ -1925,9 +1931,6 @@ def build_chat_tools(state: ChatControlState) -> list:
 
         payload = ChatActionPayload.parse(payload_json).as_dict()
         hint = str(state.last_user_message or payload.get("hint") or payload.get("user_note") or "").strip()
-        hop = _hop_if_other_writing_control(state, "add_chapter_element", hint)
-        if hop:
-            return hop
         if hint and (
             not str(payload.get("chapter_key") or "").strip()
             or not str(payload.get("name") or "").strip()
@@ -1999,9 +2002,6 @@ def build_chat_tools(state: ChatControlState) -> list:
 
         payload = ChatActionPayload.parse(payload_json).as_dict()
         hint = str(state.last_user_message or payload.get("hint") or "").strip()
-        hop = _hop_if_other_writing_control(state, "associate_elements", hint)
-        if hop:
-            return hop
         if not str(payload.get("chapter_key") or payload.get("chapter_key_hint") or "").strip():
             # 允许分类器/动作层从 hint 解析；完全空则缺参
             if not hint and not (state.session.task_id or "").strip():
@@ -2046,9 +2046,6 @@ def build_chat_tools(state: ChatControlState) -> list:
 
         payload = ChatActionPayload.parse(payload_json).as_dict()
         hint = str(state.last_user_message or payload.get("hint") or "").strip()
-        hop = _hop_if_other_writing_control(state, "dissociate_chapter_element", hint)
-        if hop:
-            return hop
         result = apply_writing_control_classification(
             state.home,
             state.session,
@@ -2083,9 +2080,6 @@ def build_chat_tools(state: ChatControlState) -> list:
 
         payload = ChatActionPayload.parse(payload_json).as_dict()
         hint = str(state.last_user_message or payload.get("hint") or "").strip()
-        hop = _hop_if_other_writing_control(state, "remove_document_element", hint)
-        if hop:
-            return hop
         result = apply_writing_control_classification(
             state.home,
             state.session,
@@ -2120,9 +2114,6 @@ def build_chat_tools(state: ChatControlState) -> list:
 
         payload = ChatActionPayload.parse(payload_json).as_dict()
         hint = str(state.last_user_message or payload.get("hint") or "").strip()
-        hop = _hop_if_other_writing_control(state, "collect_to_element_library", hint)
-        if hop:
-            return hop
         result = apply_writing_control_classification(
             state.home,
             state.session,
@@ -2188,17 +2179,17 @@ def build_chat_tools(state: ChatControlState) -> list:
             fail_hint="无法打开要素库。",
         )
 
-    @tool("open_blueprint_library", description="何时：用户要打开蓝本库管理页。不要：当成 match 选型或 list 后选用。")
+    @tool("open_blueprint_library", description="何时：用户要打开蓝本库管理页（维护库，不是对话里选型）。不要：当成 match_blueprints 选型、list_blueprints 浏览后选用、或 select_blueprint。")
     def open_blueprint_library() -> str:
         """
 
-        何时：用户要打开蓝本库管理页。
+        何时：用户要打开蓝本库管理页（维护库，不是对话里选型）。
 
         必填：无。
 
         可选：无。
 
-        不要：当成 match 选型或 list 后选用。
+        不要：当成 match_blueprints 选型、list_blueprints 浏览后选用、或 select_blueprint。
 
         """
         from report_writing.chat.writing_control_route import apply_writing_control_classification
@@ -2382,14 +2373,7 @@ def build_chat_tools(state: ChatControlState) -> list:
         from report_writing.chat.session_documents import message_requires_structured_rename_title
 
         if not (title or "").strip() and msg and message_requires_structured_rename_title(msg):
-            return _dump(
-                {
-                    "ok": False,
-                    "missing_slots": ["title"],
-                    "reply_hint": "改名的话跟我说新名字就行，例如：改名叫 2026个人述职报告。",
-
-                }
-            )
+            return _obs_fail(missing_slots=["title"])
         from report_writing.chat.session_documents import (
             sanitize_candidate_document_title,
             title_contains_action_clause,
@@ -2437,14 +2421,7 @@ def build_chat_tools(state: ChatControlState) -> list:
                         state.session, message=msg, topic_hint=topic
                     )
                 _set_cards(state, cards2)
-                return _dump(
-                    {
-                        "ok": False,
-                        "missing_slots": ["document_scope"],
-                        "reply_hint": reply2,
-
-                    }
-                )
+                return _obs_fail(missing_slots=["document_scope"])
         if not tip and not cat and not has_pipe:
             # 仅 message：允许干净短题目；写作/模版整句禁止升格为 title
             promote_ok = (
@@ -2460,24 +2437,10 @@ def build_chat_tools(state: ChatControlState) -> list:
                 )
             )
             if not promote_ok:
-                return _dump(
-                    {
-                        "ok": False,
-                        "missing_slots": ["title"],
-                        "reply_hint": "还缺文档标题，跟我说一下叫什么名字。",
-
-                    }
-                )
+                return _obs_fail(missing_slots=["title"])
             tip = msg
         if title_rejects_as_document_name(tip, message=msg):
-            return _dump(
-                {
-                    "ok": False,
-                    "missing_slots": ["title"],
-                    "reply_hint": "这句还不像文档题目～想写啥直接说题材就行，不必先定名。",
-
-                }
-            )
+            return _obs_fail(missing_slots=["title"])
         reply, cards = run_session_goal_action(
             state.home,
             state.session,
@@ -2496,6 +2459,7 @@ def build_chat_tools(state: ChatControlState) -> list:
         )
         awaiting_path = False
         needs_entry = False
+        still_needs_name = False
         # 定名成功且缺入口：必挂选路卡（不单靠 write_like 关键字）
         if tip:
             from report_writing.chat.clarify_flow import (
@@ -2625,20 +2589,20 @@ def build_chat_tools(state: ChatControlState) -> list:
         return _dump(
             {
                 "ok": True,
-                "reply_hint": reply,
-
+                "reply_hint": "" if still_needs_name else reply,
                 "title": tip,
                 "category": cat,
                 "brief": brief[:80],
                 "onboarding": gaps,
                 "suggested_next_tools": suggested,
-
+                "needs_doc_name": bool(still_needs_name),
+                "missing_slots": ["title"] if still_needs_name else None,
                 "needs_entry_path": bool(needs_entry or write_like and awaiting_path),
                 "awaiting_path_choice": awaiting_path,
             }
         )
 
-    @tool("submit_freeform_meta", description="无蓝本路径定名，语义同 set_session_meta。缺了：继续问名称，不要把整句口语当标题。")
+    @tool("submit_freeform_meta", description="何时：无蓝本路径下用户明确起名。与 set_session_meta 同实现，不要两个都调。已绑蓝本改名用 set_session_meta。缺了：继续问名称，不要把整句口语当标题。")
     def submit_freeform_meta(message: Annotated[str, Field(description="可选。原话。")] = "", category: Annotated[str, Field(description="可选。")] = "", title: Annotated[str, Field(description="必填。短文档名。不要把整句口语当标题。")] = "") -> str:
         """
 
@@ -2807,17 +2771,28 @@ def build_chat_tools(state: ChatControlState) -> list:
             emit=state.emit,
         )
         _set_cards(state, cards)
-        mode = (
-            "confirm"
-            if confirm
-            else ("regenerate" if regenerate else ("reopen" if reopen_edit else "submit"))
+        from report_writing.chat.session_documents import (
+            focus_has_display_title,
+            is_writing_document_named,
         )
+
+        named = is_writing_document_named(state.session) or focus_has_display_title(
+            state.session
+        )
+        waiting_name = str(state.session.phase or "") == ChatPhase.FREEFORM_ASK.value and not named
+        clarify_ask = any(
+            str(getattr(card, "type", "") or "") == "intent_clarify" for card in cards
+        )
+        handoff = waiting_name or clarify_ask
         return _dump(
             {
                 "ok": True,
-                "reply_hint": reply,
+                "reply_hint": "" if handoff else reply,
                 "task_id": state.session.task_id,
-
+                "needs_doc_name": waiting_name,
+                "missing_slots": (
+                    ["title"] if waiting_name else (["outline"] if clarify_ask else None)
+                ),
             }
         )
 
@@ -2836,28 +2811,10 @@ def build_chat_tools(state: ChatControlState) -> list:
         不要：与 generate_freeform_points（自动生成）混淆；加要素、关联、记背景不要用本工具。
 
         """
-        from report_writing.chat.writing_control_route import suggest_tool_instead_of_submit_points
         from report_writing.chat import _collect_freeform_points
 
         msg = message or state.last_user_message or ""
         clarify_invoke = _state_clarify_invoke(state)
-        suggestion = suggest_tool_instead_of_submit_points(
-            state.home,
-            state.session,
-            msg,
-            invoke=state.invoke,
-            clarify_invoke=clarify_invoke,
-        )
-        if suggestion is not None:
-            nxt = str(suggestion.get("tool") or "").strip()
-            payload = dict(suggestion.get("payload") or {})
-            return _obs_fail(
-                missing_slots=["points_text"],
-                reply_hint="这句不像在补写作要点，我按更合适的动作来。",
-
-
-
-            )
         from report_writing.chat.freeform_intent import suggest_tool_instead_of_submit_points_freeform
 
         freeform_hit = suggest_tool_instead_of_submit_points_freeform(
@@ -2897,7 +2854,7 @@ def build_chat_tools(state: ChatControlState) -> list:
             }
         )
 
-    @tool("generate_freeform_points", description="何时：无蓝本任务、目录已确认，用户同意为各章生成写作要点。开写前缺要点时先问再调。缺了：没目录先走目录；没说哪几章则按当前可写章，不要擅自生成目录。不要：把加要素/记背景当成生要点。")
+    @tool("generate_freeform_points", description="何时：无蓝本任务、目录已确认，用户同意为各章生成写作要点。开写前缺要点时先问再调。缺了：没目录先走目录；没说哪几章则按当前可写章，不要擅自生成目录。不要：用户说写某一章（用 select_write_chapters）；已绑蓝本分析用 re_study_chapters；用户手写要点用 submit_points；不要把加要素/记背景当成生要点。")
     def generate_freeform_points(
         task_id: Annotated[str, Field(description="可选。默认可从会话取；没有目录任务则先走目录。")] = "",
         chapter_keys_json: Annotated[str, Field(description="可选。非空则只生成指定章。")] = "[]",
@@ -2913,10 +2870,24 @@ def build_chat_tools(state: ChatControlState) -> list:
 
         缺了：没目录先走目录；没说哪几章则按当前可写章，不要擅自生成目录。
 
-        不要：把加要素/记背景当成生要点。
+        不要：用户说写某一章（用 select_write_chapters）；已绑蓝本分析用 re_study_chapters；用户手写要点用 submit_points；不要把加要素/记背景当成生要点。
 
         """
         from report_writing.chat.actions import _action_generate_freeform_points
+        from report_writing.chat.write_chapter_intent import reroute_if_write_not_study
+
+        write_hit = reroute_if_write_not_study(
+            state.home,
+            state.session,
+            str(state.last_user_message or ""),
+            emit=state.emit,
+            invoke=state.invoke,
+        )
+        if write_hit is not None:
+            reply, cards, events = write_hit
+            state.events.extend(events or [])
+            _set_cards(state, cards)
+            return _dump({"ok": True, "reply_hint": reply})
 
         tid = (task_id or state.session.task_id or "").strip()
         ff = dict(state.session.freeform or {})
@@ -3032,7 +3003,7 @@ def build_chat_tools(state: ChatControlState) -> list:
         _set_cards(state, cards)
         return _dump({"ok": True, "reply_hint": reply})
 
-    @tool("blueprint_wizard", description="何时：驱动当前文档已开启的蓝本/模版向导一步（上传/目录/学习）。缺了：向导未开始应 begin_blueprint_wizard；步参数不够则按向导卡继续问，不要空跑。不要：向导未开始时用本工具代替 begin；收录用 save_freeform_as_blueprint。仅改 w* 副本，不入库。")
+    @tool("blueprint_wizard", description="何时：驱动当前文档已开启的蓝本/模版向导一步（上传/目录/学习）。缺了：向导未开始应 begin_blueprint_wizard；步参数不够则按向导卡继续问，不要空跑。不要：向导未开始时用本工具代替 begin；指定章分析用 re_study_chapters；用户说写某一章用 select_write_chapters；收录用 save_freeform_as_blueprint。仅改 w* 副本，不入库。")
     def blueprint_wizard(payload_json: Annotated[str, Field(description="JSON。向导已开始时含 step 或 wizard_command。未开始应 begin_blueprint_wizard。")] = "{}") -> str:
         """
 
@@ -3044,7 +3015,7 @@ def build_chat_tools(state: ChatControlState) -> list:
 
         缺了：向导未开始应 begin_blueprint_wizard；步参数不够则按向导卡继续问，不要空跑。
 
-        不要：向导未开始时用本工具代替 begin；收录用 save_freeform_as_blueprint。仅改 w* 副本，不入库。
+        不要：向导未开始时用本工具代替 begin；指定章分析用 re_study_chapters；用户说写某一章用 select_write_chapters；收录用 save_freeform_as_blueprint。仅改 w* 副本，不入库。
 
         """
         from report_writing.chat.session_state import active_blueprint_wizard
@@ -3070,7 +3041,10 @@ def build_chat_tools(state: ChatControlState) -> list:
                 emit_user_process(state.emit, "正在处理蓝本向导…")
             else:
                 _tool_begin(state, "blueprint_wizard")
-            reply, cards = _action_blueprint_wizard(state.home, state.session, payload)
+            try:
+                reply, cards = _action_blueprint_wizard(state.home, state.session, payload)
+            except ValueError as error:
+                return _dump({"ok": False, "reply_hint": str(error)})
             _set_cards(state, cards)
             return _dump({"ok": True, "reply_hint": reply})
         # 仅拦截「空 step / 再填名称」的重复创建；带 wizard_command（学习本章等）必须放行
@@ -3094,7 +3068,10 @@ def build_chat_tools(state: ChatControlState) -> list:
             emit_user_process(state.emit, "正在处理蓝本向导…")
         else:
             _tool_begin(state, "blueprint_wizard")
-        reply, cards = _action_blueprint_wizard(state.home, state.session, payload)
+        try:
+            reply, cards = _action_blueprint_wizard(state.home, state.session, payload)
+        except ValueError as error:
+            return _dump({"ok": False, "reply_hint": str(error)})
         _set_cards(state, cards)
         return _dump({"ok": True, "reply_hint": reply})
 
@@ -3401,7 +3378,7 @@ def build_chat_tools(state: ChatControlState) -> list:
             }
         )
 
-    @tool("ask_intent", description="何时：没把握——指代不明、多文档歧义、写还是学未定、破坏性动作；或必填参数从对话里拆不出来。缺了：本工具就是继续对话/挂澄清卡收集参数。不要：用户已说另开/再写一份并起名时追问；替总控静默选其它工具、猜第一章、代选蓝本、静默开写/删除/收录。")
+    @tool("ask_intent", description="何时：没把握——指代不明、多文档歧义、写还是学未定、破坏性动作；或必填参数从对话里拆不出来。缺了：本工具就是继续对话/挂澄清卡收集参数。不要：已明确写某一章时用本工具（用 select_write_chapters）；已明确分析某一章时用 re_study_chapters；用户已说另开/再写一份并起名时追问；替总控静默选其它工具、猜第一章、代选蓝本、静默开写/删除/收录。")
     def ask_intent(message: Annotated[str, Field(description="可选。用户原话。")] = "", question: Annotated[str, Field(description="可选。要问清的那一项。")] = "") -> str:
         """
 
@@ -3413,7 +3390,7 @@ def build_chat_tools(state: ChatControlState) -> list:
 
         缺了：本工具就是继续对话/挂澄清卡收集参数。
 
-        不要：替总控静默选其它工具、猜第一章、代选蓝本、静默开写/删除/收录。
+        不要：已明确写某一章时用本工具（用 select_write_chapters）；已明确分析某一章时用 re_study_chapters；用户已说另开/再写一份并起名时追问；替总控静默选其它工具、猜第一章、代选蓝本、静默开写/删除/收录。
 
         """
         args: dict[str, Any] = {}
@@ -3448,19 +3425,19 @@ def build_chat_tools(state: ChatControlState) -> list:
             {"document_title": (document_title or "").strip()},
         )
 
-    @tool("re_study_chapters", description="何时：对已绑蓝本的任务重新分析指定章写作要点（不是写正文）。无蓝本自动大纲时改为生成要点。缺了：没点名章节就问分析哪几章，不要重学全部；方式未定时后端会追问原文/样本/自动。不要：当成写正文。")
-    def re_study_chapters(payload_json: Annotated[str, Field(description="JSON。指定章用 chapter_keys 或 chapter_sequences；可含 study_scope=self|children|whole、study_method=sample|source|auto。没点名章节不要重学全部。")] = "{}", message: Annotated[str, Field(description="可选。用户原话（如「分析第1.1章」）。")] = "") -> str:
+    @tool("re_study_chapters", description="何时：用户明确要分析/重学指定章写作要点（「分析第×章」），不是写正文。已绑蓝本。无蓝本自动大纲时改为生成要点。缺了：没点名章节就问分析哪几章，不要重学全部；方式未定时后端会追问原文/样本/自动。不要：用户说写某一章/开写（用 select_write_chapters）；无蓝本生要点用 generate_freeform_points；全部学习走 blueprint_wizard，不要空参扩成全部。")
+    def re_study_chapters(payload_json: Annotated[str, Field(description="JSON。指定章用 chapter_keys 或 chapter_sequences；可含 study_scope=self|children|whole|selected、study_method=sample|source|auto。文档窗勾选传 selected+keys，不要再问下属。没点名章节不要重学全部。")] = "{}", message: Annotated[str, Field(description="可选。用户原话（如「分析第1.1章」）。")] = "") -> str:
         """
 
-        何时：对已绑蓝本的任务重新分析指定章写作要点（不是写正文）。无蓝本自动大纲时改为生成要点。
+        何时：用户明确要分析/重学指定章写作要点（「分析第×章」），不是写正文。已绑蓝本。无蓝本自动大纲时改为生成要点。
 
         必填：能确定章节（payload_json.chapter_keys / chapter_sequences，或原话点名「第×章」）；用户明确「全部再分析」才可不指定。
 
-        可选：message；study_scope=self|children|whole；study_method=sample|source|auto。
+        可选：message；study_scope=self|children|whole|selected（文档窗勾选用 selected，按勾选的章学，不要再问下属）；study_method=sample|source|auto。口语点名且该章有下属时才问范围。
 
         缺了：没点名章节就问分析哪几章，不要重学全部；方式未定时后端会追问原文/样本/自动。
 
-        不要：当成写正文。
+        不要：用户说写某一章/开写（用 select_write_chapters）；无蓝本生要点用 generate_freeform_points；全部学习走 blueprint_wizard，不要空参扩成全部。
 
         """
         if (message or "").strip():

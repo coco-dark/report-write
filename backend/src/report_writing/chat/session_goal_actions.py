@@ -173,7 +173,11 @@ def _set_session_meta(
         message = f"{category}｜{title}".strip("｜")
     # 调度层偶发空 args：仍不应回固定「跟我说一下…」，由调用方补 message；双保险
     if not message:
-        return "跟我说一下文档叫什么、写哪一类就行（口语或「类型｜标题」都可以）。", []
+        from report_writing.chat.clarify_flow import ask_write_meta_in_dialogue
+
+        return ask_write_meta_in_dialogue(
+            session, invoke=invoke, home=home, emit=emit
+        )
 
     llm = _clarify_invoke_binding(invoke, model=model)
 
@@ -305,6 +309,9 @@ def _set_session_meta(
             from report_writing.chat.session_documents import session_blueprint_already_selected
 
             if session_blueprint_already_selected(session):
+                from report_writing.chat.session_documents import apply_focused_document_title
+
+                apply_focused_document_title(session, declared, home=home)
                 return (
                     f"好，文档就叫「{declared}」。蓝本已选好，在文档窗口继续选章或开始分析就行。",
                     [],
@@ -468,8 +475,20 @@ def _set_session_meta(
             cards,
         )
 
-    if phase in {ChatPhase.FREEFORM_ASK.value, ChatPhase.FREEFORM_OUTLINE.value, ""} or (
-        skip_path and not has_outline_progress
+    from report_writing.chat.session_documents import (
+        explicit_doc_title_from_message as _explicit_title_now,
+        message_requires_structured_rename_title as _rename_needs_title,
+    )
+
+    renaming_now = bool(
+        _rename_needs_title(raw_message or message)
+        and (title or _explicit_title_now(raw_message or message))
+    )
+    # 已定名 / 明确改名：不要走首次定题 _collect_freeform_meta（会把旧标题拼回去）
+    collect_first_meta = not is_writing_document_named(session) and not renaming_now
+    if collect_first_meta and (
+        phase in {ChatPhase.FREEFORM_ASK.value, ChatPhase.FREEFORM_OUTLINE.value, ""}
+        or (skip_path and not has_outline_progress)
     ):
         _emit_process(emit, "正在整理文档类型和标题…")
         from report_writing.chat.actions import _collect_freeform_meta

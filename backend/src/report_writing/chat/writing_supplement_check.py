@@ -860,7 +860,6 @@ def run_supplement_check(
     from report_writing.domain.point_items_sync import normalize_chapter_point_items_on_node
     from report_writing.services.store import TaskStore
 
-    _ = invoke
     task = _reload_writing_task(home, task)
     for ck in [str(k).strip() for k in (chapter_keys or []) if str(k).strip()]:
         node = _outline_node(task, ck)

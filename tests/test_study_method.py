@@ -64,6 +64,7 @@ def test_re_study_asks_method_when_unspecified(tmp_path: Path):
         study_scope="self",
     )
     assert "哪种方式" in (reply or "")
+    assert "分析「" in (reply or "")
     assert any(c.type == "intent_clarify" for c in cards)
     opts = (cards[0].payload or {}).get("options") or []
     labels = [str(o.get("label") or "") for o in opts]
@@ -88,6 +89,50 @@ def test_re_study_auto_label_without_sample(tmp_path: Path):
     assert "自动分析" in labels
     assert "依据样本分析" not in labels
     assert "哪种方式" in (reply or "")
+
+
+def test_go_study_asks_method_when_unspecified(tmp_path: Path):
+    bid = _seed(tmp_path, sample_ready=True)
+    session = _session(bid)
+    reply, cards = execute_wizard_command(
+        tmp_path,
+        session,
+        "go_study",
+        study_message="开始分析全部章节",
+    )
+    assert "哪种方式" in (reply or "")
+    assert any(c.type == "intent_clarify" for c in cards)
+    wiz = (session.freeform or {}).get("blueprint_wizard") or {}
+    assert not wiz.get("trigger_begin_study")
+    assert not wiz.get("trigger_chapter_study")
+
+
+def test_clarify_sample_resumes_re_study_trigger(tmp_path: Path):
+    bid = _seed(tmp_path, sample_ready=True)
+    session = _session(bid)
+    reply, cards = execute_wizard_command(
+        tmp_path,
+        session,
+        "re_study_chapters",
+        study_message="分析第1章",
+        chapter_sequences=["1"],
+        study_scope="self",
+    )
+    assert any(c.type == "intent_clarify" for c in cards)
+    opts = (cards[0].payload or {}).get("options") or []
+    sample = next(o for o in opts if str(o.get("id") or "") == "sample")
+    from report_writing.chat.clarify_flow import resolve_clarify
+
+    spec = resolve_clarify(session, str(sample.get("id") or ""))
+    assert isinstance(spec, dict) or spec is not None
+    reply2, cards2, _ = execute_clarify_spec(
+        tmp_path, session, spec, message=str(sample.get("label") or "")
+    )
+    wiz = (session.freeform or {}).get("blueprint_wizard") or {}
+    assert wiz.get("trigger_chapter_study") == ["c1"]
+    assert wiz.get("study_method") == "sample"
+    assert "依据样本" in (reply2 or "")
+    assert any(c.type == "blueprint_wizard" for c in cards2)
 
 
 def test_re_study_source_without_text_returns_paste_card(tmp_path: Path):
@@ -125,6 +170,88 @@ def test_re_study_sample_sets_trigger(tmp_path: Path):
     assert wiz.get("study_method") == "sample"
     assert "依据样本" in (reply or "")
     assert any(c.type == "blueprint_wizard" for c in cards)
+
+
+def test_re_study_expands_focus_key_when_sequences_list_many(tmp_path: Path):
+    """工具常塞焦点章 key + 多章序号；不得只学那一章。"""
+    bid = _seed(tmp_path, sample_ready=True)
+    session = _session(bid)
+    reply, cards = execute_wizard_command(
+        tmp_path,
+        session,
+        "re_study_chapters",
+        study_message="分析第1章和第2章",
+        chapter_sequences=["1", "2"],
+        chapter_keys=["c1"],
+        study_scope="whole",
+        study_method="sample",
+    )
+    wiz = (session.freeform or {}).get("blueprint_wizard") or {}
+    assert set(wiz.get("trigger_chapter_study") or []) == {"c1", "c2"}
+    assert "共 2 章" in (reply or "")
+    assert any(c.type == "blueprint_wizard" for c in cards)
+
+
+def test_re_study_selected_scope_keeps_checkbox_keys(tmp_path: Path):
+    bid = _seed(tmp_path, sample_ready=True)
+    session = _session(bid)
+    reply, cards = execute_wizard_command(
+        tmp_path,
+        session,
+        "re_study_chapters",
+        study_message="已选 1 章",
+        chapter_sequences=["1", "2"],
+        chapter_keys=["c1"],
+        study_scope="selected",
+        study_method="sample",
+    )
+    wiz = (session.freeform or {}).get("blueprint_wizard") or {}
+    assert wiz.get("trigger_chapter_study") == ["c1"]
+    assert any(c.type == "blueprint_wizard" for c in cards)
+
+
+def test_checkbox_method_resume_does_not_ask_scope(tmp_path: Path):
+    """勾选多章后点「依据样本」：只学勾选的 key，不再问整章/下属。"""
+    bid = "bp_study_nested"
+    path = tmp_path / "tasks" / bid
+    ensure_task(path)
+    task = TaskStore(path).load()
+    task.title = "勾选范围"
+    task.sample_ready = True
+    task.outline_confirmed = True
+    task.outline = OutlineTree(
+        chapters=[
+            OutlineNode(key="c42", sequence="4.2", title="电气一次"),
+            OutlineNode(key="c421", sequence="4.2.1", title="方案选择"),
+            OutlineNode(key="c422", sequence="4.2.2", title="电气主接线"),
+        ]
+    )
+    TaskStore(path).save(task)
+    session = _session(bid)
+    reply, cards = execute_wizard_command(
+        tmp_path,
+        session,
+        "re_study_chapters",
+        study_message="已选 3 章",
+        chapter_sequences=["4.2", "4.2.1", "4.2.2"],
+        chapter_keys=["c42", "c421", "c422"],
+        study_scope="selected",
+    )
+    assert "哪种方式" in (reply or "")
+    assert "子章节" not in (reply or "")
+    opts = (cards[0].payload or {}).get("options") or []
+    sample = next(o for o in opts if str(o.get("id") or "") == "sample")
+    from report_writing.chat.clarify_flow import resolve_clarify
+
+    spec = resolve_clarify(session, str(sample.get("id") or ""))
+    reply2, cards2, _ = execute_clarify_spec(
+        tmp_path, session, spec, message=str(sample.get("label") or "")
+    )
+    assert "子章节" not in (reply2 or "")
+    wiz = (session.freeform or {}).get("blueprint_wizard") or {}
+    assert wiz.get("trigger_chapter_study") == ["c42", "c421", "c422"]
+    assert wiz.get("study_method") == "sample"
+    assert any(c.type == "blueprint_wizard" for c in cards2)
 
 
 def test_paste_message_resumes_source_study(tmp_path: Path):

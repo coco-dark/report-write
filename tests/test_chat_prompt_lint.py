@@ -20,6 +20,8 @@ def test_control_instructions_has_no_tool_catalog():
     assert not chat_prompt_tool_catalog_violations(CONTROL_INSTRUCTIONS)
     assert "口语就是这场对话" in CONTROL_INSTRUCTIONS
     assert "missing_slots" in CONTROL_INSTRUCTIONS
+    assert "get_writing_status" not in CONTROL_INSTRUCTIONS
+    assert "select_write_chapters" not in CONTROL_INSTRUCTIONS
 
 
 def test_subagent_instructions_have_no_tool_catalog():

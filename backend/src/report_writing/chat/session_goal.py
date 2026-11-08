@@ -13,6 +13,8 @@ InvokeFn = Callable[[str, str], str]
 
 _META_SPLIT_RE = re.compile(r"[｜|]")
 _GOAL_AUX_MARKER = "【会话写作背景】"
+_GOAL_REMEMBER_RE = re.compile(r"(记住|记下来|今后按|后面都按)")
+_GOAL_RENAME_RE = re.compile(r"(改名|改叫|名字叫|标题改|起名|文档叫|题目叫)")
 
 
 def get_session_goal(session: ChatSession) -> SessionGoal:
@@ -122,21 +124,29 @@ def _parse_meta_line_structural(message: str) -> dict[str, str]:
     return patch
 
 
+def message_looks_like_goal_update(message: str) -> bool:
+    """本句才可能改文档类型/标题/记住背景；章节分析、开写等不算。"""
+    text = (message or "").strip()
+    if not text:
+        return False
+    if _META_SPLIT_RE.search(text):
+        return True
+    if _GOAL_REMEMBER_RE.search(text) or _GOAL_RENAME_RE.search(text):
+        return True
+    return False
+
+
 def parse_goal_patch_from_message(
     message: str,
     *,
     invoke: InvokeFn | None = None,
     session: ChatSession | None = None,
 ) -> dict[str, str]:
+    """只解析「类型｜标题」结构行；口语定名归总控 set_session_meta。"""
+    _ = (invoke, session)
     text = (message or "").strip()
     if not text:
         return {}
-    from report_writing.chat.session_goal_intent import doc_meta_patch_from_message
-
-    if invoke is not None:
-        hit = doc_meta_patch_from_message(text, invoke=invoke, session=session)
-        if hit:
-            return {k: v for k, v in hit.items() if v}
     return _parse_meta_line_structural(text)
 
 
@@ -326,12 +336,16 @@ def ingest_user_message_goal(
     text = (message or "").strip()
     if not text:
         return False
-    patch = parse_goal_patch_from_message(text, invoke=invoke)
+    patch = parse_goal_patch_from_message(text, invoke=invoke, session=session)
     if patch.get("doc_category") or patch.get("doc_title"):
         merge_session_goal(session, patch)
         sync_goal_into_freeform(session)
         return True
-    if invoke is not None and len(text) >= 4:
+    if (
+        invoke is not None
+        and len(text) >= 4
+        and _GOAL_REMEMBER_RE.search(text)
+    ):
         extra = _llm_extract_goal_patch(session, text, invoke=invoke)
         if extra:
             patch = {**patch, **{k: v for k, v in extra.items() if v}}

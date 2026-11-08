@@ -102,7 +102,8 @@ def test_skip_blueprint_tool_suggests_set_session_meta(tmp_path: Path):
     assert data.get("ok") is True
     assert "suggested_next_tool" not in data
     assert data.get("needs_doc_name") is True
-    assert "目录我先帮你搭" not in str(data.get("reply_hint") or "")
+    assert not str(data.get("reply_hint") or "").strip()
+    assert data.get("missing_slots") == ["title"]
 
 
 def test_skip_blueprint_named_auto_outline_suggests_submit_outline(tmp_path: Path):

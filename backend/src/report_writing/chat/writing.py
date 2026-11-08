@@ -31,6 +31,7 @@ from report_writing.domain.models import (
     ChatSession,
     HumanDecision,
     OutlineNode,
+    TaskStatus,
     WritingTask,
 )
 from report_writing.services.robots import (
@@ -120,6 +121,20 @@ def _chapter_needs_write(task: WritingTask, key: str) -> bool:
 
 def _pending_write_keys(task: WritingTask) -> list[str]:
     return [key for key in _writing_chapter_keys(task) if _chapter_needs_write(task, key)]
+
+
+def sync_session_phase_from_task(session: ChatSession, task: WritingTask) -> None:
+    """会话 phase 跟任务真实流水线对齐：没有章在写就不要停在「写作中」。"""
+    task.refresh_status()
+    st = task.status.value if hasattr(task.status, "value") else str(task.status)
+    if st == TaskStatus.RUNNING.value:
+        session.phase = ChatPhase.WRITING.value
+    elif st in {TaskStatus.AWAITING_CONFIRM.value, TaskStatus.COMPLETED.value}:
+        session.phase = ChatPhase.CONFIRM_EXPORT.value
+    elif st == TaskStatus.STUDYING.value:
+        session.phase = ChatPhase.CREATE_HANDOFF.value
+    else:
+        session.phase = ChatPhase.READY_TO_WRITE.value
 
 
 def _chapter_write_label(task: WritingTask, key: str) -> str:
@@ -222,6 +237,10 @@ def _run_writing_keys(
             from report_writing.services.doc_outline_cache import invalidate_doc_outline_cache
 
             invalidate_doc_outline_cache(writing.id)
+        from report_writing.chat.writing_brief import attach_dialogue_content_basis
+
+        attach_dialogue_content_basis(session, writing)
+        TaskStore(home / "tasks" / writing.id).save(writing)
 
         for key in run_keys:
             if is_writing_cancelled(session.id):
@@ -375,18 +394,18 @@ def _finish_writing_round(
     from report_writing.services.robots import get_robot
 
     robot = get_robot(home, session.robot_id) if session.robot_id else None
+    writing.refresh_status()
     cards = _progress_and_confirm_cards(writing, pace=pace)
-    if writing.status == "completed" or (
+    sync_session_phase_from_task(session, writing)
+    if writing.status == TaskStatus.COMPLETED or (
         writing.chapters and all(c.status in {ChapterStatus.CONFIRMED, ChapterStatus.SKIPPED} for c in writing.chapters)
     ):
-        session.phase = ChatPhase.CONFIRM_EXPORT.value
         cards.extend(export_phase_cards(home, writing.id, robot))
         return "各章都确认好了，可以在输入框上方「下载 Word」导出。", cards, events
 
     awaiting = any(c.status == ChapterStatus.AWAITING_CONFIRM for c in (writing.chapters or []))
     needs_human = any(c.status == ChapterStatus.NEEDS_HUMAN for c in (writing.chapters or []))
     pending_left = len(_pending_write_keys(writing))
-    session.phase = ChatPhase.CONFIRM_EXPORT.value
 
     if pace == WRITING_PACE_STEP:
         if awaiting or needs_human:
@@ -455,9 +474,11 @@ def _maybe_continue_step_writing(
 
 def _resolve_write_chapter_scope(task: WritingTask, selected: list[str]) -> list[str]:
     """校验勾选章并返回应写入 task 的 scope（不改动 outline 树）。"""
+    from report_writing.chat.chapter_resolve import normalize_chapter_key_tokens
     from report_writing.chat.gates import _filter_outline_by_selected_keys
 
-    keys = [str(k).strip() for k in (selected or []) if str(k).strip()]
+    raw = [str(k).strip() for k in (selected or []) if str(k).strip()]
+    keys = normalize_chapter_key_tokens(task, raw) or raw
     if not keys:
         raise ValueError("请先勾选要写的章节")
     if task.outline is None or not list(task.outline.chapters or []):
@@ -990,6 +1011,51 @@ def _prepare_export_word(home: Path, session: ChatSession) -> tuple[str, list[Ch
     return ("可以导出了。请在输入框上方点「下载 Word」。", cards)
 
 
+def writing_status_facts(task: WritingTask | None) -> dict[str, Any]:
+    """给总控的进度事实，不是对用户的口头套话。"""
+    if task is None:
+        return {
+            "inflight": [],
+            "written": 0,
+            "awaiting": 0,
+            "pending": 0,
+            "task_status": "",
+        }
+
+    def _st(ch):
+        return ch.status.value if hasattr(ch.status, "value") else ch.status
+
+    inflight = [
+        _chapter_write_label(task, c.key)
+        for c in (task.chapters or [])
+        if _st(c)
+        in {
+            ChapterStatus.SEARCHING.value,
+            ChapterStatus.WRITING.value,
+            ChapterStatus.CHECKING.value,
+        }
+    ]
+    awaiting = [
+        c
+        for c in (task.chapters or [])
+        if _st(c)
+        in {ChapterStatus.AWAITING_CONFIRM.value, ChapterStatus.NEEDS_HUMAN.value}
+    ]
+    done = [
+        c
+        for c in (task.chapters or [])
+        if _st(c) in {ChapterStatus.CONFIRMED.value, ChapterStatus.SKIPPED.value}
+    ]
+    st = task.status.value if hasattr(task.status, "value") else str(task.status or "")
+    return {
+        "inflight": inflight,
+        "written": len(awaiting) + len(done),
+        "awaiting": len(awaiting),
+        "pending": len(_pending_write_keys(task)),
+        "task_status": st,
+    }
+
+
 def _writing_status(home: Path, session: ChatSession) -> tuple[str, list[ChatCard]]:
     from report_writing.chat.cards import _cards_with_export_card, _offer_start_writing, _progress_and_confirm_cards
     from report_writing.chat.helpers import _load_task
@@ -1008,24 +1074,14 @@ def _writing_status(home: Path, session: ChatSession) -> tuple[str, list[ChatCar
         session.phase = ChatPhase.INTENT.value
         return ("这份写作任务找不到了，咱们重新选个蓝本，或再说说需求吧。", [])
     robot = get_robot(home, session.robot_id) if session.robot_id else None
+    task.refresh_status()
+    sync_session_phase_from_task(session, task)
     cards = _progress_and_confirm_cards(task, pace=_session_writing_pace(session))
     if task.chapters and all(c.status in {ChapterStatus.CONFIRMED, ChapterStatus.SKIPPED} for c in task.chapters):
         cards.extend(export_phase_cards(home, task.id, robot))
         session.phase = ChatPhase.CONFIRM_EXPORT.value
-        return "各章都确认完了，可以导出了。", cards
-    status = str(task.status.value if hasattr(task.status, "value") else task.status)
-    label = {
-        "studying": "还在分析准备",
-        "running": "正在写",
-        "awaiting_confirm": "等你确认几章",
-        "completed": "已经完成",
-    }.get(status, status)
-    session.phase = ChatPhase.WRITING.value if status == "running" else session.phase
-    return (
-        f"进度在这儿——{label}。有要改的章节在下方「写作进度」里展开；"
-        "要写完全部并确认后，再说「导出 Word」或点导出即可。",
-        cards,
-    )
+    # 不对用户写死套话：进度数据在 cards / writing_status_facts，口头由总控组织
+    return "", cards
 
 
 def clone_blueprint_to_document_copy(

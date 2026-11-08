@@ -220,7 +220,7 @@ def _outline_tree_viable(tree: OutlineTree | None) -> bool:
         return True
     if n >= 6 and ratio >= 0.8:
         return True
-    return n >= 4 and ratio >= 0.95
+    return n >= 3 and ratio >= 0.95
 
 
 def _toc_entry_count(tree: OutlineTree | None) -> int:
@@ -265,7 +265,21 @@ def choose_best_outline(*candidates: tuple[str, OutlineTree | None]) -> tuple[st
             )
         )
     if not viable:
-        return None
+        leftovers: list[tuple[str, OutlineTree, float]] = []
+        for label, tree in candidates:
+            if tree is None or not tree.chapters:
+                continue
+            leftovers.append((label, tree, outline_tree_quality(tree)))
+        if not leftovers:
+            return None
+        leftovers.sort(key=lambda item: (len(item[1].chapters), item[2]), reverse=True)
+        label, tree, _score = leftovers[0]
+        _log.info(
+            "目录无达标候选，回退 source=%s chapters=%s",
+            label,
+            len(tree.chapters),
+        )
+        return (label, tree)
     best_count = max(item[3] for item in viable)
     # 明显更完整的编号目录优先，避免 40 章「干净树」压过 200+ 章正式目录
     complete = [item for item in viable if item[3] >= max(8, int(best_count * 0.82))]

@@ -17,6 +17,8 @@ WRITE_ELEMENT_EACH_MAX = 5000
 WRITE_ELEMENT_EACH_MIN = 800
 WRITE_EVIDENCE_EACH = 1200
 WRITE_EVIDENCE_TOTAL = 8000
+WRITE_CONTENT_BASIS_TOTAL = 4000
+WRITE_CONTENT_BASIS_EACH = 500
 
 _CHUNK_SPLIT = re.compile(r"\n{2,}|(?<=[。！？；])")
 _TOKEN = re.compile(r"[\u4e00-\u9fff]{2,}|[A-Za-z0-9]{3,}")
@@ -252,6 +254,19 @@ def pack_evidence_dicts(cards: list[dict[str, Any]], *, queries: list[str]) -> l
     return out
 
 
+def bind_content_basis(requirement: ChapterRequirement, lines: list[str] | None) -> None:
+    """把对话原文挂到本章要求上，不改要素取值。"""
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in lines or []:
+        text = str(raw or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text[:WRITE_CONTENT_BASIS_EACH])
+    requirement.content_basis = out[-24:]
+
+
 def assemble_write_materials(
     requirement: ChapterRequirement,
     *,
@@ -259,6 +274,7 @@ def assemble_write_materials(
     reference_text: str = "",
     aux_prompt: str = "",
     element_results: list[dict] | None = None,
+    content_basis: list[str] | None = None,
 ) -> str:
     """拼给模型的本章材料。要素/参考过长时用摘录，章节说明与补充提示尽量给全。"""
     describes = clip_text(str(getattr(requirement, "describes", "") or "").strip(), WRITE_DESC_AUX_MAX)
@@ -322,11 +338,30 @@ def assemble_write_materials(
     if not el_blocks:
         el_blocks.append("（未关联章节要素）")
 
+    basis_src = (
+        content_basis
+        if content_basis is not None
+        else list(getattr(requirement, "content_basis", None) or [])
+    )
+    basis_blocks: list[str] = []
+    used_basis = 0
+    for raw in basis_src:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        packed = clip_text(text, WRITE_CONTENT_BASIS_EACH)
+        if used_basis + len(packed) > WRITE_CONTENT_BASIS_TOTAL:
+            break
+        used_basis += len(packed)
+        basis_blocks.append(f"<utterance>{packed}</utterance>")
+    if not basis_blocks:
+        basis_blocks.append("（对话中尚未提供额外事实）")
+
     title = str(getattr(requirement, "title", "") or "").strip()
     return "\n".join(
         [
             "<writing_materials>",
-            "<note>章节说明、补充提示、要点为原文；要素与参考正文过长时已按本章要点摘录。未列出内容不得当作事实。</note>",
+            "<note>章节说明、补充提示、要点为原文；要素与参考正文过长时已按本章要点摘录。对话原文与配置要素同为内容依据，不得据此新建要素。未列出内容不得当作事实。</note>",
             f"<chapter_title>{title or '（无标题）'}</chapter_title>",
             "<chapter_spec>",
             describes or "（未填写）",
@@ -340,6 +375,9 @@ def assemble_write_materials(
             "<chapter_elements>",
             *el_blocks,
             "</chapter_elements>",
+            "<dialogue_content_basis>",
+            *basis_blocks,
+            "</dialogue_content_basis>",
             "<reference_text>",
             ref_packed or "（无）",
             "</reference_text>",

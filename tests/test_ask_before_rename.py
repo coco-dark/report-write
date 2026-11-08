@@ -265,14 +265,7 @@ def test_jiu_jiao_is_explicit_doc_title():
 
 def test_scope_llm_ask_maps_need_clarify():
     session = _named_session("述职报告")
-
-    def invoke(system: str, user: str) -> str:
-        assert "文档作用域" in system
-        return json.dumps(
-            {"action": "ask", "title": "AI应用对市场的影响", "confidence": 0.7}
-        )
-
-    scope = resolve_document_scope(session, AI_LINE, invoke=invoke)
+    scope = resolve_document_scope(session, AI_LINE, invoke=None)
     assert scope.get("need_clarify") is True
     assert scope.get("action") == "ask"
     assert scope.get("force_new") is False

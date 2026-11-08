@@ -1,4 +1,4 @@
-"""无蓝本阶段口语 → 意图模型；短语表仅离线兜底。"""
+"""无蓝本阶段结构短语。口语选目录/要点/开写 Tool 归总控，不再整句 LLM 动作分类。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ from report_writing.domain.models import ChatSession
 
 InvokeFn = Callable[[str, str], str]
 
-# 离线兜底短语（有 invoke 时不抢判决，由 classify_freeform_action_llm + 上下文判定）
 _OUTLINE_GEN_HINTS = (
     "生成目录",
     "起草目录",
@@ -54,33 +53,23 @@ def lexical_freeform_intent(message: str) -> str:
         return "generate_outline"
     if any(h in t for h in _POINTS_GEN_HINTS):
         return "generate_points"
-    if any(x in t for x in ("确认目录", "确认大纲", "目录没问题", "就这个目录")) and "生成" not in t:
+    if any(
+        x in t
+        for x in (
+            "确认目录",
+            "确认大纲",
+            "目录没问题",
+            "就这个目录",
+            "大纲可以了",
+            "目录可以了",
+        )
+    ) and "生成" not in t:
         return "confirm_outline"
+    if any(x in t for x in ("跳过要点", "先不配要点", "不要要点", "跳过要点直接开写")):
+        return "skip_points"
+    if any(x in t for x in ("开始写作", "开写", "开始写", "写正文")):
+        return "start_writing"
     return ""
-
-
-def _classify_hit(
-    message: str,
-    *,
-    phase: str = "",
-    task_id: str = "",
-    session: ChatSession | None = None,
-    invoke: InvokeFn | None,
-) -> dict:
-    from report_writing.chat.classifier_context import pack_classifier_context
-    from report_writing.chat.clarify_llm import classify_freeform_action_llm
-
-    ctx = pack_classifier_context(session) if session is not None else {}
-    return classify_freeform_action_llm(
-        message,
-        phase=phase or str(ctx.get("phase") or ""),
-        task_id=task_id or str(ctx.get("task_id") or ""),
-        dialogue_tail=list(ctx.get("dialogue_tail") or []) or None,
-        focus_document_brief=str(ctx.get("focus_document_brief") or ""),
-        session_documents_brief=str(ctx.get("session_documents_brief") or ""),
-        session_goal_brief=str(ctx.get("session_goal_brief") or ""),
-        invoke=invoke,
-    )
 
 
 def resolve_outline_mode_flags(
@@ -99,16 +88,7 @@ def resolve_outline_mode_flags(
     text = (message or "").strip()
     if not text:
         return False, False
-    actions = classify_freeform_actions(
-        text,
-        invoke=invoke,
-        phase=str(getattr(session, "phase", "") or ""),
-        session=session,
-    )
-    if "confirm_outline" in actions:
-        return True, False
-    if "generate_outline" in actions or "help_draft" in actions:
-        return False, True
+    _ = invoke
     lexical = lexical_freeform_intent(text)
     if lexical == "confirm_outline":
         return True, False
@@ -132,24 +112,9 @@ def classify_freeform_actions(
     task_id: str = "",
     session: ChatSession | None = None,
 ) -> list[str]:
-    # 有模型：上下文分类；短语表仅离线
-    if invoke is None:
-        lexical = lexical_freeform_intent(message)
-        if lexical:
-            return [lexical]
-        return []
-    hit = _classify_hit(
-        message, phase=phase, task_id=task_id, session=session, invoke=invoke
-    )
-    multi = hit.get("intents")
-    if isinstance(multi, list) and len(multi) > 1:
-        intents = [str(i).strip() for i in multi if str(i).strip()]
-        # 同轮若同时出现确认与生成，只保留确认
-        if "confirm_outline" in intents:
-            return ["confirm_outline"]
-        return intents
-    single = str(hit.get("intent") or "").strip()
-    return [single] if single else []
+    _ = (invoke, phase, task_id, session)
+    lexical = lexical_freeform_intent(message)
+    return [lexical] if lexical else []
 
 
 def _alias_has(
@@ -253,7 +218,8 @@ def suggest_tool_instead_of_submit_points_freeform(
     session: ChatSession | None = None,
     invoke: InvokeFn | None = None,
 ) -> dict | None:
-    """submit_points 被误调：跳过/生成要点/目录/开写应收口到对应 Tool，不在收集器里改道。"""
+    """仅粘贴目录结构时提示改调 submit_outline；其它误调由总控改选 Tool。"""
+    _ = (session, invoke)
     text = (message or "").strip()
     if not text:
         return None
@@ -264,34 +230,4 @@ def suggest_tool_instead_of_submit_points_freeform(
             "tool": "submit_outline",
             "args": {"outline_text": text},
         }
-    phase = str(getattr(session, "phase", "") or "") if session is not None else ""
-    tid = str(getattr(session, "task_id", "") or "").strip() if session is not None else ""
-    outlined = bool((getattr(session, "freeform", None) or {}).get("outline_confirmed"))
-    for intent in classify_freeform_actions(
-        text, invoke=invoke, phase=phase, task_id=tid, session=session
-    ):
-        if intent == "skip_points":
-            return {"tool": "skip_freeform_points", "args": {"task_id": tid}}
-        if intent == "generate_points":
-            return {"tool": "generate_freeform_points", "args": {"task_id": tid}}
-        if intent == "generate_outline":
-            return {
-                "tool": "submit_outline",
-                "args": {
-                    "regenerate": True,
-                    "outline_text": text,
-                    "revision_instructions": text,
-                },
-            }
-        if intent == "confirm_outline":
-            return {"tool": "submit_outline", "args": {"confirm": True}}
-        if intent == "start_writing":
-            return {"tool": "start_writing", "args": {}}
-        if intent == "help_draft":
-            if not outlined:
-                return {
-                    "tool": "submit_outline",
-                    "args": {"regenerate": True, "outline_text": text},
-                }
-            return {"tool": "generate_freeform_points", "args": {"task_id": tid}}
     return None

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Callable
 
 from langchain.agents.middleware import AgentMiddleware, ModelCallLimitMiddleware
@@ -37,7 +38,25 @@ class ReactChainLogMiddleware(AgentMiddleware):
             args=args if isinstance(args, dict) else {"raw": str(args)},
             source=f"react:{self._agent}",
         )
-        result = handler(request)
+        try:
+            result = handler(request)
+        except ValueError as error:
+            call_id = ""
+            if isinstance(call, dict):
+                call_id = str(call.get("id") or "")
+            else:
+                call_id = str(getattr(call, "id", "") or "")
+            content = json.dumps(
+                {"ok": False, "reply_hint": str(error), "error": str(error)},
+                ensure_ascii=False,
+            )
+            log_react_tool_result(
+                self._session,
+                self._emit,
+                tool=name,
+                content=content,
+            )
+            return ToolMessage(content=content, name=name, tool_call_id=call_id)
         if isinstance(result, ToolMessage):
             log_react_tool_result(
                 self._session,

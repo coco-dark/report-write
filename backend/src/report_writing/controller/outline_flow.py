@@ -62,8 +62,10 @@ def _prefer_toc_rules_tree(
     toc_meta: dict,
 ) -> OutlineTree | None:
     """Word 样式目录常比 RAG 扁平，但正式「目录页」规则结果更贴近报告章节表。"""
-    if rule_tree is None or not rule_tree.chapters or tree is None:
+    if rule_tree is None or not rule_tree.chapters:
         return tree
+    if tree is None:
+        return rule_tree
     strategy = str((toc_meta or {}).get("strategy") or "")
     if strategy not in {"hyperlink_toc", "toc_heading", "dense_prefix"}:
         return tree

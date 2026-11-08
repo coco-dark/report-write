@@ -36,6 +36,29 @@ def test_observe_match_path_use_blueprint_write():
     assert gaps.declared.get("writing_path") == "match"
 
 
+def test_named_doc_chapter_ops_skip_onboarding_llm(tmp_path: Path):
+    from report_writing.chat.session_documents import (
+        begin_document_onboarding,
+        confirm_writing_document_name,
+        ensure_write_onboarding_started,
+        user_wants_existing_blueprint_match,
+    )
+
+    (tmp_path / "tasks").mkdir(parents=True)
+    session = ChatSession(id="lazy_named", phase=ChatPhase.CREATE_HANDOFF.value)
+    begin_document_onboarding(session, tmp_path, message="帮我写一份安全报告", force_new=True)
+    confirm_writing_document_name(session, "安全报告", home=tmp_path, message="安全报告")
+    calls = {"n": 0}
+
+    def invoke(system: str, user: str) -> str:
+        calls["n"] += 1
+        return '{"intent":"match_blueprints","confidence":0.9}'
+
+    assert ensure_write_onboarding_started(session, tmp_path, "分析第4.2章", invoke=invoke) is False
+    assert user_wants_existing_blueprint_match("分析第4.2章", session=session, invoke=invoke) is False
+    assert calls["n"] == 0
+
+
 def test_write_intent_mints_lane(tmp_path: Path):
     from report_writing.chat.session_documents import ensure_write_onboarding_started
 

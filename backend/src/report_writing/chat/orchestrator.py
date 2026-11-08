@@ -115,6 +115,14 @@ def handle_chat(
 
         sync_blueprint_wizard_session(home, session)
         refresh_latest_wizard_card_in_session(home, session)
+    from report_writing.chat.session_runtime import (
+        clear_leftover_study_triggers,
+        disarm_study_kick_this_turn,
+    )
+
+    # 每轮先丢掉上一轮分析自驱；本轮若真的要学，工具会重新挂 trigger。
+    disarm_study_kick_this_turn()
+    clear_leftover_study_triggers(session)
     from report_writing.chat.dialogue import drop_assistant_echo_user_messages
 
     # 新开文档刷新后，助手原文可能已被写成用户消息。先剔掉，再交给总控 Agent。
@@ -165,11 +173,9 @@ def handle_chat(
                 document_id=focus_before,
             )
         )
-        from report_writing.chat.session_goal import ingest_user_message_goal
-
         from report_writing.chat.writing_brief import ingest_user_turn
 
-        ingest_user_turn(session, raw_message, invoke=invoke)
+        ingest_user_turn(session, raw_message)
         if not (action or "").strip():
             from report_writing.chat.session_documents import apply_explicit_new_document_turn
 
@@ -276,17 +282,19 @@ def handle_chat(
     if not reply:
         reply = "嗯，我在听——你接着说就行。"
 
-    user_ctx = message or (_user_action_label(action, payload) if action else "")
-    reply = polish_chat_reply(
-        invoke=invoke,
-        model=chat_model,
-        user_message=user_ctx,
-        draft=reply,
-        phase=str(session.phase or ""),
-        action=action or "",
-        session=session,
-        cards=cards,
-    )
+    # 总控已经开口则不再用 chat 润色（少一轮 LLM）
+    if ctrl_model is None:
+        user_ctx = message or (_user_action_label(action, payload) if action else "")
+        reply = polish_chat_reply(
+            invoke=invoke,
+            model=chat_model,
+            user_message=user_ctx,
+            draft=reply,
+            phase=str(session.phase or ""),
+            action=action or "",
+            session=session,
+            cards=cards,
+        )
 
     if out is not None and token_chars["n"] <= 0:
         _emit_tokens(out, reply)
@@ -577,6 +585,16 @@ def handle_chat(
     )
     runtime_view = runtime_public_view(session, home)
     live_wiz = dict((session.freeform or {}).get("blueprint_wizard") or {})
+    # 文档作用域澄清未决：禁止把本轮/残留分析自驱贴进 SSE done
+    try:
+        from report_writing.chat.clarify_flow import get_pending
+        from report_writing.chat.session_runtime import suppress_study_kick_for_document_scope
+
+        if str((get_pending(session) or {}).get("source") or "") == "document_scope":
+            suppress_study_kick_for_document_scope(session)
+            live_wiz = dict((session.freeform or {}).get("blueprint_wizard") or {})
+    except Exception:
+        pass
     done_wiz = attach_turn_study_kick(runtime_view.get("blueprint_wizard"), live_wiz)
     wf_pub = dict(runtime_view.get("workflows") or {})
     wf_pub["blueprint_wizard"] = attach_turn_study_kick(

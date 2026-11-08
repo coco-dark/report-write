@@ -8,14 +8,27 @@ from pathlib import Path
 from report_writing.chat.clarify_llm import resolve_wizard_action
 from report_writing.chat.write_chapter_intent import (
     keys_for_write_scope,
+    message_asks_to_write_not_study,
     parse_write_sequences_from_message,
     resolve_write_chapter_keys,
     try_write_chapters_from_message,
+    utterance_requests_study,
     write_sequences_have_descendants,
 )
 from report_writing.controller import ensure_task
 from report_writing.domain.models import ChatSession, OutlineNode, OutlineTree
 from report_writing.services.store import TaskStore
+
+
+def test_write_not_study_probe():
+    assert message_asks_to_write_not_study("帮我写第3章")
+    assert message_asks_to_write_not_study("写某一张")
+    assert not message_asks_to_write_not_study("开始分析第3章")
+    assert not message_asks_to_write_not_study("继续学习")
+    assert utterance_requests_study("分析第4.2.3章")
+    assert utterance_requests_study("重新分析章节")
+    assert not utterance_requests_study("你好")
+    assert not utterance_requests_study("先看进度")
 
 
 def test_parse_write_sequences():
@@ -74,6 +87,160 @@ def test_resolve_prefers_exact_sequence(tmp_path: Path):
     assert resolve_write_chapter_keys(task, "写第3章") == ["c3"]
 
 
+def test_select_write_accepts_sequences_as_chapter_keys(tmp_path: Path, monkeypatch):
+    """模型把序号塞进 chapter_keys 时仍应开写，不能误报「没有已分析的」。"""
+    from report_writing.chat.actions import _action_select_write_chapters
+    from report_writing.domain.models import ChapterStatus, ChapterState
+
+    bid = _seed_outline_11(tmp_path, analyzed=True)
+    path = tmp_path / "tasks" / bid
+    task = TaskStore(path).load()
+    task.study_chapter_keys = ["c11"]
+    TaskStore(path).save(task)
+    session = ChatSession(id="s_seq_keys", blueprint_id=bid, freeform={})
+
+    ran: list[list[str]] = []
+
+    def fake_run_chapters(task_path, *, chapter_keys=None, **kwargs):
+        keys = list(chapter_keys or [])
+        ran.append(keys)
+        store = TaskStore(task_path)
+        writing = store.load()
+        for key in keys:
+            ch = next((c for c in (writing.chapters or []) if c.key == key), None)
+            if ch is None:
+                ch = ChapterState(key=key, title=key)
+                writing.chapters = list(writing.chapters or []) + [ch]
+            ch.status = ChapterStatus.AWAITING_CONFIRM
+            ch.official_text = f"正文-{key}"
+        store.save(writing)
+        return store.load()
+
+    monkeypatch.setattr("report_writing.services.pipeline.run_chapters", fake_run_chapters)
+
+    reply, _cards = _action_select_write_chapters(
+        tmp_path,
+        session,
+        {"blueprint_id": bid, "chapter_keys": ["1.1"]},
+    )
+    assert "没有已分析" not in (reply or "")
+    assert session.freeform.get("write_chapter_keys") == ["c11"]
+    flat = [k for call in ran for k in call]
+    assert flat == ["c11"]
+
+
+def test_select_write_uses_focus_copy_when_session_blueprint_empty(tmp_path: Path, monkeypatch):
+    """会话 blueprint_id 空时，仍按焦点文档副本开写，不要抛「请先选择蓝本」。"""
+    from report_writing.chat.actions import _action_select_write_chapters
+    from report_writing.chat.session_documents import (
+        set_focus_document_key,
+        upsert_session_document,
+    )
+    from report_writing.domain.models import ChapterStatus, ChapterState
+
+    bid = _seed_outline_11(tmp_path, analyzed=True)
+    wid = "wWriteFocus01"
+    src = TaskStore(tmp_path / "tasks" / bid).load()
+    ensure_task(tmp_path / "tasks" / wid)
+    clone = src.to_dict()
+    clone["id"] = wid
+    clone["source_blueprint_id"] = bid
+    writing = type(src).from_dict(clone)
+    TaskStore(tmp_path / "tasks" / wid).save(writing)
+
+    session = ChatSession(id="s_focus_write", blueprint_id="", task_id=bid, freeform={})
+    upsert_session_document(
+        session,
+        kind="blueprint",
+        task_id=bid,
+        blueprint_id=bid,
+        writing_task_id=wid,
+        title="焦点文档",
+        registry_key=f"bp:{bid}",
+    )
+    set_focus_document_key(session, f"bp:{bid}")
+
+    def fake_run_chapters(task_path, *, chapter_keys=None, **kwargs):
+        store = TaskStore(task_path)
+        writing_task = store.load()
+        for key in list(chapter_keys or []):
+            ch = next((c for c in (writing_task.chapters or []) if c.key == key), None)
+            if ch is None:
+                ch = ChapterState(key=key, title=key)
+                writing_task.chapters = list(writing_task.chapters or []) + [ch]
+            ch.status = ChapterStatus.AWAITING_CONFIRM
+            ch.official_text = f"正文-{key}"
+        store.save(writing_task)
+        return store.load()
+
+    monkeypatch.setattr("report_writing.services.pipeline.run_chapters", fake_run_chapters)
+    reply, _cards = _action_select_write_chapters(
+        tmp_path,
+        session,
+        {"chapter_keys": ["c11"]},
+    )
+    assert "请先选择蓝本" not in (reply or "")
+    assert session.blueprint_id == bid
+    assert session.freeform.get("write_chapter_keys") == ["c11"]
+
+
+def test_select_write_without_document_returns_hint(tmp_path: Path):
+    from report_writing.chat.actions import _action_select_write_chapters
+
+    session = ChatSession(id="s_empty_write", freeform={})
+    reply, cards = _action_select_write_chapters(
+        tmp_path, session, {"chapter_keys": ["c1"]}
+    )
+    assert "请先选择蓝本" not in (reply or "")
+    assert "正在写的文档" in (reply or "")
+    assert cards == []
+
+
+def test_recent_study_write_via_llm_target(tmp_path: Path):
+    """「刚才分析的那几个章节」由 LLM target=recent_study 落到最近分析批，不查进度。"""
+    bid = _seed_outline_11(tmp_path, analyzed=True)
+    path = tmp_path / "tasks" / bid
+    task = TaskStore(path).load()
+    task.study_chapter_keys = ["c11"]
+    TaskStore(path).save(task)
+    session = ChatSession(id="s_recent", blueprint_id=bid, freeform={})
+
+    def invoke(_system: str, _user: str) -> str:
+        return json.dumps(
+            {"target": "recent_study", "chapter_sequences": [], "confidence": 0.9}
+        )
+
+    reply, cards, _ = try_write_chapters_from_message(
+        tmp_path, session, "刚才分析的那几个章节", invoke=invoke
+    )
+    assert session.freeform.get("write_chapter_keys") == ["c11"]
+    assert "进度在这儿" not in (reply or "")
+    assert not any(getattr(c, "type", "") == "writing_pace" for c in cards)
+
+
+def test_write_target_status_returns_progress(tmp_path: Path):
+    bid = _seed_outline_11(tmp_path, analyzed=True)
+    path = tmp_path / "tasks" / bid
+    task = TaskStore(path).load()
+    task.study_chapter_keys = ["c11"]
+    TaskStore(path).save(task)
+    session = ChatSession(
+        id="s_status",
+        blueprint_id=bid,
+        task_id=bid,
+        freeform={},
+    )
+
+    def invoke(_system: str, _user: str) -> str:
+        return json.dumps({"target": "status", "chapter_sequences": [], "confidence": 0.92})
+
+    hit = try_write_chapters_from_message(
+        tmp_path, session, "写到哪了", invoke=invoke
+    )
+    assert hit is None
+    assert not session.freeform.get("write_chapter_keys")
+
+
 def test_write_scope_self_vs_whole(tmp_path: Path):
     bid = _seed_blueprint(tmp_path)
     task = TaskStore(tmp_path / "tasks" / bid).load()
@@ -117,7 +284,11 @@ def test_try_write_whole_scope_starts_without_pace(tmp_path: Path):
     TaskStore(path).save(task)
     session = ChatSession(id="s1", blueprint_id=bid, freeform={})
 
-    def invoke(_system: str, _user: str) -> str:
+    def invoke(system: str, _user: str) -> str:
+        if "开写目标" in (system or "") or '"target"' in (system or ""):
+            return json.dumps(
+                {"target": "sequences", "chapter_sequences": ["2.3"], "confidence": 0.9}
+            )
         return json.dumps({"scope": "whole", "confidence": 0.9})
 
     reply, cards, _ = try_write_chapters_from_message(

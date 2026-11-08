@@ -10,10 +10,7 @@ from report_writing.chat.freeform_route import _apply_single_freeform_intent
 from report_writing.domain.models import ChatPhase, ChatSession
 
 
-def test_confirm_phrases_via_llm():
-    def invoke(_s: str, _u: str) -> str:
-        return '{"intent":"confirm_outline","confidence":0.9}'
-
+def test_confirm_phrases_via_lexical():
     for msg in (
         "确认大纲",
         "目录可以了，确认大纲",
@@ -21,32 +18,14 @@ def test_confirm_phrases_via_llm():
         "就这个目录，确认并继续",
         "大纲可以了",
     ):
-        assert wants_outline_confirm(msg, invoke=invoke), msg
-        assert classify_freeform_actions(msg, invoke=invoke) == ["confirm_outline"], msg
-
-
-def test_classify_prefers_confirm_over_generate_in_chain():
-    def invoke(_s: str, _u: str) -> str:
-        return (
-            '{"intent":"generate_outline","intents":["generate_outline","confirm_outline"],'
-            '"confidence":0.9}'
-        )
-
-    assert classify_freeform_actions(
-        "目录可以了，确认大纲",
-        invoke=invoke,
-        phase="freeform_outline",
-    ) == ["confirm_outline"]
+        assert wants_outline_confirm(msg), msg
+        assert classify_freeform_actions(msg) == ["confirm_outline"], msg
 
 
 def test_confirm_outline_phrase_not_rename(tmp_path: Path):
-    """确认大纲意图优先：分类器认 confirm，不走改名。"""
+    """确认大纲短语优先，不走改名。"""
     msg = "先这样吧，目录可以了，确认大纲"
-    assert wants_outline_confirm(
-        msg,
-        invoke=lambda _s, _u: '{"intent":"confirm_outline","confidence":0.9}',
-        phase="freeform_outline",
-    )
+    assert wants_outline_confirm(msg, phase="freeform_outline")
 
 
 def test_freeform_route_confirm_does_not_regenerate(tmp_path: Path):

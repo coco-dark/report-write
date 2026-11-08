@@ -206,6 +206,23 @@ def test_study_scope_needs_clarify_when_children_exist():
     assert study_scope_needs_clarify(task, "学习第2章", ["2"], resolved_scope="whole") is False
     assert study_scope_needs_clarify(task, "学习第2章", ["2"], resolved_scope="children") is False
     assert study_scope_needs_clarify(task, "学习第2章", ["2"], resolved_scope="self") is False
+    assert study_scope_needs_clarify(
+        task, "已选 3 章", ["2", "2.1", "2.2"], resolved_scope="selected"
+    ) is False
+
+
+def test_study_scope_question_only_names_chapters_with_children():
+    session = _session()
+    task = _task_with_children()
+    reply, _cards = build_study_scope_clarify(
+        session,
+        sequences=["2", "2.1", "2.2"],
+        study_message="学习第2章",
+        task=task,
+    )
+    assert "第2章" in (reply or "")
+    assert "第2.1章" not in (reply or "")
+    assert "第2.2章" not in (reply or "")
 
 
 def test_study_scope_no_clarify_without_children():

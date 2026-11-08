@@ -25,6 +25,7 @@ from report_writing.chat.writing_supplement_check import (
 )
 from report_writing.controller import ensure_task
 from report_writing.domain.models import (
+    ChatMessage,
     ChatSession,
     ElementNode,
     FileSlotDef,
@@ -692,3 +693,64 @@ def test_dismiss_action_returns_card(tmp_path: Path):
     )
     assert "移除" in reply
     assert cards == []
+
+
+def test_dialogue_facts_do_not_fill_elements(tmp_path: Path):
+    home = tmp_path
+    (home / "tasks").mkdir(parents=True)
+    task = _task_with_empty_element(home)
+    session = ChatSession(
+        id="s_spoken",
+        task_id=task.id,
+        messages=[
+            ChatMessage(role="user", text="工程名称咸宁220kv新建变电站 帮我写本章")
+        ],
+    )
+    from report_writing.chat.writing_brief import attach_dialogue_content_basis, ingest_user_turn
+
+    ingest_user_turn(session, "工程名称咸宁220kv新建变电站 帮我写本章")
+    reply, items, _reg = run_supplement_check(home, session, task, ["c1"], invoke=None)
+    reloaded = TaskStore(home / "tasks" / task.id).load()
+    assert not str(reloaded.element_nodes[0].value or "").strip()
+    assert items
+    assert "已记到" not in (reply or "")
+    lines = attach_dialogue_content_basis(session, reloaded)
+    assert any("咸宁220kv新建变电站" in x for x in lines)
+    assert reloaded.writing_content_basis
+    assert not str(reloaded.element_nodes[0].value or "").strip()
+
+
+def test_dialogue_content_basis_stays_on_current_document():
+    from report_writing.chat.session_documents import (
+        set_focus_document_key,
+        upsert_session_document,
+    )
+    from report_writing.chat.writing_brief import collect_dialogue_content_basis
+    from report_writing.domain.models import WritingTask
+
+    session = ChatSession(id="s_docs", task_id="wA")
+    upsert_session_document(
+        session, kind="blueprint", task_id="bpA", blueprint_id="bpA", title="变电站可研"
+    )
+    upsert_session_document(
+        session, kind="blueprint", task_id="bpB", blueprint_id="bpB", title="职业病评价"
+    )
+    set_focus_document_key(session, "bp:bpA")
+    session.messages = [
+        ChatMessage(
+            role="user",
+            text="工程名称咸宁220kv新建变电站 帮我写本章",
+            document_key="bp:bpA",
+        ),
+        ChatMessage(
+            role="user",
+            text="项目名称是另一份职业病评价，地点武汉",
+            document_key="bp:bpB",
+        ),
+    ]
+    task = WritingTask(id="wA", source_blueprint_id="bpA", title="变电站可研")
+    lines = collect_dialogue_content_basis(session, task=task)
+    blob = "\n".join(lines)
+    assert "咸宁220kv新建变电站" in blob
+    assert "职业病评价" not in blob
+    assert "武汉" not in blob

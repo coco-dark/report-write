@@ -117,6 +117,7 @@ def run_chapters(
 ) -> WritingTask:
     """运行指定章节；父节点默认带子树。"""
     from report_writing.domain.elements import chapter_subtree_keys, resolve_elements_for_chapter, sync_brief_from_outline
+    from report_writing.domain.write_materials import bind_content_basis
     from report_writing.services.robots import get_robot
 
     store = TaskStore(task_dir)
@@ -197,6 +198,7 @@ def run_chapters(
                 biz_type=normalize_biz_type(task.biz_type or "002"),
                 model=model,
             )
+            bind_content_basis(requirement, getattr(task, "writing_content_basis", None))
 
     if search_only:
         from report_writing.agents.supervisor import execute_chapter_search

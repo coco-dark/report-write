@@ -1,8 +1,8 @@
 """写作控制执行层（口语主路径为 ReAct Tool）。
 
-`apply_writing_control_classification` / `classify_writing_message` 供 Tool 与单测复用；
-勿再以认领路由挂回 `run_chat_control`。
-绑定 `expected_tool` 时若分类结果是另一个 Tool，只返回 `suggested_next_tool` 事件，不执行。
+`apply_writing_control_classification` 供 Tool 与单测复用。
+口语选哪个写作 Tool 归总控，不再先 LLM 分类再改道。
+绑定 `expected_tool` 时若传入的分类结果是另一个 Tool，只返回 `suggested_next_tool` 事件，不执行。
 """
 
 from __future__ import annotations
@@ -324,57 +324,6 @@ def _session_writing_task_id(
 
 EmitFn = Callable[[dict[str, Any]], None]
 
-def _classification_context(
-    home: Path | None,
-    session: ChatSession,
-    message: str,
-) -> tuple[dict[str, Any], list[dict[str, str]]]:
-    from report_writing.chat.dialogue import format_full_dialogue
-    from report_writing.chat.session_goal import session_goal_brief
-    from report_writing.chat.turn_context import build_writing_turn_context
-
-    from report_writing.chat.session_documents import focus_document_brief
-
-    ctx = build_writing_turn_context(session, message, home=home)
-    return {
-        "phase": str(session.phase or ""),
-        "task_id": str(session.task_id or ""),
-        "writing_task": dict(ctx.writing_task or {}),
-        "session_goal_brief": session_goal_brief(session),
-        "focus_document_brief": focus_document_brief(session),
-        "dialogue_tail": list(ctx.dialogue_tail or format_full_dialogue(session, max_turns=8)),
-    }, list(ctx.dialogue_tail or [])
-
-def classify_writing_message(
-    home: Path | None,
-    session: ChatSession,
-    message: str,
-    *,
-    invoke: Callable[[str, str], str] | None = None,
-    clarify_invoke: Callable[[str, str], str] | None = None,
-) -> dict[str, Any]:
-    from report_writing.chat.clarify_invoke import invoke_clarify_llm
-
-    llm_invoke = clarify_invoke or (lambda s, u: invoke_clarify_llm(s, u, fallback=invoke))
-    meta, dialogue = _classification_context(home, session, message)
-    from report_writing.chat.clarify_llm import classify_writing_control_llm
-    from report_writing.infra.llm_errors import is_rate_limit_error
-
-    try:
-        return classify_writing_control_llm(
-            message,
-            phase=meta["phase"],
-            task_id=meta["task_id"],
-            dialogue_tail=dialogue,
-            writing_task=meta["writing_task"],
-            session_goal_brief=meta["session_goal_brief"],
-            focus_document_brief=str(meta.get("focus_document_brief") or ""),
-            invoke=llm_invoke,
-        )
-    except Exception as error:
-        if is_rate_limit_error(error):
-            return {}
-        raise
 
 def _resolve_chapter_key(
     home: Path,
@@ -637,67 +586,4 @@ def apply_writing_control_classification(
         )
         return reply, cards, []
 
-    return None
-
-def suggest_other_writing_control_tool(
-    home: Path,
-    session: ChatSession,
-    message: str,
-    *,
-    expected_tool: str,
-    invoke: Callable[[str, str], str] | None = None,
-    clarify_invoke: Callable[[str, str], str] | None = None,
-) -> dict[str, Any] | None:
-    """分类器点名其它写作控制 Tool 时只建议改调，不执行。"""
-    expected = (expected_tool or "").strip()
-    data = classify_writing_message(
-        home, session, message, invoke=invoke, clarify_invoke=clarify_invoke
-    )
-    if not data:
-        return None
-    tool = str(data.get("tool") or "").strip()
-    payload = data.get("payload")
-    if not isinstance(payload, dict):
-        payload = {}
-    if not tool:
-        steps = data.get("tools")
-        if isinstance(steps, list) and steps and isinstance(steps[0], dict):
-            tool = str(steps[0].get("tool") or "").strip()
-            pl = steps[0].get("payload")
-            if isinstance(pl, dict):
-                payload = pl
-    if not tool or tool in {expected, "none"}:
-        return None
-    return {"tool": tool, "payload": payload}
-
-
-def suggest_tool_instead_of_submit_points(
-    home: Path,
-    session: ChatSession,
-    message: str,
-    *,
-    invoke: Callable[[str, str], str] | None = None,
-    clarify_invoke: Callable[[str, str], str] | None = None,
-) -> dict[str, Any] | None:
-    """submit_points 被误调时：只建议改调哪一个 Tool，不在本函数里执行。"""
-    return suggest_other_writing_control_tool(
-        home,
-        session,
-        message,
-        expected_tool="submit_points",
-        invoke=invoke,
-        clarify_invoke=clarify_invoke,
-    )
-
-
-def reroute_submit_points_if_needed(
-    home: Path,
-    session: ChatSession,
-    message: str,
-    *,
-    invoke: Callable[[str, str], str] | None = None,
-    clarify_invoke: Callable[[str, str], str] | None = None,
-) -> tuple[str, list[Any]] | None:
-    """已废弃静默改道。误调由总控按 Tool description 改调。"""
-    del home, session, message, invoke, clarify_invoke
     return None

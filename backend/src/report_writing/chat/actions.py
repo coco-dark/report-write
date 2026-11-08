@@ -286,6 +286,48 @@ def _action_select_blueprint(home: Path, session: ChatSession, payload: ChatPayl
     )
 
 
+def _resolve_write_blueprint_and_work(
+    home: Path,
+    session: ChatSession,
+    payload: ChatPayload,
+) -> tuple[str, str]:
+    """开写目标：(库蓝本 id, 写作副本 id)。会话 blueprint_id 被清掉时仍认焦点文档。"""
+    payload = ChatActionPayload.parse(payload)
+    from report_writing.chat.helpers import _load_task
+    from report_writing.chat.session_documents import (
+        _writing_copy_id_for_blueprint,
+        focus_bound_blueprint_id,
+        focus_document_meta,
+        resolve_task_id,
+    )
+    from report_writing.services.task_ids import is_blueprint_task_id, is_writing_task_id
+
+    meta = focus_document_meta(session)
+    bid = str(
+        payload.blueprint_id
+        or focus_bound_blueprint_id(session)
+        or getattr(session, "blueprint_id", "")
+        or ""
+    ).strip()
+    work_id = str(
+        resolve_task_id(session, payload)
+        or meta.get("writing_task_id")
+        or ""
+    ).strip()
+    if work_id and is_blueprint_task_id(work_id) and not is_writing_task_id(work_id):
+        if not bid:
+            bid = work_id
+        work_id = str(meta.get("writing_task_id") or "").strip()
+    if not work_id and bid:
+        work_id = _writing_copy_id_for_blueprint(session, bid)
+    if not bid and work_id:
+        task = _load_task(home, work_id)
+        bid = str(getattr(task, "source_blueprint_id", "") or "").strip() if task else ""
+        if not bid:
+            bid = str(meta.get("blueprint_id") or "").strip()
+    return bid, work_id
+
+
 def _action_select_write_chapters(
     home: Path,
     session: ChatSession,
@@ -297,21 +339,29 @@ def _action_select_write_chapters(
     """指定/勾选要写的已分析章节，按勾选顺序依次开写（不再选书写方式）。"""
     payload = ChatActionPayload.parse(payload)
     from report_writing.chat.cards import _offer_chapter_picker_cards
+    from report_writing.chat.chapter_resolve import normalize_chapter_key_tokens
     from report_writing.chat.gates import _parse_chapter_keys, partition_blueprint_chapters
     from report_writing.chat.helpers import _load_task
+    from report_writing.chat.write_chapter_intent import resolve_recent_studied_write_keys
+    from report_writing.chat.session_runtime import clear_leftover_study_triggers
 
-    blueprint_id = str(payload.blueprint_id or session.blueprint_id or "").strip()
-    if not blueprint_id:
-        raise ValueError("请先选择蓝本")
-    session.blueprint_id = blueprint_id
-    from report_writing.chat.session_documents import _writing_copy_id_for_blueprint
-
-    copy_id = _writing_copy_id_for_blueprint(session, blueprint_id)
-    task = _load_task(home, copy_id) if copy_id else None
-    if task is None:
+    clear_leftover_study_triggers(session)
+    blueprint_id, work_id = _resolve_write_blueprint_and_work(home, session, payload)
+    if not blueprint_id and not work_id:
+        return (
+            "要先有一份正在写的文档。可以选用蓝本，或在右侧文档窗口打开当前文档后再开写。",
+            [],
+        )
+    if blueprint_id:
+        session.blueprint_id = blueprint_id
+    task = _load_task(home, work_id) if work_id else None
+    if task is None and blueprint_id:
         task = _load_task(home, blueprint_id)
     if task is None:
-        raise ValueError(f"蓝本不存在：{blueprint_id}")
+        return (
+            "找不到这份文档的写作副本，请在右侧文档窗口重新打开后再开写。",
+            [],
+        )
     parts = partition_blueprint_chapters(task)
     analyzed = parts["analyzed"]
     analyzed_keys = {n.key for n in analyzed}
@@ -341,7 +391,18 @@ def _action_select_write_chapters(
                 )
             ],
         )
-    requested = _parse_chapter_keys(payload)
+    requested = list(_parse_chapter_keys(payload) or [])
+    seq_raw = payload.get("chapter_sequences") or payload.get("sequences") or []
+    if isinstance(seq_raw, list):
+        for item in seq_raw:
+            tok = str(item or "").strip()
+            if tok and tok not in requested:
+                requested.append(tok)
+    # 模型常把「1.2」当 chapter_keys；归一成大纲 key 后再与已分析集求交
+    requested = normalize_chapter_key_tokens(task, requested)
+    if not requested:
+        # 无勾选时：若会话刚分析过一批，用最近分析批，避免「写这几个」空 keys 误报
+        requested = list(resolve_recent_studied_write_keys(task, session) or [])
     if not requested:
         session.phase = ChatPhase.CREATE_HANDOFF.value if parts["unanalyzed"] else ChatPhase.READY_TO_WRITE.value
         return (
@@ -393,9 +454,12 @@ def _action_write_analyzed_only(
         return _action_select_write_chapters(
             home, session, {**payload.as_dict(), "chapter_keys": keys}, emit=emit, invoke=invoke
         )
-    blueprint_id = str(payload.get("blueprint_id") or session.blueprint_id or "").strip()
+    blueprint_id, _work_id = _resolve_write_blueprint_and_work(home, session, payload)
     if not blueprint_id:
-        raise ValueError("请先选择蓝本")
+        return (
+            "要先有一份正在写的文档。可以选用蓝本，或在右侧文档窗口打开当前文档后再开写。",
+            [],
+        )
     session.blueprint_id = blueprint_id
     # 已分析章以文档副本为准，禁止读库蓝本章节状态
     from report_writing.chat.resource_actions import _wizard_working_task_id
@@ -575,11 +639,17 @@ def _action_skip_blueprint(
 
             stash_pending_entry(session, message=extra, title=tip)
 
-    session.phase = ChatPhase.FREEFORM_ASK.value
-    return (
-        "行，咱就不绑蓝本了。你想写什么、文档打算叫什么，跟我说就行——"
-        "题目定清了，我再帮你在文档窗口搭目录。",
-        [],
+    from report_writing.chat.clarify_flow import ask_write_meta_in_dialogue
+    from report_writing.chat.freeform_intent import utterance_mentions_generate_outline
+
+    return ask_write_meta_in_dialogue(
+        session,
+        message=extra,
+        title_hint=tip,
+        invoke=None,
+        home=home,
+        emit=emit,
+        want_outline=utterance_mentions_generate_outline(extra),
     )
 
 
@@ -592,8 +662,10 @@ def _action_resume(home: Path, session: ChatSession, payload: ChatPayload) -> tu
     if payload.get("task_id"):
         session.task_id = str(payload["task_id"]).strip()
     if not blueprint_id:
+        from report_writing.chat.clarify_flow import ask_write_meta_in_dialogue
+
         session.phase = ChatPhase.INTENT.value
-        return ("回来啦。想写什么直接跟我说；要用蓝本就选个机器人，或者说「开始写」。", [])
+        return ask_write_meta_in_dialogue(session, want_outline=False)
     session.blueprint_id = blueprint_id
     task = _load_task(home, blueprint_id)
     if not is_blueprint_valid(task):
@@ -646,7 +718,7 @@ def _action_resume(home: Path, session: ChatSession, payload: ChatPayload) -> tu
 
 
 def _freeform_start_writing_gate(
-    home: Path, session: ChatSession
+    home: Path, session: ChatSession, *, invoke=None
 ) -> tuple[str, list[ChatCard]] | None:
     """无蓝本：未确认大纲或未进入就绪阶段时禁止开写。"""
     from report_writing.chat.freeform_points import freeform_points_help_card
@@ -666,10 +738,10 @@ def _freeform_start_writing_gate(
     ff = dict(session.freeform or {})
     phase = str(session.phase or "")
     if not ff.get("meta_confirmed") and not focus_has_display_title(session):
-        session.phase = ChatPhase.FREEFORM_ASK.value
-        return (
-            "先说一下要写什么，我会生成可改的大纲，确认后再开写。",
-            [],
+        from report_writing.chat.clarify_flow import ask_write_meta_in_dialogue
+
+        return ask_write_meta_in_dialogue(
+            session, invoke=invoke, home=home, want_outline=True
         )
     if ff.get("outline_pending_edit") or not ff.get("outline_confirmed"):
         session.phase = ChatPhase.FREEFORM_OUTLINE.value
@@ -682,10 +754,9 @@ def _freeform_start_writing_gate(
                     "大纲还没确认。请在卡片里改好目录，点「确认大纲并继续」后再开写。",
                     [_outline_preview_card(task_id, task, text, editable=True, session=session)],
                 )
-        return (
-            "可以说「帮我生成目录大纲」，或粘贴章节目录；生成后请在卡片里修改并确认。",
-            [],
-        )
+        from report_writing.chat.clarify_flow import ask_outline_in_dialogue
+
+        return ask_outline_in_dialogue(session, invoke=invoke)
     if phase == ChatPhase.FREEFORM_POINTS.value:
         task = _load_task(home, (session.task_id or "").strip()) if session.task_id else None
         cards = [freeform_points_help_card(session, task)] if task else []
@@ -795,9 +866,16 @@ def _action_start_writing(
     pace = explicit_pace or _session_writing_pace(session) or WRITING_PACE_BATCH
 
     if not session.blueprint_id:
-        gate = _freeform_start_writing_gate(home, session)
-        if gate is not None:
-            return gate[0], gate[1], []
+        existing_writing = _load_task(home, existing_id) if existing_id else None
+        has_confirmed_copy = bool(
+            existing_writing is not None
+            and getattr(existing_writing, "outline", None) is not None
+            and bool(getattr(existing_writing, "outline_confirmed", False))
+        )
+        if not has_confirmed_copy:
+            gate = _freeform_start_writing_gate(home, session, invoke=invoke)
+            if gate is not None:
+                return gate[0], gate[1], []
 
     session.freeform = {**(session.freeform or {}), "writing_pace": pace}
     scope_tid = str(session.task_id or session.blueprint_id or "").strip()
@@ -2292,17 +2370,26 @@ def _collect_freeform_meta(
             category, title = inferred
             text = f"{category}｜{title}"
         elif action_not_title:
-            session.phase = ChatPhase.FREEFORM_ASK.value
-            return (
-                "可以帮你生成目录。还不太清楚文档叫什么、写哪一类——"
-                "你补充一下题目或类型，我立刻起草可编辑的大纲。",
-                [],
+            from report_writing.chat.clarify_flow import ask_write_meta_in_dialogue
+
+            return ask_write_meta_in_dialogue(
+                session,
+                message=text,
+                invoke=invoke,
+                home=home,
+                emit=emit,
+                want_outline=True,
             )
         else:
-            session.phase = ChatPhase.FREEFORM_ASK.value
-            return (
-                "好，那就不用蓝本。你想写什么、文档打算叫什么，用你习惯的说法告诉我就行。",
-                [],
+            from report_writing.chat.clarify_flow import ask_write_meta_in_dialogue
+
+            return ask_write_meta_in_dialogue(
+                session,
+                message=text,
+                invoke=invoke,
+                home=home,
+                emit=emit,
+                want_outline=False,
             )
     category, title = text, text
     if "｜" in text or "|" in text:
@@ -2327,10 +2414,15 @@ def _collect_freeform_meta(
         if title_contains_action_clause(category):
             category = "文档"
     if is_vague_freeform_meta(title, field=True) or is_vague_freeform_meta(category, field=True):
-        session.phase = ChatPhase.FREEFORM_ASK.value
-        return (
-            "题目还不够具体。再说清楚一点写什么、文档叫什么名字就行。",
-            [],
+        from report_writing.chat.clarify_flow import ask_write_meta_in_dialogue
+
+        return ask_write_meta_in_dialogue(
+            session,
+            message=text,
+            invoke=invoke,
+            home=home,
+            emit=emit,
+            want_outline=False,
         )
     from report_writing.chat.session_documents import (
         confirm_writing_document_name,
@@ -2542,11 +2634,7 @@ def _collect_freeform_meta(
     except Exception:
         pass
     # 定名后不自动生成目录：由总控/用户再调度 submit_outline
-    return (
-        f"收到，是【{category}】{title}。可以说「帮我生成目录」，或直接粘贴章节目录；"
-        "定好后在文档窗口调整，再确认大纲。",
-        [],
-    )
+    return (f"好，就叫「{title}」。", [])
 
 
 def _freeform_outline_doc_title(session: ChatSession | None, task) -> str:
@@ -2731,22 +2819,48 @@ def _collect_freeform_outline(
         if stored:
             text = stored
         elif not pending:
-            session.phase = ChatPhase.FREEFORM_OUTLINE.value
-            return (
-                "还没有目录内容。请粘贴章节目录，或说「帮我生成目录大纲」；生成后可在卡片里改再确认。",
-                [],
+            from report_writing.chat.clarify_flow import ask_outline_in_dialogue
+
+            return ask_outline_in_dialogue(
+                session, message=text, invoke=invoke
             )
     if not meta.get("meta_confirmed"):
-        session.phase = ChatPhase.FREEFORM_ASK.value
-        return (
-            "还没定文档叫什么。先告诉我写什么、题目是什么，再说生成目录或粘贴目录。",
-            [],
+        from report_writing.chat.session_documents import (
+            focus_has_display_title,
+            is_writing_document_named,
         )
+
+        named = is_writing_document_named(session) or focus_has_display_title(session)
+        title_now = str(meta.get("title") or "").strip()
+        if named and title_now and not is_vague_freeform_meta(title_now, field=True):
+            meta["meta_confirmed"] = True
+            session.freeform = meta
+        else:
+            from report_writing.chat.clarify_flow import ask_write_meta_in_dialogue
+
+            return ask_write_meta_in_dialogue(
+                session,
+                message=text,
+                title_hint=title_now,
+                invoke=invoke,
+                home=home,
+                emit=emit,
+                want_outline=True,
+            )
     title_meta = str(meta.get("title") or "").strip()
     category = str(meta.get("category") or "").strip()
     if is_vague_freeform_meta(title_meta, field=True):
-        session.phase = ChatPhase.FREEFORM_ASK.value
-        return ("文档标题还不清楚，再说一下叫什么名字吧。", [])
+        from report_writing.chat.clarify_flow import ask_write_meta_in_dialogue
+
+        return ask_write_meta_in_dialogue(
+            session,
+            message=text,
+            title_hint=title_meta,
+            invoke=invoke,
+            home=home,
+            emit=emit,
+            want_outline=True,
+        )
 
     task_id = (session.task_id or "").strip()
     should_generate = bool(regenerate)
@@ -2822,25 +2936,25 @@ def _collect_freeform_outline(
                     [{"sequence": n.sequence, "title": n.title} for n in peek.outline.chapters]
                 )
         if not text:
-            session.phase = ChatPhase.FREEFORM_OUTLINE.value
-            return (
-                "章节目录会在下方卡片里展示。可说「帮我生成目录」重新起草，或在拓扑里调整后点确认。",
-                [],
+            from report_writing.chat.clarify_flow import ask_outline_in_dialogue
+
+            return ask_outline_in_dialogue(
+                session, message=text, invoke=invoke
             )
 
     if not should_generate and not confirm:
         if is_vague_freeform_meta(text):
-            session.phase = ChatPhase.FREEFORM_OUTLINE.value
-            return (
-                "可以说「帮我生成目录」，或粘贴章节目录，例如：\n1 总则\n1.1 编制依据",
-                [],
+            from report_writing.chat.clarify_flow import ask_outline_in_dialogue
+
+            return ask_outline_in_dialogue(
+                session, message=text, invoke=invoke
             )
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         if len(lines) < 2 and not re.search(r"\d+[\.、．]\s*\S", text):
-            session.phase = ChatPhase.FREEFORM_OUTLINE.value
-            return (
-                "目录至少两行，或带「1.1 标题」编号；也可以说「帮我生成目录大纲」。",
-                [],
+            from report_writing.chat.clarify_flow import ask_outline_in_dialogue
+
+            return ask_outline_in_dialogue(
+                session, message=text, invoke=invoke
             )
 
     title = title_meta or "对话写作任务"

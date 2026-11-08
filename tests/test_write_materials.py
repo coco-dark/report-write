@@ -104,3 +104,20 @@ def test_long_element_is_excerpted_by_chapter_points():
     assert "东郊变电站工程" in materials
     assert "原文共" in materials
     assert len(materials) < len(long_value)
+
+
+def test_dialogue_content_basis_is_in_materials_without_filling_elements():
+    requirement = ChapterRequirement(
+        key="c1",
+        title="概述",
+        points=["交代工程名称"],
+        element_results=[
+            {"id": "el-1", "name": "工程名称", "kind": "fixed", "value": ""},
+        ],
+        content_basis=["工程名称咸宁220kv新建变电站 帮我写本章"],
+    )
+    materials = assemble_write_materials(requirement)
+    assert "咸宁220kv新建变电站" in materials
+    assert "<dialogue_content_basis>" in materials
+    assert "（无取值）" in materials
+    assert "不得据此新建要素" in materials

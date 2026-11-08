@@ -1,6 +1,6 @@
-"""窄 JSON 分类器：澄清卡回复、槽位、向导 command、写作/无蓝本分流。
+"""窄 JSON：澄清卡回复、写/分析范围槽、向导 command、要素 payload。
 
-口语「用户要做什么」只走 LangChain `create_agent`；本模块不含第二套 Oral 路由。
+口语选 Tool / 入口 / 定名 / 无蓝本动作只走 LangChain `create_agent`。
 详见 chat/AGENT_ARCHITECTURE.md。
 """
 
@@ -18,19 +18,6 @@ from report_writing.domain.models import ClarifyPending
 
 InvokeFn = Callable[[str, str], str]
 
-WRITING_CONTROL_TOOLS: dict[str, str] = {
-    "add_chapter_element": "为某一章新建要素草稿（键值对、固定文案、文件、引用槽位等），不是打开要素库",
-    "collect_to_element_library": "把本任务里已有要素收入个人要素库（不是新建、也不是打开浏览）",
-    "associate_elements": "把已有要素关联到某章（打开勾选面板，不是新建）",
-    "dissociate_chapter_element": "取消某章与要素的关联（不删要素、不删库）；同名多个时先澄清",
-    "remove_document_element": "从当前写作文档删除要素（含各章关联）；不删个人要素库",
-    "open_element_library": "打开要素库浏览页，不是给章节加要素",
-    "open_blueprint_library": "打开蓝本库管理页，不是 match 选型",
-    "open_knowledge": "打开资料库（放资料包；兼容旧称知识库）",
-    "remember_writing_goal": "记住身份/岗位/项目等后续各章都要遵守的约束",
-    "submit_points": "用户在补充各章「怎么写」的要点长文",
-    "none": "其它：交给总控选工具、澄清或闲聊",
-}
 
 WIZARD_COMMANDS: dict[str, str] = {
     "submit_meta": "当前在填写名称步，用户给出了蓝本名称，提交并创建",
@@ -334,141 +321,6 @@ def resolve_wizard_action(
     return enrich(hit)
 
 
-def classify_writing_control_llm(
-    message: str,
-    *,
-    phase: str = "",
-    task_id: str = "",
-    dialogue_tail: list[dict[str, str]] | None = None,
-    writing_task: dict[str, Any] | None = None,
-    session_goal_brief: str = "",
-    focus_document_brief: str = "",
-    invoke: InvokeFn | None,
-) -> dict[str, Any]:
-    """根据对话语境判断本轮更合适的总控工具（非正则）。失败返回 {}。"""
-    text = (message or "").strip()
-    if not text or invoke is None:
-        return {}
-
-    allowed = [k for k in WRITING_CONTROL_TOOLS if k != "none"]
-    from report_writing.chat.classifier_action_chain import MULTI_ACTION_JSON_HINT
-
-    dialogue_lines = []
-    for item in (dialogue_tail or [])[-8:]:
-        role = str(item.get("role") or "?")
-        line = str(item.get("text") or "").strip().replace("\n", " ")[:400]
-        if line:
-            dialogue_lines.append(f"{role}: {line}")
-    wt = writing_task or {}
-    focus = ""
-    if wt.get("focus_chapter_title") or wt.get("focus_chapter_key"):
-        focus = f"{wt.get('focus_chapter_title') or ''} (key={wt.get('focus_chapter_key') or '—'})"
-
-    system = (
-        "# Role\n你是写作对话总控的意图分类器。\n"
-        "# Task\n结合近期对话、阶段与任务选工具；默认针对当前焦点文档，用户点名其它文档时才切换。\n"
-        "# Inputs\nclassifier context JSON。\n"
-        "\n"
-        "## 输出\n"
-        "只返回 JSON，不要 Markdown：\n"
-        '{"tool":"<id>","tools":[{"tool":"<id>","payload":{}}],"confidence":0.0,"payload":{}}\n'
-        f"tool / tools ∈ {{{', '.join(allowed + ['none'])}}}\n"
-        f"{MULTI_ACTION_JSON_HINT}\n"
-        "多工具时后端按 remember_writing_goal → add_chapter_element → submit_points 校正；"
-        "open_* 可与其它工具并列。\n"
-        "\n"
-        "各 tool 的调用语义以 LangChain 总控 Tool 的 description 为准；此处只列 id。\n"
-        "\n"
-    )
-    system += (
-        "## payload 规则\n"
-        "- add_chapter_element：从原话提取 kind/name/category/tags/purpose/kv_pairs/query/value/prompt/"
-        "ref_element_name/chapter_key_hint；缺省 kind=kv。"
-        "文件/资料/检索词 → kind=file；引用资料包槽位 → kind=file_slot。\n"
-        "- associate_elements：chapter_key_hint 可选。\n"
-        "- dissociate_chapter_element：取消关联；element_name / element_id、chapter_key。\n"
-        "- remove_document_element：仅删本文档要素；element_name / element_id；勿删要素库。\n"
-        "- collect_to_element_library：element_name 可选（收入个人库，不是新建）。\n"
-        "- open_element_library / open_knowledge：payload 可 {}；open_knowledge=资料库（兼容旧称知识库）。\n"
-        "- remember_writing_goal：notes=原话摘要。\n"
-        "- submit_points / none：payload={}。\n"
-        "\n"
-        "## 示例\n"
-        "查看/打开要素库 → open_element_library（不是蓝本列表）。\n"
-        "查看/浏览蓝本库 → open_blueprint_library（不是 match_blueprints / list_blueprints 选型）。\n"
-        "查看资料库/知识库 → open_knowledge。\n"
-        "给2.2章关联要素 → associate_elements，chapter_key_hint=2.2。\n"
-        "将文件要素收入要素库 → collect_to_element_library（绝不要 add_chapter_element）。\n"
-        "加个个人信息要素，姓名 nico → add_chapter_element + kv_pairs。\n"
-        "为建设规模添加文件要素，检索词为… → add_chapter_element，kind=file。\n"
-        "\n"
-        f"## {_uncertain_line(field='tool')}"
-    )
-    user = (
-        f"阶段：{(phase or '—').strip()}\n"
-        f"task_id：{(task_id or '—').strip()}\n"
-        f"当前焦点文档：{(focus_document_brief or '—').strip() or '—'}\n"
-        f"写作焦点章：{focus or '—'}\n"
-        f"已记住目标：{(session_goal_brief or '—')[:400]}\n"
-        f"近期对话：\n" + ("\n".join(dialogue_lines) if dialogue_lines else "（无）") + "\n"
-        f"用户本轮：{text[:2000]}"
-    )
-    try:
-        raw = str(invoke(system, user) or "").strip()
-    except Exception as error:
-        _log.debug("writing control intent llm failed: %s", error)
-        return {}
-
-    data = _parse_classifier_json(raw)
-    try:
-        confidence = float(data.get("confidence") or 0)
-    except (TypeError, ValueError):
-        confidence = 0.0
-    if confidence < _MIN_CONFIDENCE:
-        return {}
-
-    from report_writing.chat.classifier_action_chain import (
-        WRITING_CONTROL_POLICY,
-        order_action_ids,
-        parse_id_list_from_classifier,
-    )
-
-    tool_ids = [
-        t
-        for t in order_action_ids(
-            parse_id_list_from_classifier(data, plural_keys=("tools",), single_keys=("tool",)),
-            WRITING_CONTROL_POLICY,
-        )
-        if t in allowed
-    ]
-    if len(tool_ids) > 1:
-        steps: list[dict[str, Any]] = []
-        raw_tools = data.get("tools")
-        by_tool: dict[str, dict[str, Any]] = {}
-        if isinstance(raw_tools, list):
-            for item in raw_tools:
-                if not isinstance(item, dict):
-                    continue
-                tid = str(item.get("tool") or "").strip()
-                pl = item.get("payload")
-                if tid and isinstance(pl, dict):
-                    by_tool[tid] = pl
-        top_payload = data.get("payload")
-        if not isinstance(top_payload, dict):
-            top_payload = {}
-        for tid in tool_ids:
-            pl = dict(by_tool.get(tid) or top_payload if tid == str(data.get("tool") or "") else by_tool.get(tid) or {})
-            steps.append({"tool": tid, "confidence": confidence, "payload": pl})
-        return {"tools": steps, "confidence": confidence}
-
-    tool = str(data.get("tool") or tool_ids[0] if tool_ids else "none").strip()
-    payload = data.get("payload")
-    if not isinstance(payload, dict):
-        payload = {}
-    if tool == "none" or tool not in allowed:
-        return {}
-    return {"tool": tool, "confidence": confidence, "payload": payload}
-
 
 def classify_study_scope_llm(
     message: str,
@@ -523,6 +375,91 @@ def classify_study_scope_llm(
     return scope
 
 
+WRITE_TARGET_INTENTS: dict[str, str] = {
+    "recent_study": (
+        "用户要写刚才/刚分析完的那一批章节（指代最近分析批；"
+        "可有可无「写」字，如「刚才分析的那几个章节」）"
+    ),
+    "sequences": "用户点名了具体章节序号或标题要开写",
+    "all_analyzed": "用户要写全部已分析章或「写已分析的」",
+    "status": "用户明确问写作进度/写到哪了/写了几章/哪章待确认",
+    "none": (
+        "与指定开写目标无关：闲聊、问现在能干什么/可以看什么、问怎么用、"
+        "只想浏览右侧目录或配置，没有要开写或查进度"
+    ),
+}
+
+
+def classify_write_target_llm(
+    message: str,
+    *,
+    dialogue_tail: list[dict[str, str]] | None = None,
+    focus_document_brief: str = "",
+    last_study_brief: str = "",
+    invoke: InvokeFn | None,
+) -> dict[str, Any]:
+    """开写目标：最近分析批 / 序号 / 已分析全集 / 查进度。按语义分类，不用固定句式。"""
+    text = (message or "").strip()
+    if not text or invoke is None:
+        return {}
+    from report_writing.chat.classifier_context import format_dialogue_lines
+
+    allowed = [k for k in WRITE_TARGET_INTENTS if k != "none"]
+    system = (
+        "# Role\n你是写作对话的「开写目标」分类器。\n"
+        "# Task\n结合近期对话与焦点文档判断用户要写哪批章、查进度，还是只是闲聊/问能力；"
+        "按意思判断，不要靠固定关键词表。\n"
+        "# Inputs\n用户原话、近期对话、焦点文档、最近分析批摘要。\n"
+        "\n"
+        "## 输出\n"
+        '只返回 JSON：{"target":"<id>","chapter_sequences":[],"confidence":0.0}\n'
+        f"target ∈ {{{', '.join(allowed + ['none'])}}}\n"
+        "点名章节时 chapter_sequences 填序号字符串（如 \"1.2\"）；否则 []。\n"
+        "\n"
+        "## 意图含义\n"
+        + _intent_lines(WRITE_TARGET_INTENTS)
+        + "\n\n"
+        "## 规则\n"
+        "指代「刚才/刚分析完/那几章」且语境是要处理这批章 → recent_study"
+        "（即使没说「写」字）。\n"
+        "仅当明确问进度/写到哪/待确认 → status；"
+        "「现在可以看什么 / 现在能干什么 / 怎么办」→ none，禁止判成 status。\n"
+        "点名第×章/×.× → sequences。\n"
+        "「写已分析的 / 先写分析好的」→ all_analyzed。\n"
+        "\n"
+        f"## {_uncertain_line(field='target')}"
+    )
+    dlg = format_dialogue_lines(dialogue_tail, limit=6, max_chars=240)
+    user = (
+        f"当前焦点文档：{(focus_document_brief or '—').strip() or '—'}\n"
+        f"最近分析批：{(last_study_brief or '—').strip() or '—'}\n"
+        f"近期对话：\n" + ("\n".join(dlg) if dlg else "（无）") + "\n"
+        f"用户：{text[:1500]}"
+    )
+    try:
+        raw = str(invoke(system, user) or "").strip()
+    except Exception as error:
+        _log.debug("write target llm failed: %s", error)
+        return {}
+    data = _parse_classifier_json(raw)
+    confidence = _classifier_confidence(data)
+    target = str(data.get("target") or "").strip()
+    if confidence < _MIN_CONFIDENCE:
+        return {}
+    if target == "none":
+        return {"target": "none", "chapter_sequences": [], "confidence": confidence}
+    if target not in allowed:
+        return {}
+    seqs: list[str] = []
+    raw_seqs = data.get("chapter_sequences") or data.get("sequences") or []
+    if isinstance(raw_seqs, list):
+        for item in raw_seqs:
+            tok = str(item or "").strip()
+            if tok and tok not in seqs:
+                seqs.append(tok)
+    return {"target": target, "chapter_sequences": seqs, "confidence": confidence}
+
+
 def classify_write_scope_llm(
     message: str,
     *,
@@ -574,835 +511,8 @@ def classify_write_scope_llm(
     return scope
 
 
-def classify_unclear_chat_llm(
-    message: str,
-    *,
-    phase: str = "",
-    blueprint_id: str = "",
-    wizard_step: str = "",
-    dialogue_tail: list[dict[str, str]] | None = None,
-    focus_document_brief: str = "",
-    session_documents_brief: str = "",
-    session_goal_brief: str = "",
-    task_id: str = "",
-    invoke: InvokeFn | None,
-) -> dict[str, Any]:
-    """意图不清时生成多轮追问。失败返回 {}。须先结合上下文，勿凭空追问。"""
-    text = (message or "").strip()
-    if not text or invoke is None:
-        return {}
-    from report_writing.chat.classifier_action_chain import (
-        CHAT_CONTROL_PLAN_BLOCKLIST,
-        CLASSIFIER_ACTION_POLICY,
-    )
-    from report_writing.chat.classifier_context import classifier_context_user_block
-
-    allowed = sorted(
-        k
-        for k in CLASSIFIER_ACTION_POLICY.pipeline_rank
-        if k not in CHAT_CONTROL_PLAN_BLOCKLIST and k not in {"ask_intent", "ask_entry_path"}
-    )
-    system = (
-        "你在写报告对话里做多轮意图澄清。先结合焦点文档、已登记文档与近期对话收集语料，"
-        "再决定还缺什么；能从上下文推断的不要再问。说法不固定，按意思分析。\n"
-        "\n"
-        "## 输出\n"
-        "只返回 JSON，不要 Markdown：\n"
-        '{"question":"","options":[{"id":"","label":"","tool":"","args":{}}],"confidence":0.0}\n'
-        "question：一句短口语追问；勿编号、勿说「作为AI」。\n"
-        "options：2～3 个；id=英文短词，label=人话。\n"
-        f"tool ∈ {{{', '.join(allowed)}}} 或留空。\n"
-        "\n"
-        "## 规则\n"
-        "1) 未绑蓝本、像要写文档 → 先区分有蓝本 / 无蓝本；无蓝本再区分依据模版 / 自动大纲"
-        "（tool=match_blueprints / begin_blueprint_wizard / skip_blueprint）；label 用人话。\n"
-        "2) 题目未清 → 追问写什么、叫什么；勿强迫「类型｜标题」。\n"
-        "3) 已有蓝本但未说写还是学 → 开写 / 学习 / 加要素。\n"
-        "4) 闲聊也先问想写什么，仍给入口两步（有蓝本｜无蓝本）。\n"
-        "5) 多文档时选项/追问须点明文档（用标题或 doc_id），避免串文档。\n"
-        "\n"
-        f"## 不确定：confidence < {_MIN_CONFIDENCE}。"
-    )
-    user = classifier_context_user_block(
-        text=text,
-        ctx={
-            "phase": phase,
-            "task_id": task_id,
-            "blueprint_id": blueprint_id,
-            "focus_document_brief": focus_document_brief,
-            "session_documents_brief": session_documents_brief,
-            "session_goal_brief": session_goal_brief,
-            "dialogue_tail": dialogue_tail or [],
-        },
-        extra_lines=[f"当前向导步骤：{(wizard_step or '—').strip() or '—'}"],
-    )
-    try:
-        raw = str(invoke(system, user) or "").strip()
-    except Exception as error:
-        _log.debug("unclear intent llm failed: %s", error)
-        return {}
-    data = _parse_classifier_json(raw)
-    if not isinstance(data, dict):
-        return {}
-    try:
-        confidence = float(data.get("confidence") or 0)
-    except (TypeError, ValueError):
-        confidence = 0.0
-    question = str(data.get("question") or "").strip()
-    raw_opts = data.get("options")
-    options: list[dict[str, Any]] = []
-    if isinstance(raw_opts, list):
-        allowed_set = set(allowed)
-        for item in raw_opts:
-            if not isinstance(item, dict):
-                continue
-            oid = str(item.get("id") or "").strip()
-            label = str(item.get("label") or "").strip()
-            if not oid or not label:
-                continue
-            tool = str(item.get("tool") or "").strip()
-            if tool and tool not in allowed_set:
-                tool = ""
-            args = item.get("args") if isinstance(item.get("args"), dict) else {}
-            # 入口三条：模型常留空 tool，按 id/label 补全，避免点选后无槽位
-            if not tool:
-                from report_writing.chat.clarify_flow import enrich_control_option_slots
-
-                enriched = enrich_control_option_slots(oid, label, {})
-                tool = str(enriched.get("tool") or "").strip()
-                if tool and tool not in allowed_set and tool not in {
-                    "match_blueprints",
-                    "begin_blueprint_wizard",
-                    "skip_blueprint",
-                }:
-                    tool = ""
-            options.append({"id": oid, "label": label, "tool": tool, "args": dict(args)})
-    if not question or len(options) < 2 or confidence < _MIN_CONFIDENCE:
-        return {}
-    return {"question": question, "options": options[:3], "confidence": confidence}
-
-
-SESSION_GOAL_SIGNAL_INTENTS: dict[str, str] = {
-    "remember_goal": "用户明确要求记住/今后都按/别忘了某写作目标或项目背景（不是单纯报一行类型｜标题）",
-    "none": "不是显式「记住」类话术",
-}
-
-
-def classify_explicit_remember_goal_llm(
-    message: str,
-    *,
-    dialogue_tail: list[dict[str, str]] | None = None,
-    invoke: InvokeFn | None,
-) -> bool:
-    """是否「记住/今后按…」类显式写作目标话术（替代 session_goal 正则表）。"""
-    text = (message or "").strip()
-    if not text or invoke is None:
-        return False
-    from report_writing.chat.classifier_context import format_dialogue_lines
-
-    allowed = [k for k in SESSION_GOAL_SIGNAL_INTENTS if k != "none"]
-    system = (
-        "角色：显式「记住目标」信号分类器。结合近期对话判断本句是否在要求记住写作目标。\n"
-        "\n"
-        "## 输出\n"
-        '只返回 JSON：{"intent":"<id>","confidence":0.0}\n'
-        f"intent ∈ {{{', '.join(allowed + ['none'])}}}\n"
-        "\n"
-        "## 意图含义\n"
-        + _intent_lines(SESSION_GOAL_SIGNAL_INTENTS)
-        + "\n\n"
-        "## 规则\n"
-        "一行「类型｜标题」不算 remember_goal → none。\n"
-        "\n"
-        f"## {_uncertain_line()}"
-    )
-    dlg = format_dialogue_lines(dialogue_tail, limit=4, max_chars=200)
-    user = (
-        f"近期对话：\n" + ("\n".join(dlg) if dlg else "（无）") + "\n"
-        f"用户：{text[:2000]}"
-    )
-    try:
-        raw = str(invoke(system, user) or "").strip()
-    except Exception as error:
-        _log.debug("remember goal signal llm failed: %s", error)
-        return False
-    data = _parse_classifier_json(raw)
-    intent = str(data.get("intent") or "none").strip()
-    try:
-        confidence = float(data.get("confidence") or 0)
-    except (TypeError, ValueError):
-        confidence = 0.0
-    return intent == "remember_goal" and confidence >= _MIN_CONFIDENCE
-
-
-def classify_doc_meta_line_llm(
-    message: str,
-    *,
-    dialogue_tail: list[dict[str, str]] | None = None,
-    focus_document_brief: str = "",
-    invoke: InvokeFn | None,
-) -> dict[str, str]:
-    """判断是否为「文档类型｜标题」元信息行，并抽取字段（替代 looks_like_freeform_meta 正则路由）。"""
-    text = (message or "").strip()
-    if not text or invoke is None:
-        return {}
-    from report_writing.chat.classifier_context import format_dialogue_lines
-
-    system = (
-        "角色：文档元信息行分类器。结合近期对话判断是否在定题/改名，并抽取类型与标题。\n"
-        "\n"
-        "## 输出\n"
-        '只返回 JSON：{"is_meta_line":false,"confidence":0.0,"doc_category":"","doc_title":""}\n'
-        "\n"
-        "## 规则\n"
-        "粘贴章节目录（多行或 1.1 序号开头）→ is_meta_line=false。\n"
-        "上文在改名/定题，本句只给具体题目（可无「类型｜标题」）→ is_meta_line=true，"
-        "doc_title=题目；类型可沿用焦点文档或留空。\n"
-        "\n"
-        "## 示例\n"
-        "工作说明｜城南变电站工程 → is_meta_line=true。\n"
-        "上文问新文档名，用户回「2026年度工作汇报」→ is_meta_line=true，doc_title=2026年度工作汇报。\n"
-        "\n"
-        f"## 不确定：is_meta_line=false，confidence < {_MIN_CONFIDENCE}。"
-    )
-    dlg = format_dialogue_lines(dialogue_tail, limit=6, max_chars=240)
-    user = (
-        f"当前焦点文档：{(focus_document_brief or '—').strip() or '—'}\n"
-        f"近期对话：\n" + ("\n".join(dlg) if dlg else "（无）") + "\n"
-        f"用户：{text[:2000]}"
-    )
-    try:
-        raw = str(invoke(system, user) or "").strip()
-    except Exception as error:
-        _log.debug("doc meta line llm failed: %s", error)
-        return {}
-    data = _parse_classifier_json(raw)
-    try:
-        confidence = float(data.get("confidence") or 0)
-    except (TypeError, ValueError):
-        confidence = 0.0
-    if not data.get("is_meta_line") or confidence < _MIN_CONFIDENCE:
-        return {}
-    category = str(data.get("doc_category") or "").strip()
-    title = str(data.get("doc_title") or "").strip()
-    if not title and not category:
-        return {}
-    out: dict[str, str] = {}
-    if category:
-        out["doc_category"] = category
-    if title:
-        out["doc_title"] = title
-    if category or title:
-        out["summary"] = f"{category or '文档'}｜{title}".strip("｜")
-    return out
-
-
-FREEFORM_ACTION_INTENTS: dict[str, str] = {
-    "generate_outline": "请系统起草/生成章节目录或大纲",
-    "confirm_outline": "确认当前目录/大纲可以定稿继续",
-    "generate_points": (
-        "请系统生成/重写各章写作要点或写作信息；"
-        "含「学习本章」「依据样本学习」「帮我学一下」「生成写作信息」等口语"
-        "（无蓝本没有样本学习，一律按生成要点理解）"
-    ),
-    "skip_points": "跳过要点配置，直接开写",
-    "start_writing": "开始写作/开写/写正文/先写已分析的章",
-    "help_draft": "用户不会写，希望系统先帮忙起草（目录或要点）",
-    "none": "不属于无蓝本阶段动作",
-}
-
-
-def classify_freeform_action_llm(
-    message: str,
-    *,
-    phase: str = "",
-    task_id: str = "",
-    dialogue_tail: list[dict[str, str]] | None = None,
-    focus_document_brief: str = "",
-    session_documents_brief: str = "",
-    session_goal_brief: str = "",
-    invoke: InvokeFn | None,
-) -> dict[str, Any]:
-    text = (message or "").strip()
-    if not text or invoke is None:
-        return {}
-    allowed = [k for k in FREEFORM_ACTION_INTENTS if k != "none"]
-    from report_writing.chat.classifier_action_chain import MULTI_ACTION_JSON_HINT
-    from report_writing.chat.classifier_context import classifier_context_user_block
-
-    system = (
-        "# Role\n你是无蓝本写作流程的动作分类器。\n"
-        "# Task\n结合近期对话、焦点文档与阶段判断操作；不要只看本句孤立措辞，指代（继续/那个/刚才）要落到上下文文档。\n"
-        "# Inputs\nclassifier context JSON。\n"
-        "\n"
-        "## 输出\n"
-        '只返回 JSON：{"intent":"<id>","intents":["<动作1>","<动作2>"],"confidence":0.0}\n'
-        f"intent / intents ∈ {{{', '.join(allowed + ['none'])}}}\n"
-        f"{MULTI_ACTION_JSON_HINT}\n"
-        "后端按 生成目录 → 确认目录 → 生成要点 → 开写 校正顺序。\n"
-        "\n"
-        "## 意图含义\n"
-        + _intent_lines(FREEFORM_ACTION_INTENTS)
-        + "\n\n"
-        "## 规则\n"
-        "无蓝本没有「依据样本学习」：学习/分析本章/生成写作信息 → generate_points。\n"
-        "「生成目录」「起草目录」「目录大纲」「搭个目录」「重新生成目录」→ generate_outline；"
-        "起草「大纲 / 目录 / 章节结构」语义相同（如「自动生成大纲」「帮我起草章节结构」）"
-        "→ generate_outline；绝不要判成 generate_points（要点是各章怎么写，目录是章节结构）。\n"
-        "「每个点下面有三小点 / 每章下三个小节 / 加子节」若语境是目录/大纲/章节结构"
-        "→ generate_outline（嵌套编号），不要判成 generate_points。\n"
-        "只有明确提到「要点 / 写作信息 / 配要点」才用 generate_points。\n"
-        "默认针对当前焦点文档（见 doc_id）；用户点名其它文档时再切换。\n"
-        "\n"
-        f"## {_uncertain_line()}"
-    )
-    user = classifier_context_user_block(
-        text=text,
-        ctx={
-            "phase": phase,
-            "task_id": task_id,
-            "focus_document_brief": focus_document_brief,
-            "session_documents_brief": session_documents_brief,
-            "session_goal_brief": session_goal_brief,
-            "dialogue_tail": dialogue_tail or [],
-        },
-    )
-    try:
-        raw = str(invoke(system, user) or "").strip()
-    except Exception as error:
-        _log.debug("freeform action llm failed: %s", error)
-        return {}
-    data = _parse_classifier_json(raw)
-    try:
-        confidence = float(data.get("confidence") or 0)
-    except (TypeError, ValueError):
-        confidence = 0.0
-    if confidence < _MIN_CONFIDENCE:
-        return {}
-
-    from report_writing.chat.classifier_action_chain import FREEFORM_POLICY, order_action_ids, parse_id_list_from_classifier
-
-    parsed = [
-        i
-        for i in parse_id_list_from_classifier(
-            data, plural_keys=("intents",), single_keys=("intent",)
-        )
-        if i in allowed
-    ]
-    # 单意图：勿 inject 前置（否则「生成要点」会被扩成 confirm_outline 链）
-    if len(parsed) == 1:
-        return {"intent": parsed[0], "confidence": confidence}
-    intent_ids = [i for i in order_action_ids(parsed, FREEFORM_POLICY) if i in allowed]
-    if len(intent_ids) > 1:
-        return {"intents": intent_ids, "confidence": confidence}
-    intent = str(data.get("intent") or (intent_ids[0] if intent_ids else "none")).strip()
-    if intent == "none" or intent not in allowed:
-        return {}
-    return {"intent": intent, "confidence": confidence}
-
-
-USER_OWN_SAMPLE_INTENTS: dict[str, str] = {
-    "owns_sample": "用户表示手头有 Word/PDF 样板、样本或参照文档，要上传后按样板提取目录/学习再写",
-    "none": "未强调自带样本文件，或只是要用系统里已有蓝本/无蓝本写",
-}
-
-
-def classify_user_own_sample_llm(
-    message: str,
-    *,
-    dialogue_tail: list[dict[str, str]] | None = None,
-    invoke: InvokeFn | None,
-) -> bool:
-    """是否「我有样本/按样板写」类（入口纠偏，不用正则表）。"""
-    text = (message or "").strip()
-    if not text or invoke is None:
-        return False
-    from report_writing.chat.classifier_context import format_dialogue_lines
-
-    allowed = [k for k in USER_OWN_SAMPLE_INTENTS if k != "none"]
-    system = (
-        "角色：自带样板信号分类器。结合近期对话判断是否在说自己有样板/样本文件需上传"
-        "（不是仅找库内蓝本）。\n"
-        "\n"
-        "## 输出\n"
-        '只返回 JSON：{"intent":"<id>","confidence":0.0}\n'
-        f"intent ∈ {{{', '.join(allowed + ['none'])}}}\n"
-        "\n"
-        "## 意图含义\n"
-        + _intent_lines(USER_OWN_SAMPLE_INTENTS)
-        + "\n\n"
-        "## 示例\n"
-        "我有样本帮我写安评 → owns_sample；写一份环评报告 → none。\n"
-        "\n"
-        f"## {_uncertain_line()}"
-    )
-    dlg = format_dialogue_lines(dialogue_tail, limit=4, max_chars=200)
-    user = (
-        f"近期对话：\n" + ("\n".join(dlg) if dlg else "（无）") + "\n"
-        f"用户：{text[:2000]}"
-    )
-    try:
-        raw = str(invoke(system, user) or "").strip()
-    except Exception as error:
-        _log.debug("user own sample llm failed: %s", error)
-        return False
-    data = _parse_classifier_json(raw)
-    intent = str(data.get("intent") or "none").strip()
-    try:
-        confidence = float(data.get("confidence") or 0)
-    except (TypeError, ValueError):
-        confidence = 0.0
-    return intent == "owns_sample" and confidence >= _MIN_CONFIDENCE
-
-
-def extract_write_subject_title_llm(
-    message: str,
-    *,
-    invoke: InvokeFn | None,
-) -> str:
-    """从口语里抽要写的主体题名（供 create_blueprint 的 blueprint_title 兜底）。"""
-    text = (message or "").strip()
-    if not text or invoke is None:
-        return ""
-    system = (
-        "角色：写作用题目抽取器。从用户话提取文档/报告题目或类型名，供蓝本命名。\n"
-        "说法不固定，按意思抽取，不要靠固定句式。\n"
-        "\n"
-        "## 输出\n"
-        '只返回 JSON：{"doc_title":"","confidence":0.0}\n'
-        "\n"
-        "## 规则\n"
-        "缺明确题目 → doc_title 留空；勿编造用户没说的内容。\n"
-        "一句含多个动作时，doc_title 只填短文档名，不要把「生成目录 / 三个章节 / 用蓝本 / 就可以」写进去。\n"
-        "「作lzb述职报告 自动生成章节目录 三个大章节就可以」→ "
-        '{"doc_title":"lzb述职报告","confidence":0.9}\n'
-        "「再给我写一份述职报告 三个章节 名字叫做lzb述职报告」→ "
-        '{"doc_title":"lzb述职报告","confidence":0.92}\n'
-        "\n"
-        f"## 不确定：doc_title 留空，confidence < {_MIN_CONFIDENCE}。"
-    )
-    user = f"用户：{text[:2000]}"
-    try:
-        raw = str(invoke(system, user) or "").strip()
-    except Exception as error:
-        _log.debug("write subject title llm failed: %s", error)
-        return ""
-    data = _parse_classifier_json(raw)
-    try:
-        confidence = float(data.get("confidence") or 0)
-    except (TypeError, ValueError):
-        confidence = 0.0
-    if confidence < _MIN_CONFIDENCE:
-        return ""
-    return str(data.get("doc_title") or data.get("blueprint_title") or "").strip()
-
-
-def classify_document_scope_llm(
-    message: str,
-    *,
-    dialogue_tail: list[dict[str, str]] | None = None,
-    focus_document_brief: str = "",
-    session_documents_brief: str = "",
-    invoke: InvokeFn | None,
-) -> dict[str, Any]:
-    """同会话多文档：本句是续写当前、新开一份、切已有、退回重写本章，或需追问。
-
-    用户说法不固定，按意思判断；失败返回 {}。
-    """
-    text = (message or "").strip()
-    if not text or invoke is None:
-        return {}
-    from report_writing.chat.classifier_context import format_dialogue_lines
-
-    allowed = (
-        "continue",
-        "force_new",
-        "switch_existing",
-        "chapter_revise",
-        "rewrite_current",
-        "ask",
-    )
-    system = (
-        "# Role\n你是「文档作用域」分类器。\n"
-        "# Task\n用户说法不固定，按意思判断，不要靠固定句式或关键词表。\n"
-        "# Inputs\n当前消息与会话焦点文档。\n"
-        "\n"
-        "## 输出\n"
-        '只返回 JSON：{"action":"continue|force_new|switch_existing|chapter_revise|rewrite_current|ask",'
-        '"title":"","confidence":0.0}\n'
-        "\n"
-        "## 含义\n"
-        "- continue：继续当前焦点文档（分析/配置/写某章、把这份写完等），且题材与当前文档一致或用户明确续写\n"
-        "- force_new：另开/再开一份新文档（与当前并行），或题材与当前标题明显不同的新写请求\n"
-        "- switch_existing：点名会话里另一份已有文档并切换过去\n"
-        "- chapter_revise：退回重写某一章正文，不是新开文档\n"
-        "- rewrite_current：清空/整份重写当前这份文档正文，不新开、不改名\n"
-        "- ask：说不清是「新开 / 改名 / 整份重写当前 / 继续」→ 必须追问；禁止猜改名、禁止默认 continue\n"
-        "\n"
-        "## 规则\n"
-        "1) 「另外写一份」「再来一份」「再帮我写一份」「从头再写一份」「重新写一份××」→ force_new，"
-        "title=题材短名。\n"
-        "2) 「这一章退回重写」「重写第2章」「按意见改写本章」→ chapter_revise。\n"
-        "3) 焦点已在写（已定名或已选蓝本/有写作副本），用户「写一份×× / 帮我写一份××」"
-        "且题材与当前展示名明显不同、又未说「另写/再写/新写一份」也未显式「改名叫」→ "
-        "优先 action=ask（新开/改名/继续三选一），confidence 约 0.55～0.75；"
-        "仅当用户有强新开词（另写/再写一份等）或焦点几乎是空壳待首次定名且题材即文档名时 → force_new。\n"
-        "4) 仅「帮我写一份××」且与当前焦点同题、用户未说另开 → continue；点名另一份已有 → switch_existing。\n"
-        "5) 「切到职业病那份」「看安全预评价那份」→ switch_existing，title=那份标题。\n"
-        "6) 裸「重新写」「重写」「全部重写」且无章节锚点、无新题材 → ask 或 rewrite_current；"
-        "不要 continue。\n"
-        "7) title：新开/切换/题材的短标题；ask 时也尽量填题材短名；没有则留空。\n"
-        "8) 不确定时 action=ask 且 confidence 降低；禁止默认 continue 去改当前文档名。\n"
-        "9) 结合近期对话与本轮话判断，综合判断。判断不准时 action=ask 且 confidence 降低。"
-        "\n"
-        "## 示例\n"
-        "重写帮我写一份安全报告 → "
-        '{"action":"force_new","title":"安全报告","confidence":0.9}\n'
-        "第1.4章退回重写 → "
-        '{"action":"chapter_revise","title":"","confidence":0.9}\n'
-        "继续分析这一章 → "
-        '{"action":"continue","title":"","confidence":0.88}\n'
-        "焦点已是「述职报告」，用户「帮我写一份关于ai应用对于市场的影响」→ "
-        '{"action":"ask","title":"AI应用对市场的影响","confidence":0.68}\n'
-        "焦点已定名，用户只说「重新写」→ "
-        '{"action":"ask","title":"","confidence":0.55}\n'
-        "\n"
-        f"## {_uncertain_line(field='action', none_value='ask')}"
-    )
-    lines = format_dialogue_lines(dialogue_tail, limit=6, max_chars=280)
-    user = (
-        f"当前焦点文档：{(focus_document_brief or '—').strip() or '—'}\n"
-        f"本会话已登记文档：\n{(session_documents_brief or '（无）').strip() or '（无）'}\n"
-        f"近期对话：\n" + ("\n".join(lines) if lines else "（无）") + "\n"
-        f"用户：{text[:2000]}"
-    )
-    try:
-        raw = str(invoke(system, user) or "").strip()
-    except Exception as error:
-        _log.debug("document scope llm failed: %s", error)
-        return {}
-    data = _parse_classifier_json(raw)
-    action = str(data.get("action") or "").strip()
-    try:
-        confidence = float(data.get("confidence") or 0)
-    except (TypeError, ValueError):
-        confidence = 0.0
-    # 低置信或空动作 → ask，勿默认 continue
-    if action not in allowed or confidence < _MIN_CONFIDENCE:
-        if action in {"", "none", "unclear", "ask"} or confidence > 0:
-            return {
-                "action": "ask",
-                "title": str(data.get("title") or "").strip(),
-                "confidence": confidence,
-            }
-        return {}
-    return {
-        "action": action,
-        "title": str(data.get("title") or "").strip(),
-        "confidence": confidence,
-    }
-
-
-def classify_explicit_doc_name_given_llm(
-    message: str,
-    *,
-    dialogue_tail: list[dict[str, str]] | None = None,
-    invoke: InvokeFn | None,
-) -> dict[str, Any]:
-    """判断本句是否已明确给出文档名（可跳过二次确认）。失败返回 {}。
-
-    返回：has_explicit_name / title / residual / confidence
-    """
-    text = (message or "").strip()
-    if not text or invoke is None:
-        return {}
-    from report_writing.chat.classifier_context import format_dialogue_lines
-
-    system = (
-        "判断用户这句是否已经明确给出「写作文档名称」（可据此直接定名，无需再确认）。\n"
-        "\n"
-        "## 输出\n"
-        '只返回 JSON：{"has_explicit_name":false,"title":"","residual":"","confidence":0.0}\n'
-        "\n"
-        "## 规则\n"
-        "- has_explicit_name=true：用户明确起了或改了文档名"
-        "（名字叫/名字改一下叫做/改名叫/标题是/就叫某某），title=短标题。\n"
-        "- 「帮我写一份安全报告」「用我的模版」仅题材/路径 → has_explicit_name=false"
-        "（仍需确认文档名；勿把「安全报告」当已定名）。\n"
-        "- residual：定名/改名之外的后续意图原话（匹配蓝本、生成目录、三个章节等）；没有留空。\n"
-        "- title 必须是短文档名；禁止把整句或多动作短语当作 title。\n"
-        "\n"
-        "## 示例\n"
-        "「帮我写一份安全报告，名字叫做1101安全预评价」→ "
-        '{"has_explicit_name":true,"title":"1101安全预评价","residual":"","confidence":0.9}\n'
-        "「名字改一下叫做 lzb 安全报告」→ "
-        '{"has_explicit_name":true,"title":"lzb安全报告","residual":"","confidence":0.9}\n'
-        "「帮我写一份安全报告 用我的模版」→ "
-        '{"has_explicit_name":false,"title":"","residual":"用我的模版","confidence":0.9}\n'
-        "「帮我写一份述职报告」→ "
-        '{"has_explicit_name":false,"title":"","residual":"","confidence":0.85}\n'
-        "「再给我写一份述职报告 三个章节 名字叫做lzb述职报告」→ "
-        '{"has_explicit_name":true,"title":"lzb述职报告","residual":"三个章节","confidence":0.92}\n'
-        "「作lzb述职报告 自动生成章节目录 三个大章节就可以」→ "
-        '{"has_explicit_name":false,"title":"","residual":"自动生成章节目录 三个大章节就可以","confidence":0.88}\n'
-        "\n"
-        f"## 不确定：has_explicit_name=false，confidence < {_MIN_CONFIDENCE}。"
-    )
-    dlg = format_dialogue_lines(dialogue_tail, limit=4, max_chars=200)
-    user = (
-        f"近期对话：\n" + ("\n".join(dlg) if dlg else "（无）") + "\n"
-        f"用户这句：{text[:1500]}"
-    )
-    try:
-        raw = str(invoke(system, user) or "").strip()
-    except Exception as error:
-        _log.debug("explicit doc name llm failed: %s", error)
-        return {}
-    data = _parse_classifier_json(raw)
-    if not data:
-        return {}
-    try:
-        confidence = float(data.get("confidence") or 0)
-    except (TypeError, ValueError):
-        confidence = 0.0
-    if confidence < _MIN_CONFIDENCE:
-        return {}
-    title = str(data.get("title") or "").strip()[:160]
-    has_name = bool(data.get("has_explicit_name")) and bool(title)
-    return {
-        "has_explicit_name": has_name,
-        "title": title if has_name else "",
-        "residual": str(data.get("residual") or "").strip()[:500],
-        "confidence": confidence,
-    }
-
-
-NO_MATCH_PATH_INTENTS: dict[str, str] = {
-    "use_own_sample": "用户要用自己的 Word/PDF 样板建蓝本、从样本提取目录",
-    "help_build_outline": "用户没有样板，希望先帮忙起草/生成可调的大纲目录（无蓝本）",
-    "skip_blueprint_freeform": "用户明确跳过蓝本，自己定题目或已有目录想法",
-    "match_blueprints_again": "用户还想在库里再找/换一批蓝本",
-    "none": "尚未选择或需要澄清",
-}
-
-
-def classify_no_match_path_llm(
-    message: str,
-    *,
-    topic: str = "",
-    dialogue_tail: list[dict[str, str]] | None = None,
-    invoke: InvokeFn | None,
-) -> dict[str, Any]:
-    """蓝本未匹配后的追问轮：用户选择后续路径。"""
-    text = (message or "").strip()
-    if not text or invoke is None:
-        return {}
-    from report_writing.chat.classifier_context import format_dialogue_lines
-
-    allowed = [k for k in NO_MATCH_PATH_INTENTS if k != "none"]
-    system = (
-        "角色：蓝本未匹配后的路径分类器。上一轮已告知库里没有特别对口的蓝本，"
-        "正在问用户接下来怎么走；结合近期对话与本轮话判断选择。\n"
-        "\n"
-        "## 输出\n"
-        '只返回 JSON：{"intent":"<id>","confidence":0.0}\n'
-        f"intent ∈ {{{', '.join(allowed + ['none'])}}}\n"
-        "\n"
-        "## 意图含义\n"
-        + _intent_lines(NO_MATCH_PATH_INTENTS)
-        + "\n\n"
-        f"## {_uncertain_line()}"
-    )
-    dlg = format_dialogue_lines(dialogue_tail, limit=4, max_chars=200)
-    user = (
-        f"最初题目：{(topic or '—')[:300]}\n"
-        f"近期对话：\n" + ("\n".join(dlg) if dlg else "（无）") + "\n"
-        f"用户本轮：{text[:2000]}"
-    )
-    try:
-        raw = str(invoke(system, user) or "").strip()
-    except Exception as error:
-        _log.debug("no match path llm failed: %s", error)
-        return {}
-    data = _parse_classifier_json(raw)
-    intent = str(data.get("intent") or "none").strip()
-    try:
-        confidence = float(data.get("confidence") or 0)
-    except (TypeError, ValueError):
-        confidence = 0.0
-    if intent == "none" or confidence < _MIN_CONFIDENCE or intent not in allowed:
-        return {}
-    return {"intent": intent, "confidence": confidence}
-
-
-ENTRY_ROUTING_INTENTS: dict[str, str] = {
-    "skip_blueprint": "不要/跳过蓝本，或直接写、无蓝本、自己定大纲；含「不用这个蓝本」「不要当前这份」",
-    "create_blueprint": (
-        "依据模版编写：对话里为当前文档上传样板、提取目录、分析要点（w* 副本，收录前不入蓝本库）；"
-        "含「我有样本/样板」「按样本写」「依据样本」；"
-        "不含仅说「生成目录/起草目录/搭个目录」（那是自动大纲，intent=none）"
-    ),
-    "save_freeform_blueprint": "把当前无蓝本写作收录到蓝本库/保存为蓝本（需已确认大纲）",
-    "match_blueprints": "找系统里已有蓝本、列蓝本、用库内模板写（用户未强调自带样本文件，也未点名要用哪一份）",
-    "explicit_select": "明确点名/指定要用哪一份蓝本（就用这份、选用「××」）；不是泛泛写某类报告",
-    "path_correction": "纠正理解：不是蓝本、走无蓝本、别匹配蓝本、不要当前这份蓝本",
-    "general_write": "描述要写什么但未提蓝本/模板、未点名选用哪一份",
-    "none": "与入口路由无关",
-}
-
-
-def classify_entry_routing_llm(
-    message: str,
-    *,
-    phase: str = "",
-    session_goal_brief: str = "",
-    dialogue_tail: list[dict[str, str]] | None = None,
-    focus_document_brief: str = "",
-    session_documents_brief: str = "",
-    invoke: InvokeFn | None,
-) -> dict[str, Any]:
-    """会话入口：跳过/创建蓝本/match 等，统一意图模型。"""
-    text = (message or "").strip()
-    if not text or invoke is None:
-        return {}
-
-    allowed = [k for k in ENTRY_ROUTING_INTENTS if k != "none"]
-    from report_writing.chat.classifier_context import format_dialogue_lines
-
-    lines = format_dialogue_lines(dialogue_tail, limit=6, max_chars=300)
-
-    system = (
-        "# Role\n你是报告写作对话的「入口意图」分类器。\n"
-        "# Task\n结合近期对话与已有文档判断本句入口意图。\n"
-        "# Inputs\n当前消息与近期对话。\n"
-        "\n"
-        "## 输出\n"
-        "只返回 JSON：\n"
-        '{"intent":"<id>","confidence":0.0,"blueprint_title":"","agent_may_select":false,"is_vague_write":false}\n'
-        f"intent ∈ {{{', '.join(allowed + ['none'])}}}\n"
-        "\n"
-        "## 意图含义\n"
-        + _intent_lines(ENTRY_ROUTING_INTENTS)
-        + "\n\n"
-        "## 规则\n"
-        "1) create_blueprint → blueprint_title 填报告/蓝本名（若有）。\n"
-        "2) explicit_select 仅当明确选用某份蓝本；此时 agent_may_select=true。\n"
-        "3) 「帮我写一份××报告」主题碰巧像蓝本标题 → match_blueprints 或 general_write，"
-        "is_vague_write=true，agent_may_select=false（系统不得代选）。\n"
-        "4) 配蓝本时「不用这个蓝本」→ skip_blueprint 或 path_correction。\n"
-        "5) 要素 ≠ 蓝本：只说查看/打开要素库 → none（交给总控）；"
-        "仅明确说蓝本/模板/样板库才 match。\n"
-        "6) 「生成目录」「起草目录」「目录大纲」「搭个目录」「重新生成目录」→ none"
-        "（不是 create_blueprint；未提上传样板时不要当创建蓝本）。\n"
-        "7) 「我有模版/参考模版写作/按模版写」→ create_blueprint（依据模版上传提取，不是选用库蓝本 match）。\n"
-        "8) 焦点文档 onboarding 待定：按 gaps 补缺的要素（定名/选路/match 顺序不固定）；开写前须 writing_doc_named。\n"
-        "\n"
-        "## 示例\n"
-        "我有样本，帮我写安全预评价报告 → create_blueprint（不是 match）。\n"
-        "我有模版参考模版写作 → create_blueprint。\n"
-        "帮我写一份安全报告 → general_write 或 match_blueprints，is_vague_write=true。\n"
-        "就用「安全报告」这份蓝本 → explicit_select，agent_may_select=true。\n"
-        "生成目录 → none。\n"
-        "看看有哪些要素 → none。\n"
-        "\n"
-        f"## {_uncertain_line()}"
-    )
-    user = (
-        f"阶段：{(phase or '—').strip()}\n"
-        f"已记住：{(session_goal_brief or '—')[:300]}\n"
-        f"当前焦点文档：{(focus_document_brief or '—').strip() or '—'}\n"
-        f"本会话已登记文档：\n{(session_documents_brief or '（无）').strip() or '（无）'}\n"
-        f"近期对话：\n" + ("\n".join(lines) if lines else "（无）") + "\n"
-        f"用户：{text[:2000]}"
-    )
-    try:
-        raw = str(invoke(system, user) or "").strip()
-    except Exception as error:
-        _log.debug("entry routing llm failed: %s", error)
-        return {}
-
-    data = _parse_classifier_json(raw)
-    intent = str(data.get("intent") or "none").strip()
-    try:
-        confidence = float(data.get("confidence") or 0)
-    except (TypeError, ValueError):
-        confidence = 0.0
-    if intent == "none" or confidence < _MIN_CONFIDENCE or intent not in allowed:
-        return {}
-
-    blueprint_title = str(data.get("blueprint_title") or "").strip()
-
-    if intent in {"match_blueprints", "general_write"} and classify_user_own_sample_llm(
-        text, dialogue_tail=dialogue_tail, invoke=invoke
-    ):
-        intent = "create_blueprint"
-        confidence = max(confidence, 0.86)
-        if not blueprint_title:
-            blueprint_title = extract_write_subject_title_llm(text, invoke=invoke)
-
-    return {
-        "intent": intent,
-        "confidence": confidence,
-        "blueprint_title": blueprint_title,
-        "agent_may_select": bool(data.get("agent_may_select")),
-        "is_vague_write": bool(data.get("is_vague_write")),
-    }
-
-
-def pick_blueprint_id_llm(
-    message: str,
-    matches: list,
-    *,
-    invoke: InvokeFn | None,
-) -> str:
-    """在 match 结果中由意图模型解析唯一 blueprint_id；无法确定返回空。"""
-    text = (message or "").strip()
-    if not text or not matches or invoke is None:
-        return ""
-
-    catalog = []
-    for item in matches[:20]:
-        catalog.append(
-            {
-                "id": str(getattr(item, "id", "") or "").strip(),
-                "title": str(getattr(item, "title", None) or getattr(item, "id", "") or "").strip(),
-                "description": str(getattr(item, "description", "") or "").strip()[:200],
-            }
-        )
-    catalog = [c for c in catalog if c["id"]]
-    if not catalog:
-        return ""
-
-    system = (
-        "角色：蓝本点名解析器。判断用户是否明确指定要用候选中的哪一份。\n"
-        "\n"
-        "## 输出\n"
-        '只返回 JSON：{"blueprint_id":"<id或空>","confidence":0.0}\n'
-        "\n"
-        "## 规则\n"
-        "仅点名候选标题或「就用这份/选用××」时填对应 id。\n"
-        "只说要写某类报告、主题碰巧接近 → blueprint_id 必须为空（不得代选）。\n"
-        f"\n候选：{json.dumps(catalog, ensure_ascii=False)}\n"
-        "\n"
-        f"## 不确定：blueprint_id 留空，confidence < {_MIN_CONFIDENCE}。"
-    )
-    user = f"用户说：{text[:1500]}"
-    try:
-        raw = str(invoke(system, user) or "").strip()
-    except Exception as error:
-        _log.debug("pick blueprint llm failed: %s", error)
-        return ""
-
-    data = _parse_classifier_json(raw)
-    try:
-        confidence = float(data.get("confidence") or 0)
-    except (TypeError, ValueError):
-        confidence = 0.0
-    if confidence < _MIN_CONFIDENCE:
-        return ""
-    bid = str(data.get("blueprint_id") or "").strip()
-    valid = {c["id"] for c in catalog}
-    return bid if bid in valid else ""
+# 口语选 Tool / 入口路径 / 定名 / 无蓝本动作 / 记住目标：一律总控 create_agent。
+# 本文件只保留：解卡回复、写/分析范围槽、向导 command、要素 payload 抽取。
 
 
 def extract_collect_element_name_llm(
@@ -1809,30 +919,14 @@ __all__ = [
     "InvokeFn",
     "WIZARD_COMMANDS",
     "classify_clarify_reply_llm",
-    "classify_doc_meta_line_llm",
     "classify_doc_name_reply_llm",
-    "classify_document_scope_llm",
-    "classify_entry_routing_llm",
-    "classify_explicit_doc_name_given_llm",
-    "classify_explicit_remember_goal_llm",
-    "classify_freeform_action_llm",
-    "classify_no_match_path_llm",
     "classify_study_scope_llm",
-    "classify_unclear_chat_llm",
-    "classify_user_own_sample_llm",
     "classify_wizard_action_llm",
     "classify_write_scope_llm",
-    "classify_writing_control_llm",
+    "classify_write_target_llm",
     "extract_collect_element_name_llm",
-    "extract_write_subject_title_llm",
     "infer_element_payload_llm",
-    "pick_blueprint_id_llm",
     "resolve_wizard_action",
     "wizard_action_for_command",
-    "WRITING_CONTROL_TOOLS",
-    "SESSION_GOAL_SIGNAL_INTENTS",
-    "FREEFORM_ACTION_INTENTS",
-    "USER_OWN_SAMPLE_INTENTS",
-    "NO_MATCH_PATH_INTENTS",
-    "ENTRY_ROUTING_INTENTS",
+    "WRITE_TARGET_INTENTS",
 ]

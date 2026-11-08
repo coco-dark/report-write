@@ -172,19 +172,8 @@ def test_chapter_revise_blocks_start_writing_in_plan(tmp_path: Path):
 
 def test_llm_high_confidence_force_new_promotes_from_ask():
     session = _named_session("述职报告")
-
-    def invoke(system: str, user: str) -> str:
-        assert "文档作用域" in system
-        return json.dumps(
-            {
-                "action": "ask",
-                "title": "AI应用对市场的影响",
-                "confidence": 0.9,
-            }
-        )
-
     scope = resolve_document_scope(
-        session, "帮我写一份关于ai应用对于市场的影响", invoke=invoke
+        session, "帮我写一份关于ai应用对于市场的影响", invoke=None
     )
     assert scope.get("action") == "ask"
     assert scope.get("need_clarify") is True
@@ -347,3 +336,91 @@ def test_force_new_during_wizard_study_leaves_old_task(tmp_path: Path):
     assert str(session.task_id or "") != old_id
     assert str(session.freeform.get("focus_document_key") or "") != f"task:{old_id}"
     assert not (session.freeform or {}).get("blueprint_wizard")
+
+
+def test_document_scope_clarify_clears_study_triggers():
+    from report_writing.chat.session_runtime import (
+        STUDY_KICK_ARM_KEY,
+        arm_study_kick_this_turn,
+        study_kick_armed_this_turn,
+    )
+
+    session = _named_session("1108安全报告")
+    session.freeform = {
+        **(session.freeform or {}),
+        "blueprint_wizard": {
+            "step": "study",
+            "trigger_begin_study": True,
+            "trigger_chapter_study": ["construction_scale"],
+            "chapter_study_keys": ["construction_scale"],
+            STUDY_KICK_ARM_KEY: True,
+        },
+    }
+    arm_study_kick_this_turn(session)
+    assert study_kick_armed_this_turn()
+    build_document_scope_clarify(
+        session, message="司法鉴定书", topic_hint="司法鉴定书"
+    )
+    assert (get_pending(session) or {}).get("source") == "document_scope"
+    wiz = dict((session.freeform or {}).get("blueprint_wizard") or {})
+    assert not wiz.get("trigger_begin_study")
+    assert not wiz.get("trigger_chapter_study")
+    assert not wiz.get("chapter_study_keys")
+    assert not study_kick_armed_this_turn(wiz)
+
+
+def test_re_study_blocked_while_document_scope_pending(tmp_path: Path):
+    from report_writing.chat.tool_dispatch import execute_dispatch_tool
+
+    session = _named_session("1108安全报告")
+    build_document_scope_clarify(
+        session, message="司法鉴定书", topic_hint="司法鉴定书"
+    )
+    hit = execute_dispatch_tool(
+        tmp_path,
+        session,
+        {"tool": "re_study_chapters", "args": {"chapter_keys": ["construction_scale"]}},
+        "分析第2.2章",
+        invoke=None,
+    )
+    assert hit is not None
+    reply, cards, _ = hit
+    assert "新开" in (reply or "") or "改" in (reply or "") or "继续" in (reply or "")
+    assert any(getattr(c, "type", "") == "intent_clarify" for c in cards)
+    wiz = dict((session.freeform or {}).get("blueprint_wizard") or {})
+    assert not wiz.get("trigger_chapter_study")
+
+
+def test_oral_document_scope_gate_skips_agent(tmp_path: Path):
+    from report_writing.agents.chat_control import run_chat_control
+    from report_writing.agents.scripted import ScriptedChatModel
+    from langchain_core.messages import AIMessage, BaseMessage
+
+    class _Boom(ScriptedChatModel):
+        role: str = "boom_scope"
+
+        def decide(self, messages: list[BaseMessage]) -> AIMessage:
+            raise AssertionError("document_scope gate should skip agent")
+
+    session = _named_session("1108安全报告")
+    session.phase = ChatPhase.WRITING.value
+    msg = "帮我写一份司法鉴定书"
+    state = ChatControlState(
+        home=tmp_path,
+        session=session,
+        last_user_message=msg,
+        invoke=None,
+    )
+    user_text = json.dumps(
+        {"action": "", "message": msg, "payload": {}},
+        ensure_ascii=False,
+    )
+    reply = run_chat_control(
+        model=_Boom(),
+        state=state,
+        user_text=user_text,
+        system_prompt="",
+    )
+    assert (get_pending(session) or {}).get("source") == "document_scope"
+    assert "司法鉴定书" in (reply or "") or "1108" in (reply or "")
+    assert any(getattr(c, "type", "") == "intent_clarify" for c in state.cards)

@@ -60,7 +60,8 @@ INSTRUCTIONS = """# Role
 | 字段 | 作用 | 用法 |
 | describes | 章节说明 | 约束风格、组成顺序、描述方式、排版、邻章边界。其中「如：…」是通例，不是正文用词。禁止把本段贴进正文。 |
 | points / point_write_plan | 写作要点 | 按顺序逐条覆盖。有 element_value 时写入该块事实。不要把要点原文当小标题。 |
-| element_results | 章节要素 | 事实来源。原文可能已按本章要点摘录；只使用材料中出现的内容，不要补全未给出的原文。 |
+| element_results | 章节要素 | 配置窗填写的事实来源。原文可能已按本章要点摘录；只使用材料中出现的内容，不要补全未给出的原文。 |
+| content_basis / dialogue_content_basis | 对话内容依据 | 用户在对话里直接说明的原文。与要素同为事实来源；不要据此新建或改写要素槽。 |
 | aux_prompt | 补充提示词 | 仅当用户手填且非空时生效，是写法/体裁硬约束。 |
 | reference_text | 参考正文 | 学写法与版式；fixed 则原文输出。禁止把样板实例当本项目事实。 |
 | content_blocks | 版式块 | 学表头、列名与版式。表格用完整 <table>，文字用 <p>，图片只占位。行名以 describes 与要点为准。 |
@@ -73,14 +74,14 @@ INSTRUCTIONS = """# Role
 1. aux_prompt（写法硬约束。其中的工程名、投资额等不当事实）
 2. comments（上一轮检查缺陷必须改掉）
 3. describes + points / point_write_plan
-4. element_value 与已采纳 evidence（事实）
+4. element_value、dialogue_content_basis 与已采纳 evidence（事实）
 5. reference_text 与 content_blocks（写法与版式）
 
 # Strategy
 以 payload.writing_strategy 为准，五种不可混用：source_only / template_fill / hybrid / auto_generate / fixed。细则见随后策略段。
 - fixed：按 reference_text 原文输出，不改写。
 - template_fill：只替换 {{槽}}，骨架不改，缺槽留空。
-- source_only / hybrid：骨架只学写法；事实只来自证据或要素。
+- source_only / hybrid：骨架只学写法；事实只来自证据、要素或对话内容依据。
 - auto_generate：对照写法与版式，严禁整段照抄；无证据也要写完整章。
 
 # Constraints
@@ -253,6 +254,11 @@ def run_write(
         },
     )
     packed_plan = pack_point_write_plan(point_write_plan, queries=queries, packed_elements=packed_elements)
+    packed_basis = [
+        str(x).strip()
+        for x in (getattr(requirement, "content_basis", None) or [])
+        if str(x).strip()
+    ]
     ref_for_model, _ = excerpt_by_queries(reference_text, queries, WRITE_REF_BUDGET)
     writing_materials = assemble_write_materials(
         requirement,
@@ -260,6 +266,7 @@ def run_write(
         reference_text=ref_for_model,
         aux_prompt=aux_prompt,
         element_results=packed_elements,
+        content_basis=packed_basis,
     )
     payload = {
         "doc_category": doc_cat,
@@ -279,6 +286,7 @@ def run_write(
         ),
         "fixed_output": fixed_output,
         "element_results": packed_elements,
+        "content_basis": packed_basis,
         "point_write_plan": packed_plan,
         "points": [] if fixed_output else requirement.points,
         "content_blocks": [] if fixed_output else content_blocks,

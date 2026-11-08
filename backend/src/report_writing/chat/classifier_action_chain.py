@@ -43,21 +43,6 @@ WIZARD_POLICY = ActionOrderPolicy(
     inject_if_missing=(),
 )
 
-WRITING_CONTROL_POLICY = ActionOrderPolicy(
-    pipeline_rank={
-        "remember_writing_goal": 10,
-        "open_element_library": 15,
-        "open_blueprint_library": 15,
-        "open_knowledge": 16,
-        "associate_elements": 17,
-        "dissociate_chapter_element": 18,
-        "remove_document_element": 18,
-        "collect_to_element_library": 19,
-        "add_chapter_element": 20,
-        "submit_points": 30,
-    },
-)
-
 FREEFORM_POLICY = ActionOrderPolicy(
     pipeline_rank={
         "help_draft": 5,

@@ -136,28 +136,13 @@ def message_skips_clarify(
     invoke=None,
     session: ChatSession | None = None,
 ) -> bool:
-    """「类型｜标题」元信息行可跳过入口澄清。有 invoke 走分类器；否则分隔符结构兜底。"""
+    """「类型｜标题」结构行可跳过入口澄清。口语定名归总控。"""
+    _ = (invoke, session)
     if source not in {"entry", "control", ""}:
         return False
     text = (message or "").strip()
     if not text:
         return False
-    if invoke is not None:
-        try:
-            from report_writing.chat.classifier_context import pack_classifier_context
-            from report_writing.chat.clarify_llm import classify_doc_meta_line_llm
-
-            ctx = pack_classifier_context(session) if session is not None else {}
-            hit = classify_doc_meta_line_llm(
-                text,
-                dialogue_tail=list(ctx.get("dialogue_tail") or []),
-                focus_document_brief=str(ctx.get("focus_document_brief") or ""),
-                invoke=invoke,
-            ) or {}
-            if hit.get("doc_title") or hit.get("doc_category"):
-                return True
-        except Exception:
-            pass
     from report_writing.chat.session_snapshot import looks_like_freeform_meta_line
 
     return looks_like_freeform_meta_line(text)
@@ -956,32 +941,11 @@ def try_handle_pending_message(
         clear_pending(session)
         return _spec_from_option(pending, exact)
 
-    # 2) 「类型｜标题」元信息行：有模型走分类器；无模型才用分隔符结构兜底
-    meta_hit = False
+    # 2) 「类型｜标题」结构行
+    from report_writing.chat.session_snapshot import looks_like_freeform_meta_line
+
+    meta_hit = looks_like_freeform_meta_line(message)
     meta_title = text
-    if invoke is not None and text:
-        try:
-            from report_writing.chat.classifier_context import pack_classifier_context
-            from report_writing.chat.clarify_llm import classify_doc_meta_line_llm
-
-            ctx = pack_classifier_context(session)
-            judged_meta = classify_doc_meta_line_llm(
-                text,
-                dialogue_tail=list(ctx.get("dialogue_tail") or []),
-                focus_document_brief=str(ctx.get("focus_document_brief") or ""),
-                invoke=invoke,
-            ) or {}
-            if judged_meta.get("doc_title") or judged_meta.get("doc_category"):
-                meta_hit = True
-                cat = str(judged_meta.get("doc_category") or "").strip()
-                title = str(judged_meta.get("doc_title") or "").strip()
-                meta_title = f"{cat}｜{title}".strip("｜") if cat or title else text
-        except Exception:
-            meta_hit = False
-    if not meta_hit:
-        from report_writing.chat.session_snapshot import looks_like_freeform_meta_line
-
-        meta_hit = looks_like_freeform_meta_line(message)
 
     if meta_hit:
         if source in {"entry", "control"}:
@@ -1190,6 +1154,28 @@ def try_handle_pending_message(
     return None
 
 
+def sequences_with_descendants(task: Any, sequences: list[str]) -> list[str]:
+    """口语点名的序号里，哪些在大纲中确有下属（不含 structure_only）。"""
+    if task is None or not getattr(task, "outline", None):
+        return []
+    chapters = list(getattr(task.outline, "chapters", None) or [])
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in sequences:
+        top = str(raw or "").strip().replace("．", ".")
+        if not top or top in seen:
+            continue
+        for node in chapters:
+            if bool(getattr(node, "structure_only", False)):
+                continue
+            seq = str(getattr(node, "sequence", "") or "").strip().replace("．", ".")
+            if seq.startswith(top + "."):
+                seen.add(top)
+                out.append(top)
+                break
+    return out
+
+
 def study_scope_needs_clarify(
     task: Any,
     message: str,
@@ -1197,31 +1183,13 @@ def study_scope_needs_clarify(
     *,
     resolved_scope: str = "",
 ) -> bool:
-    """学习范围：大纲该章有下属、且大脑还没给出 whole/children/self。"""
-    if not sequences:
+    """仅对话点名、且该序号确有下属、大脑还没给出 whole/children/self 时追问。
+
+    文档窗勾选（study_scope=selected）不走这里。
+    """
+    if str(resolved_scope or "").strip() in {"whole", "children", "self", "selected"}:
         return False
-    if str(resolved_scope or "").strip() in {"whole", "children", "self"}:
-        return False
-    if task is None or not getattr(task, "outline", None):
-        return False
-    want = {str(s).strip() for s in sequences if str(s).strip()}
-    if not want:
-        return False
-    chapters = list(getattr(task.outline, "chapters", None) or [])
-    for top in want:
-        has_child = False
-        for node in chapters:
-            if bool(getattr(node, "structure_only", False)):
-                continue
-            seq = str(getattr(node, "sequence", "") or "").strip()
-            if not seq:
-                continue
-            if seq.startswith(top + "."):
-                has_child = True
-                break
-        if has_child:
-            return True
-    return False
+    return bool(sequences_with_descendants(task, sequences))
 
 
 def build_study_scope_clarify(
@@ -1229,9 +1197,12 @@ def build_study_scope_clarify(
     *,
     sequences: list[str],
     study_message: str,
+    task: Any = None,
 ) -> tuple[str, list[ChatCard]]:
     tops = [str(s).strip() for s in sequences if str(s).strip()]
-    top_hint = "、".join(f"第{t}章" for t in tops[:3]) or "这一章"
+    with_kids = sequences_with_descendants(task, tops) if task is not None else tops
+    named = with_kids or tops
+    top_hint = "、".join(f"第{t}章" for t in named[:3]) or "这一章"
     question = (
         f"{top_hint}下面还有子章节。你是只要本章、分析整章（含下属），还是只要下面的子章节？"
     )
@@ -1313,7 +1284,7 @@ def build_study_method_clarify(
     label = (chapter_label or "").strip() or "本章"
     bound_id = "sample" if has_sample else "auto"
     bound_label = "依据样本分析" if has_sample else "自动分析"
-    question = f"重新分析「{label}」要用哪种方式？"
+    question = f"分析「{label}」要用哪种方式？"
     return begin_clarify(
         session,
         source="study_method",
@@ -1393,7 +1364,7 @@ def build_ask_intent_clarify(
     home: Path | None = None,
     emit=None,
 ) -> tuple[str, list[ChatCard]]:
-    """大脑意图不清：用模型结合对话生成追问；失败则按会话状态给有限选项。"""
+    """意图不清：按会话状态给有限选项，不另调整句分类。"""
     text = (message or "").strip()
     from report_writing.chat.session_documents import (
         focus_bound_blueprint_id,
@@ -1461,66 +1432,14 @@ def build_ask_intent_clarify(
             invoke=invoke,
         )
     if focus_needs_outline(session, home):
-        if ep == "template":
-            return (
-                "目录还没定。请在上方的依据样本向导里上传样板并提取目录，或跟我说「提取目录」。",
-                [],
-            )
-        return begin_clarify(
+        return ask_outline_in_dialogue(
             session,
-            source="control",
-            question="目录还没定。要我按题目生成章节大纲，还是你直接粘贴目录？",
-            options=[
-                {
-                    "id": "generate_outline",
-                    "label": "帮我生成目录大纲",
-                    "slots": {"tool": "submit_outline", "args": {"regenerate": True}},
-                },
-                {
-                    "id": "paste_outline",
-                    "label": "我来粘贴目录",
-                    "slots": {"tool": "ask_intent"},
-                },
-            ],
-            candidate={
-                "kind": "control_tool",
-                "name": "ask_intent",
-                "payload": {"message": text[:500]},
-            },
-            phase_hint="control",
+            message=text,
+            invoke=invoke,
+            template_path=ep == "template",
         )
 
     judged: dict[str, Any] = {}
-    if invoke is not None and not (question and options):
-        from report_writing.chat.dialogue import format_full_dialogue
-        from report_writing.chat.clarify_llm import classify_unclear_chat_llm
-        from report_writing.chat.session_state import active_blueprint_wizard
-        from report_writing.chat.react_speed import control_dialogue_max_turns
-
-        wiz = dict(active_blueprint_wizard(session) or {})
-        from report_writing.chat.classifier_context import pack_classifier_context
-
-        ctx = pack_classifier_context(
-            session, max_turns=control_dialogue_max_turns()
-        )
-        focus_bid = focus_bound_blueprint_id(session)
-        judged = classify_unclear_chat_llm(
-            text,
-            phase=str(ctx.get("phase") or session.phase or ""),
-            blueprint_id=str(
-                focus_bid or wiz.get("blueprint_id") or ctx.get("blueprint_id") or ""
-            ),
-            wizard_step=str(wiz.get("step") or ""),
-            dialogue_tail=list(ctx.get("dialogue_tail") or [])
-            or format_full_dialogue(
-                session, max_turns=control_dialogue_max_turns(), focus_only=True
-            ),
-            focus_document_brief=str(ctx.get("focus_document_brief") or ""),
-            session_documents_brief=str(ctx.get("session_documents_brief") or ""),
-            session_goal_brief=str(ctx.get("session_goal_brief") or ""),
-            task_id=str(ctx.get("task_id") or session.task_id or ""),
-            invoke=invoke,
-        ) or {}
     q = (question or str(judged.get("question") or "")).strip()
     raw_opts = options if options is not None else list(judged.get("options") or [])
     clean: list[dict[str, Any]] = []
@@ -1709,13 +1628,6 @@ def build_document_name_clarify(
                 title_hint=tip,
                 invoke=invoke,
             )
-    if not tip and msg and invoke is not None:
-        try:
-            from report_writing.chat.clarify_llm import extract_write_subject_title_llm
-
-            tip = extract_write_subject_title_llm(msg, invoke=invoke) or tip
-        except Exception:
-            tip = tip
     if not tip:
         tip = quick_title_from_write_message(msg)
     # 「用我的模版」未起名：题材不是文档名；清掉「就叫××」建议，改为开放起名
@@ -1749,16 +1661,18 @@ def build_document_name_clarify(
         )
         question = (
             f"先给这份文档起个名字吧。听你的意思可以叫「{tip}」——"
-            "点选确认，或直接发你想用的名字。"
+            "点一下确认，或直接发你想用的名字。"
         )
     else:
         if message_wants_own_template(msg):
             question = (
-                "可以，按你的模版来写。先给这份文档起个名字吧（直接说题目即可）；"
-                "定名后请上传样板 Word 或 PDF。"
+                "可以，按你的模版来写。先给这份文档起个名字吧，直接说题目就行；"
+                "定名后再上传样板 Word 或 PDF。"
             )
         else:
-            question = "先给这份文档起个名字吧。直接告诉我文档叫什么就行（口语或「类型｜标题」都可以）。"
+            question = (
+                "先给这份文档起个名字吧。直接说题目就行，口语或「类型｜标题」都可以。"
+            )
     return begin_clarify(
         session,
         source="doc_name",
@@ -1774,6 +1688,167 @@ def build_document_name_clarify(
         },
         phase_hint="doc_name",
     )
+
+
+def _sync_clarify_question(session: ChatSession, cards: list[ChatCard], question: str) -> None:
+    text = (question or "").strip()
+    if not text:
+        return
+    for card in cards or []:
+        if str(getattr(card, "type", "") or "") != "intent_clarify":
+            continue
+        payload = dict(getattr(card, "payload", None) or {})
+        payload["question"] = text
+        card.payload = payload
+    pending = dict((session.freeform or {}).get(FREEFORM_KEY) or {})
+    if pending:
+        pending["question"] = text
+        last = dict((session.freeform or {}).get("last_intent_clarify") or {})
+        if last:
+            last["question"] = text
+        session.freeform = {
+            **(session.freeform or {}),
+            FREEFORM_KEY: pending,
+            "last_intent_clarify": last or pending,
+        }
+
+
+def polish_clarify_question(
+    session: ChatSession,
+    reply: str,
+    cards: list[ChatCard],
+    *,
+    invoke=None,
+    message: str = "",
+) -> str:
+    """把澄清问句改成口语；测试/无模型时保持原文。"""
+    draft = (reply or "").strip()
+    if not draft or invoke is None:
+        return draft
+    from report_writing.chat.helpers import polish_chat_reply
+
+    polished = polish_chat_reply(
+        invoke=invoke,
+        user_message=message,
+        draft=draft,
+        phase=str(session.phase or ""),
+        session=session,
+        cards=None,
+        force=True,
+    )
+    text = (polished or "").strip() or draft
+    _sync_clarify_question(session, cards, text)
+    return text
+
+
+def ask_write_meta_in_dialogue(
+    session: ChatSession,
+    *,
+    message: str = "",
+    title_hint: str = "",
+    invoke=None,
+    polish_invoke=None,
+    home: Path | None = None,
+    emit=None,
+    want_outline: bool = False,
+) -> tuple[str, list[ChatCard]]:
+    """缺题目：落槽并交给总控开口。invoke 仅用于从原话抽题目，不写问句。"""
+    from report_writing.chat.session_documents import (
+        mark_focus_entry_path,
+        mark_focus_freeform_mode,
+        stash_pending_entry,
+    )
+
+    session.phase = ChatPhase.FREEFORM_ASK.value
+    msg = (message or "").strip()
+    tip = (title_hint or "").strip()
+    if want_outline:
+        mark_focus_entry_path(session, "freeform")
+        mark_focus_freeform_mode(session, "auto_outline")
+        ff = dict(session.freeform or {})
+        snap = dict(ff.get("onboarding_gaps_snapshot") or {})
+        residual = [
+            str(item).strip()
+            for item in (snap.get("residual_intents") or [])
+            if str(item).strip()
+        ]
+        if "generate_outline" not in residual:
+            residual.append("generate_outline")
+        snap["residual_intents"] = residual
+        snap["declared_freeform_mode"] = str(
+            snap.get("declared_freeform_mode") or "auto_outline"
+        )
+        ff["onboarding_gaps_snapshot"] = snap
+        session.freeform = ff
+    if msg or tip:
+        stash_pending_entry(session, message=msg, title=tip)
+    reply, cards = build_document_name_clarify(
+        session,
+        message=msg,
+        title_hint=tip,
+        invoke=invoke,
+        home=home,
+        emit=emit,
+        follow_entry=False,
+    )
+    return reply, list(cards or [])
+
+
+def ask_outline_in_dialogue(
+    session: ChatSession,
+    *,
+    message: str = "",
+    invoke=None,
+    template_path: bool = False,
+) -> tuple[str, list[ChatCard]]:
+    """缺目录时口语追问生成/粘贴，而不是固定拒绝句。"""
+    session.phase = ChatPhase.FREEFORM_OUTLINE.value
+    msg = (message or "").strip()
+    if template_path:
+        question = "目录还没定。在上方依据样本向导里上传样板并提取目录就行，也可以跟我说「提取目录」。"
+        reply, cards = begin_clarify(
+            session,
+            source="control",
+            question=question,
+            options=[
+                {
+                    "id": "extract_outline",
+                    "label": "提取目录",
+                    "slots": {"tool": "blueprint_wizard", "args": {"command": "extract_outline"}},
+                }
+            ],
+            candidate={
+                "kind": "control_tool",
+                "name": "ask_intent",
+                "payload": {"message": msg[:500]},
+            },
+            phase_hint="control",
+        )
+    else:
+        reply, cards = begin_clarify(
+            session,
+            source="control",
+            question="目录还没定。要我按题目生成大纲，还是你贴一份过来？",
+            options=[
+                {
+                    "id": "generate_outline",
+                    "label": "帮我生成目录大纲",
+                    "slots": {"tool": "submit_outline", "args": {"regenerate": True}},
+                },
+                {
+                    "id": "paste_outline",
+                    "label": "我来粘贴目录",
+                    "slots": {"tool": "ask_intent"},
+                },
+            ],
+            candidate={
+                "kind": "control_tool",
+                "name": "ask_intent",
+                "payload": {"message": msg[:500]},
+            },
+            phase_hint="control",
+        )
+    return reply, list(cards or [])
 
 
 def build_entry_branch_clarify(
@@ -1828,6 +1903,9 @@ def pending_document_scope_reply(session: ChatSession) -> tuple[str, list[ChatCa
     pending = get_pending(session)
     if not pending or str(pending.get("source") or "") != "document_scope":
         return None
+    from report_writing.chat.session_runtime import suppress_study_kick_for_document_scope
+
+    suppress_study_kick_for_document_scope(session)
     question = str(pending.get("question") or "").strip()
     opts = list(pending.get("options") or [])
     if not question or not opts:
@@ -1921,7 +1999,7 @@ def build_document_scope_clarify(
             "slots": {"document_scope_action": "continue"},
         }
     )
-    return begin_clarify(
+    reply, cards = begin_clarify(
         session,
         source="document_scope",
         question=question,
@@ -1937,6 +2015,11 @@ def build_document_scope_clarify(
         },
         phase_hint="document_scope",
     )
+    # 作用域未定时禁止同轮带着分析自驱；否则前端会一边挂澄清卡一边开跑 study
+    from report_writing.chat.session_runtime import suppress_study_kick_for_document_scope
+
+    suppress_study_kick_for_document_scope(session)
+    return reply, cards
 
 
 def _start_template_wizard_now(
@@ -2568,29 +2651,9 @@ def build_entry_path_clarify(
         # 路径识别优先残余，否则用原「创建蓝本/匹配」句；勿把纯定名短句当路径
         msg_for_path = residual or original_write
     else:
-        # 定名/新开：优先 LLM（说法不固定）；正则只作无模型兜底
-        explicit = ""
+        # 定名/新开：结构提取；口语起名归总控 set_session_meta
         residual_from_name = ""
-        if invoke is not None and msg:
-            from report_writing.chat.classifier_context import pack_classifier_context
-            from report_writing.chat.clarify_llm import (
-                classify_explicit_doc_name_given_llm,
-                extract_write_subject_title_llm,
-            )
-
-            ctx = pack_classifier_context(session)
-            judged_name = classify_explicit_doc_name_given_llm(
-                msg,
-                dialogue_tail=list(ctx.get("dialogue_tail") or []),
-                invoke=invoke,
-            ) or {}
-            if judged_name.get("has_explicit_name") and str(judged_name.get("title") or "").strip():
-                explicit = str(judged_name.get("title") or "").strip()
-                residual_from_name = str(judged_name.get("residual") or "").strip()
-            if not tip and not explicit:
-                tip = extract_write_subject_title_llm(msg, invoke=invoke) or tip
-        if not explicit:
-            explicit = explicit_doc_title_from_message(msg)
+        explicit = explicit_doc_title_from_message(msg)
         if not tip and not explicit:
             tip = quick_title_from_write_message(msg)
         tip = tip or explicit
@@ -3015,11 +3078,10 @@ def _clear_entry_tool_from_message(
     session: ChatSession | None = None,
     invoke=None,
 ) -> str:
-    """本句是否已明确入口工具；有则返回 match_blueprints / begin_blueprint_wizard / skip_blueprint。"""
+    """结构短语提示入口工具；口语选路归总控，不再整句 LLM 路由。"""
     text = (message or "").strip()
-    if not text or invoke is None:
+    if not text:
         return ""
-    # 「生成目录 / 起草大纲」不是创建蓝本；交给入口三选或 submit_outline
     try:
         from report_writing.chat.freeform_intent import utterance_mentions_generate_outline
 
@@ -3027,29 +3089,18 @@ def _clear_entry_tool_from_message(
             return ""
     except Exception:
         pass
-    try:
-        from report_writing.chat.classifier_context import pack_classifier_context
-        from report_writing.chat.clarify_llm import classify_entry_routing_llm
+    from report_writing.chat.entry_intent import (
+        is_create_blueprint_intent,
+        is_skip_blueprint_intent,
+        message_explicitly_requests_blueprint,
+    )
 
-        ctx = pack_classifier_context(session) if session is not None else {}
-        hit = classify_entry_routing_llm(
-            text,
-            phase=str(ctx.get("phase") or (session.phase if session else "") or ""),
-            session_goal_brief=str(ctx.get("session_goal_brief") or ""),
-            dialogue_tail=list(ctx.get("dialogue_tail") or []),
-            focus_document_brief=str(ctx.get("focus_document_brief") or ""),
-            session_documents_brief=str(ctx.get("session_documents_brief") or ""),
-            invoke=invoke,
-        ) or {}
-    except Exception:
-        return ""
-    intent = str(hit.get("intent") or "").strip()
-    if intent in {"match_blueprints", "explicit_select"}:
-        return "match_blueprints"
-    if intent == "create_blueprint":
-        return "begin_blueprint_wizard"
-    if intent in {"skip_blueprint", "path_correction"}:
+    if is_skip_blueprint_intent(text, invoke=invoke, session=session):
         return "skip_blueprint"
+    if is_create_blueprint_intent(text, invoke=invoke, session=session):
+        return "begin_blueprint_wizard"
+    if message_explicitly_requests_blueprint(text, invoke=invoke, session=session):
+        return "match_blueprints"
     return ""
 
 
@@ -3528,7 +3579,9 @@ def execute_clarify_spec(
         from report_writing.chat.resource_actions import execute_wizard_command
 
         study_message = str(payload.get("study_message") or message or "").strip()
-        scope = str(slots.get("study_scope") or "").strip()
+        scope = str(
+            slots.get("study_scope") or payload.get("study_scope") or ""
+        ).strip()
         study_method = str(slots.get("study_method") or payload.get("study_method") or "").strip()
         study_text = str(payload.get("study_text") or slots.get("study_text") or "").strip()
         _emit_process(emit, "好，按你刚确认的来…")

@@ -57,26 +57,8 @@ def build_no_match_path_clarify(
     from report_writing.domain.models import ChatCard
 
     tip = (topic or message or "").strip()
-    question = ""
-    if invoke is not None:
-        from report_writing.chat.classifier_context import pack_classifier_context
-        from report_writing.chat.clarify_llm import classify_unclear_chat_llm
-
-        ctx = pack_classifier_context(session)
-        judged = classify_unclear_chat_llm(
-            tip or "库里没有对口蓝本，接下来怎么写？",
-            phase=str(session.phase or "") or str(ctx.get("phase") or ""),
-            blueprint_id="",
-            wizard_step="",
-            dialogue_tail=list(ctx.get("dialogue_tail") or []),
-            focus_document_brief=str(ctx.get("focus_document_brief") or ""),
-            session_documents_brief=str(ctx.get("session_documents_brief") or ""),
-            session_goal_brief=str(ctx.get("session_goal_brief") or ""),
-            invoke=invoke,
-        ) or {}
-        question = str(judged.get("question") or "").strip()
-    if not question:
-        question = _fallback_no_match_question(tip)
+    del invoke
+    question = _fallback_no_match_question(tip)
     reply, cards = build_entry_branch_clarify(
         session,
         message=tip,

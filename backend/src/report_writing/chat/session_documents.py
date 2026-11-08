@@ -197,6 +197,12 @@ def should_update_title_in_place(
             ):
                 return False
         return True
+    # 「名字改为X / 改名叫X」：同一份文档改展示名，勿另开槽
+    if msg and message_requires_structured_rename_title(msg):
+        if not message_looks_like_new_write_topic(msg) and not message_wants_new_document_strong(
+            msg
+        ):
+            return True
     ob = focus_onboarding(session)
     if not ob.get("name_confirmed"):
         return True
@@ -308,6 +314,11 @@ def should_mint_new_document_slot(
     msg = (message or "").strip()
     if should_update_title_in_place(session, entry_title, wanted, message=msg):
         return False
+    if msg and message_requires_structured_rename_title(msg):
+        if not message_looks_like_new_write_topic(msg) and not message_wants_new_document_strong(
+            msg
+        ):
+            return False
     if msg:
         scope = resolve_document_scope(session, msg, title_hint=wanted)
         if scope.get("force_new") or str(scope.get("action") or "") == "force_new":
@@ -603,6 +614,10 @@ def apply_focused_document_title(
         persist_tid = wid
     elif tid and is_writing_task_id(tid):
         persist_tid = tid
+    if not persist_tid and bid:
+        persist_tid = _writing_copy_id_for_blueprint(session, bid)
+        if persist_tid:
+            wid = persist_tid
     # tid 若是蓝本 id：只更新登记表，不写蓝本 task.json
 
     if home is not None and persist_tid:
@@ -624,6 +639,32 @@ def apply_focused_document_title(
                     pass
         except Exception:
             pass
+
+    focus_key = normalize_document_registry_key(focus or "")
+    if focus_key and focus_key in session_documents_map(session):
+        prev = dict(session_documents_map(session).get(focus_key) or {})
+        prev_kind = str(prev.get("kind") or kind or "").strip()
+        if focus_key.startswith("bp:") or focus_key.startswith("doc:"):
+            prev_kind = prev_kind or "blueprint"
+        use_tid = persist_tid or str(prev.get("task_id") or tid or "").strip()
+        use_bid = str(prev.get("blueprint_id") or bid or "").strip()
+        use_wid = wid or persist_tid or str(prev.get("writing_task_id") or "").strip()
+        k = prev_kind if prev_kind in {"outline", "writing", "task", "blueprint"} else (
+            "blueprint" if use_bid and (not use_tid or use_tid == use_bid or is_blueprint_task_id(use_tid))
+            else "writing"
+        )
+        upsert_session_document(
+            session,
+            kind=k,
+            task_id=use_tid or use_bid,
+            blueprint_id=use_bid,
+            writing_task_id=use_wid or None,
+            title=name,
+            registry_key=focus_key,
+            clear_blueprint_id=writing_path == "freeform" and not collected,
+        )
+        set_focus_document_key(session, focus_key)
+        return name
 
     if bid and (
         kind == "blueprint"
@@ -1833,6 +1874,10 @@ def user_wants_existing_blueprint_match(
     bound = str(getattr(session, "blueprint_id", "") or "").strip() if session else ""
     if bound and "使用" in compact and message_looks_like_new_write_topic(msg):
         return True
+    if session is not None and (
+        is_writing_document_named(session) or focus_has_active_writing_context(session)
+    ):
+        return False
     try:
         from report_writing.chat.clarify_flow import _clear_entry_tool_from_message
 
@@ -2463,7 +2508,7 @@ def confirm_writing_document_name(
         ):
             return ""
     cat = (category or "").strip()
-    if not apply_to_focus or home is None:
+    if not apply_to_focus:
         ff = dict(session.freeform or {})
         ff["title"] = name
         if cat:
@@ -2541,11 +2586,6 @@ def confirm_writing_document_name(
         pass
     stash_pending_entry(session, message=message or name, title=name)
     mark_focus_name_confirmed(session)
-    if not tid and not bid:
-        return name
-    if entry_title and _titles_conflict(entry_title, name):
-        apply_focused_document_title(session, name, home=home, category=cat)
-        return name
     apply_focused_document_title(session, name, home=home, category=cat)
     return name
 
@@ -3789,10 +3829,11 @@ _STRONG_NEW_DOC_HINTS = (
     "另外一份",
     "重写一份",
     "重新写一份",
-    "重写帮我写",
-    "重新帮我写",
+    "重写帮我写一份",
+    "重新帮我写一份",
+    "重新帮我写一篇",
     "从头写一份",
-    "从头帮我写",
+    "从头帮我写一份",
     "重新开写",
     "重开一份",
     "再开一个文档",
@@ -3822,9 +3863,6 @@ _WEAK_REWRITE_HINTS = (
 _CHAPTER_REVISE_HINT = re.compile(
     r"(第\s*[\d一二三四五六七八九十百千零〇两\.．\-]+?\s*章|本章|这一章|这一节|该章)"
 )
-
-# LLM force_new / continue 直办置信门槛（与 TurnPlan HIGH_CONFIDENCE 对齐）
-SCOPE_HIGH_CONFIDENCE = 0.72
 
 _LIST_BLUEPRINTS_MESSAGE_RE = re.compile(
     r"^(看看)?(有哪些|有什么|列出|显示|展示).{0,10}蓝本",
@@ -3913,10 +3951,24 @@ def message_skips_onboarding_hang(text: str) -> bool:
     return False
 
 
+def message_targets_current_chapter(text: str) -> bool:
+    """本句是写/重写当前章，不是另开一份文档。"""
+    compact = (text or "").replace(" ", "")
+    if not compact:
+        return False
+    if not _CHAPTER_REVISE_HINT.search(compact):
+        return False
+    if any(x in compact for x in ("一份", "一篇", "一个文档")):
+        return False
+    return True
+
+
 def message_wants_new_document_strong(text: str) -> bool:
     """无 invoke 时的窄兜底。有模型时请用 resolve_document_scope(..., invoke=)。"""
     t = (text or "").strip()
     if not t:
+        return False
+    if message_targets_current_chapter(t):
         return False
     return any(h in t for h in _STRONG_NEW_DOC_HINTS)
 
@@ -3926,12 +3978,13 @@ def message_looks_like_chapter_revise(text: str) -> bool:
     t = (text or "").strip()
     if not t:
         return False
-    if message_wants_new_document_strong(t):
+    if not message_targets_current_chapter(t):
         return False
     compact = t.replace(" ", "")
-    if not _CHAPTER_REVISE_HINT.search(compact):
-        return False
-    return any(k in compact for k in ("重写", "退回", "改写", "重试", "再写"))
+    return any(
+        k in compact
+        for k in ("重写", "重新写", "重新帮我写", "退回", "改写", "重试", "再写", "写本章")
+    )
 
 
 def message_looks_like_weak_rewrite(text: str) -> bool:
@@ -3971,6 +4024,8 @@ def message_looks_like_new_write_topic(message: str) -> bool:
     compact = (message or "").replace(" ", "")
     if not compact:
         return False
+    if message_targets_current_chapter(compact):
+        return False
     return any(
         k in compact
         for k in ("写一份", "写个", "写份", "帮我写", "写一篇", "想写", "帮我生成一份")
@@ -4001,11 +4056,18 @@ def message_confirms_write_document_intent(
         return True
     if message_wants_new_document_strong(msg):
         return True
+    # 纯改名（名字改为 / 改名叫…）不是新开写
+    if message_requires_structured_rename_title(msg) and not message_looks_like_new_write_topic(
+        msg
+    ):
+        return False
     if explicit_doc_title_from_message(msg) and not re.search(
-        r"(改个名字|改名叫|改名为|重命名|标题改)", msg.replace(" ", "")
+        r"(改个名字|改名叫|改名为|重命名|标题改|名字改)", msg.replace(" ", "")
     ):
         return True
-    if message_declares_document_title(msg, ""):
+    if message_declares_document_title(msg, "") and not message_requires_structured_rename_title(
+        msg
+    ):
         return True
     try:
         from report_writing.chat.freeform_intent import utterance_mentions_generate_outline
@@ -4048,20 +4110,15 @@ def ensure_write_onboarding_started(
     msg = (message or "").strip()
     if not msg or home is None:
         return False
-    if not message_confirms_write_document_intent(msg, session=session, invoke=invoke):
+    if is_writing_document_named(session) or focus_has_active_writing_context(session):
+        # 已有文档：另开一份由 apply_explicit_new_document_turn / 作用域澄清处理，这里不再打模型、不改名。
         return False
     wiz = dict((session.freeform or {}).get("blueprint_wizard") or {})
     wiz_step = str(wiz.get("step") or "").strip()
     if wiz_step in {"upload", "outline", "outline_confirm", "upload_done", "study"}:
         return False
-    if is_writing_document_named(session) or focus_has_active_writing_context(session):
-        if message_wants_new_document_strong(msg):
-            return apply_explicit_new_document_turn(
-                session, home, msg, emit=emit
-            )
-        blocked = silent_rename_blocked_topic(session, msg)
-        if blocked:
-            return False
+    if not message_confirms_write_document_intent(msg, session=session, invoke=invoke):
+        return False
     minted = False
     if onboarding_lane_active(session):
         prepare_observed_onboarding(session, home, message=msg, invoke=invoke)
@@ -4143,6 +4200,12 @@ def resolve_write_subject_vs_focus(
     if not msg:
         return {"action": "noop", "topic": "", "reason": "empty_message"}
     explicit = explicit_doc_title_from_message(msg)
+    if message_targets_current_chapter(msg):
+        return {
+            "action": "chapter_revise" if message_looks_like_chapter_revise(msg) else "continue",
+            "topic": "",
+            "reason": "current_chapter_write",
+        }
     if message_wants_new_document_strong(msg):
         topic = explicit or tip or clean_document_display_title(
             quick_title_from_write_message(msg)
@@ -4220,13 +4283,23 @@ def resolve_document_scope(
 ) -> dict[str, str | bool | float]:
     """判断本句是续写当前 / 新开文档 / 切换已有 / 退回重写本章 / 整份重写当前 / 需追问。
 
-    有 invoke 时走 LLM（说法不固定按意思判）；失败或无模型再退回窄启发式。
+    口语选 Tool 归总控。这里只用窄启发式，不再调文档作用域 LLM。
     返回：force_new / action / title / source / need_clarify / confidence
     action 含：continue | force_new | switch_existing | chapter_revise | rewrite_current | ask
     """
+    del invoke
     msg = (message or "").strip()
     tip = (title_hint or "").strip()
     named = is_writing_document_named(session)
+    if msg and message_targets_current_chapter(msg):
+        return {
+            "force_new": False,
+            "action": "chapter_revise" if message_looks_like_chapter_revise(msg) else "continue",
+            "title": tip or "",
+            "source": "heuristic",
+            "need_clarify": False,
+            "confidence": 0.9,
+        }
     if msg and message_wants_new_document_strong(msg):
         title = (
             tip
@@ -4251,76 +4324,6 @@ def resolve_document_scope(
             "need_clarify": False,
             "confidence": 0.9,
         }
-    if invoke is not None and msg:
-        try:
-            from report_writing.chat.classifier_context import pack_classifier_context
-            from report_writing.chat.clarify_llm import (
-                classify_document_scope_llm,
-                extract_write_subject_title_llm,
-            )
-
-            ctx = pack_classifier_context(session)
-            judged = classify_document_scope_llm(
-                msg,
-                dialogue_tail=list(ctx.get("dialogue_tail") or []),
-                focus_document_brief=str(ctx.get("focus_document_brief") or ""),
-                session_documents_brief=str(ctx.get("session_documents_brief") or ""),
-                invoke=invoke,
-            ) or {}
-            action = str(judged.get("action") or "").strip()
-            if action:
-                conf = float(judged.get("confidence") or 0)
-                title = str(judged.get("title") or "").strip() or tip
-                if not title and action in {"force_new", "ask", "rewrite_current"}:
-                    title = extract_write_subject_title_llm(msg, invoke=invoke) or tip
-                # 低置信 force_new（且无强提示）→ 追问，避免误新开
-                if (
-                    action == "force_new"
-                    and conf < SCOPE_HIGH_CONFIDENCE
-                    and not message_wants_new_document_strong(msg)
-                ):
-                    action = "ask"
-                # 低置信 continue + 弱重写/明显异题新写 → 追问
-                active = focus_has_active_writing_context(session)
-                if action == "continue" and (named or active) and conf < SCOPE_HIGH_CONFIDENCE:
-                    if message_looks_like_weak_rewrite(msg) or ambiguous_named_doc_new_topic(
-                        session, msg, title_hint=title
-                    ):
-                        action = "ask"
-                if action == "continue" and active and message_looks_like_new_write_topic(msg):
-                    amb = ambiguous_named_doc_new_topic(session, msg, title_hint=title)
-                    if amb and not message_wants_new_document_strong(msg):
-                        action = "ask"
-                if (
-                    action == "force_new"
-                    and active
-                    and not message_wants_new_document_strong(msg)
-                    and ambiguous_named_doc_new_topic(session, msg, title_hint=title)
-                ):
-                    action = "ask"
-                # 高置信异题新写：LLM 若仍 ask，但启发式已能判定明显不同 → 直办 force_new
-                if action == "ask" and conf >= SCOPE_HIGH_CONFIDENCE:
-                    obvious = ambiguous_named_doc_new_topic(session, msg, title_hint=title)
-                    if (
-                        obvious
-                        and message_looks_like_new_write_topic(msg)
-                        and message_wants_new_document_strong(msg)
-                    ):
-                        action = "force_new"
-                        title = title or obvious
-                        conf = max(conf, SCOPE_HIGH_CONFIDENCE)
-                need = action == "ask"
-                return {
-                    "force_new": action == "force_new",
-                    "action": action,
-                    "title": title,
-                    "source": "llm",
-                    "need_clarify": need,
-                    "confidence": conf,
-                }
-        except Exception:
-            pass
-    # 启发式兜底：仅覆盖极少数固定说法；口语变化依赖上面的 LLM
     if msg and message_looks_like_chapter_revise(msg):
         return {
             "force_new": False,
@@ -4448,10 +4451,9 @@ def message_requires_structured_rename_title(text: str) -> bool:
 
 
 def explicit_doc_title_from_message(text: str) -> str:
-    """无模型时的窄兜底：定名「名字叫… / 就叫…」与改名「名字改一下叫做 / 改名叫…」。
+    """定名「名字叫… / 就叫…」与改名「名字改一下叫做 / 改名叫…」结构提取。
 
-    有 invoke 时优先 classify_explicit_doc_name_given_llm；本函数作确定性兜底。
-    「写一份××」题材不算显式文档名。
+    口语起名归总控 set_session_meta；「写一份××」题材不算显式文档名。
     """
     t = (text or "").strip()
     if not t:
@@ -4811,7 +4813,7 @@ def _title_before_action_clause(text: str) -> str:
 
 
 def quick_title_from_write_message(text: str) -> str:
-    """无模型时的窄兜底标题候选。有 invoke 时优先 extract_write_subject_title_llm。"""
+    """写题材句的短标题候选（结构兜底；正式定名归总控 set_session_meta）。"""
     t = (text or "").strip()
     if not t:
         return ""

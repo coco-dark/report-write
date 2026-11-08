@@ -36,6 +36,24 @@ def test_prefer_rules_when_toc_heading_beats_flat_docx():
     assert outline_tree_quality(picked) >= outline_tree_quality(docx)
 
 
+def test_choose_best_accepts_three_numbered_chapters():
+    tree = _tree(("1", "基本情况"), ("2", "鉴定过程"), ("3", "鉴定意见"))
+    picked = choose_best_outline(("rules", tree), ("docx", None), ("html", tree))
+    assert picked is not None
+    assert picked[0] == "rules"
+    assert len(picked[1].chapters) == 3
+
+
+def test_choose_best_falls_back_when_only_unnumbered_list():
+    nodes = [
+        OutlineNode(sequence="", title=f"段{i}", level=1) for i in range(1, 6)
+    ]
+    tree = OutlineTree(chapters=nodes)
+    picked = choose_best_outline(("rules", tree), ("docx", None))
+    assert picked is not None
+    assert len(picked[1].chapters) == 5
+
+
 def test_choose_best_prefers_complete_nested_over_short_tree():
     small_pairs = [(str(i), f"章{i}") for i in range(1, 21)] + [(f"{i}.1", f"节{i}") for i in range(1, 21)]
     small = _tree(*small_pairs)

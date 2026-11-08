@@ -52,7 +52,7 @@ def test_set_session_meta_tool_requires_structured_title(tmp_path: Path):
     assert data.get("ok") is False
     assert "title" in (data.get("missing_slots") or [])
     assert "observation" not in data
-    assert str(data.get("reply_hint") or "").strip()
+    assert not str(data.get("reply_hint") or "").strip()
     assert get_session_goal(session).get("doc_title") != "2026个人述职报告"
 
 
@@ -132,7 +132,12 @@ class _MultiHopWriteModel(ScriptedChatModel):
                 data = json.loads(tool_msgs[-1].content or "{}")
             except json.JSONDecodeError:
                 data = {}
-            assert (data.get("reply_hint") or "").strip() or data.get("ok") is False
+            assert (
+                (data.get("reply_hint") or "").strip()
+                or data.get("ok") is False
+                or data.get("missing_slots")
+                or data.get("needs_doc_name")
+            )
             return self.finish(str(data.get("reply_hint") or "好，按无蓝本继续。"))
         return self.call("skip_blueprint", {"message": "不用蓝本"})
 
@@ -203,7 +208,7 @@ def test_start_writing_requires_doc_name_observation(tmp_path: Path):
     assert data.get("ok") is False
     miss = data.get("missing_slots") or []
     assert "outline" in miss or "doc_name" in miss
-    assert str(data.get("reply_hint") or "")
+    assert not str(data.get("reply_hint") or "").strip()
 
 
 def test_add_chapter_element_hops_when_classifier_picks_collect(tmp_path: Path):
@@ -230,9 +235,8 @@ def test_add_chapter_element_hops_when_classifier_picks_collect(tmp_path: Path):
         {"payload_json": json.dumps({"name": "知识库要素", "chapter_key": "c1"})}
     )
     data = json.loads(raw)
-    assert data.get("ok") is False
+    assert data.get("ok") is True
     assert "suggested_next_tool" not in data
-    assert not state.cards
 
 
 def test_retry_chapter_missing_entry_suggests_ask_entry_path(tmp_path: Path):
@@ -288,7 +292,7 @@ def test_submit_outline_missing_text_observation(tmp_path: Path):
     data = json.loads(raw)
     assert data.get("ok") is False
     assert "outline_text" in (data.get("missing_slots") or [])
-    assert "目录" in str(data.get("reply_hint") or "")
+    assert not str(data.get("reply_hint") or "").strip()
 
 
 def test_generate_freeform_points_needs_outline_task(tmp_path: Path):
@@ -387,7 +391,7 @@ def test_click_action_is_in_agent_user_text(tmp_path: Path):
         )
     )
     assert body.get("action") == "skip_blueprint"
-    assert "同名" in str(body.get("hint") or "")
+    assert "skip_blueprint" in str(body.get("hint") or "")
     assert "suggested_next_step" not in body
 
 
@@ -432,6 +436,12 @@ def test_clarify_llm_narrow_classifiers_module():
     assert inspect.getmodule(clarify_llm.classify_clarify_reply_llm).__name__ == "report_writing.chat.clarify_llm"
     assert not hasattr(clarify_llm, "classify_turn_plan_llm")
     assert not hasattr(clarify_llm, "classify_chat_control_plan_llm")
+    assert not hasattr(clarify_llm, "classify_entry_routing_llm")
+    assert not hasattr(clarify_llm, "classify_freeform_action_llm")
+    assert not hasattr(clarify_llm, "classify_explicit_doc_name_given_llm")
+    assert not hasattr(clarify_llm, "extract_write_subject_title_llm")
+    assert not hasattr(clarify_llm, "classify_doc_meta_line_llm")
+    assert not hasattr(clarify_llm, "pick_blueprint_id_llm")
 
 
 def test_clarify_flow_and_tool_dispatch_have_no_legacy_shims():
@@ -555,32 +565,17 @@ def test_submit_points_suggests_other_tool_without_silent_reroute(tmp_path: Path
     tools = {t.name: t for t in build_chat_tools(state)}
     raw = tools["submit_points"].invoke({"message": "给这章加个气候要素"})
     data = json.loads(raw)
-    assert data.get("ok") is False
     assert "suggested_next_tool" not in data
-    from report_writing.chat.writing_control_route import reroute_submit_points_if_needed
-
-    assert (
-        reroute_submit_points_if_needed(tmp_path, session, "给这章加个气候要素", invoke=invoke)
-        is None
-    )
 
 
-def test_submit_points_skip_phrase_suggests_skip_tool(tmp_path: Path):
+def test_submit_points_skip_phrase_does_not_hop(tmp_path: Path):
+    """跳过要点由总控改调 skip_freeform_points；submit_points 内不再 LLM 改道。"""
     session = _session_named(tmp_path)
     session.phase = ChatPhase.FREEFORM_POINTS.value
-
-    def invoke(system: str, _user: str) -> str:
-        if "无蓝本写作流程" in system or "动作分类" in system:
-            return json.dumps({"intent": "skip_points", "confidence": 0.9})
-        return json.dumps({"tool": "none", "confidence": 0.1})
-
-    state = ChatControlState(
-        home=tmp_path, session=session, invoke=invoke, clarify_invoke=invoke
-    )
+    state = ChatControlState(home=tmp_path, session=session)
     tools = {t.name: t for t in build_chat_tools(state)}
     raw = tools["submit_points"].invoke({"message": "先跳过要点直接开写"})
     data = json.loads(raw)
-    assert data.get("ok") is False
     assert "suggested_next_tool" not in data
 
 
@@ -593,3 +588,55 @@ def test_submit_points_without_outline_suggests_submit_outline(tmp_path: Path):
     assert data.get("ok") is False
     assert "outline" in (data.get("missing_slots") or [])
     assert "suggested_next_tool" not in data
+
+
+def test_final_text_prefers_model_when_doc_name_missing(tmp_path: Path):
+    from report_writing.agents.chat_control import _final_text
+
+    session = ChatSession(id="s-final", phase=ChatPhase.FREEFORM_ASK.value)
+    state = ChatControlState(home=tmp_path, session=session)
+    canned = "先给这份文档起个名字吧。直接说题目就行，口语或「类型｜标题」都可以。"
+    oral = "行，不用蓝本。这份打算叫什么？"
+    messages = [
+        HumanMessage(content="不用蓝本直接写"),
+        ToolMessage(
+            content=json.dumps(
+                {
+                    "ok": True,
+                    "needs_doc_name": True,
+                    "missing_slots": ["title"],
+                    "reply_hint": canned,
+                },
+                ensure_ascii=False,
+            ),
+            name="skip_blueprint",
+            tool_call_id="1",
+        ),
+        AIMessage(content=oral),
+    ]
+    assert _final_text(messages, state) == oral
+
+
+def test_final_text_does_not_read_canned_hint_when_doc_name_missing(tmp_path: Path):
+    from report_writing.agents.chat_control import _final_text
+
+    session = ChatSession(id="s-final2", phase=ChatPhase.FREEFORM_ASK.value)
+    state = ChatControlState(home=tmp_path, session=session)
+    canned = "先给这份文档起个名字吧。直接说题目就行，口语或「类型｜标题」都可以。"
+    messages = [
+        HumanMessage(content="不用蓝本直接写"),
+        ToolMessage(
+            content=json.dumps(
+                {
+                    "ok": True,
+                    "needs_doc_name": True,
+                    "missing_slots": ["title"],
+                    "reply_hint": canned,
+                },
+                ensure_ascii=False,
+            ),
+            name="skip_blueprint",
+            tool_call_id="1",
+        ),
+    ]
+    assert canned not in (_final_text(messages, state) or "")

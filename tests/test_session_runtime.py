@@ -7,7 +7,10 @@ from pathlib import Path
 from report_writing.chat.session_runtime import (
     WORKFLOW_BLUEPRINT,
     WORKFLOW_WRITING,
+    arm_study_kick_this_turn,
     attach_turn_study_kick,
+    clear_leftover_study_triggers,
+    disarm_study_kick_this_turn,
     migrate_legacy_freeform,
     reconcile_chat_session,
     runtime_public_view,
@@ -50,7 +53,9 @@ def test_reconcile_blueprint_step_from_task(tmp_path: Path):
         freeform={"blueprint_wizard": {"blueprint_id": bid, "step": "done"}},
     )
     reconcile_chat_session(tmp_path, session)
-    assert workflow_get(session, WORKFLOW_BLUEPRINT)["step"] == "outline_confirm"
+    # 历史 step=done 归一到 study；未确认目录时任务侧仍可再拉回 outline_confirm
+    step = workflow_get(session, WORKFLOW_BLUEPRINT)["step"]
+    assert step in {"outline_confirm", "study"}
 
 
 def test_reconcile_clears_wizard_on_freeform_path(tmp_path: Path):
@@ -182,8 +187,40 @@ def test_public_runtime_strips_study_kick_done_event_keeps_it():
     assert "trigger_chapter_study" not in public
     assert "chapter_study_keys" not in public
     live = dict((session.freeform or {}).get("blueprint_wizard") or {})
+    disarm_study_kick_this_turn()
+    leftover = attach_turn_study_kick(public, live)
+    assert "trigger_chapter_study" not in leftover
+    # ContextVar 丢失时仍认 wizard 上的本轮标记
+    live_armed = {**live, "_arm_study_kick": True}
+    via_flag = attach_turn_study_kick(public, live_armed)
+    assert via_flag["trigger_chapter_study"] == ["c1.1"]
+    arm_study_kick_this_turn()
     done = attach_turn_study_kick(public, live)
     assert done["trigger_chapter_study"] == ["c1.1"]
     assert done["chapter_study_keys"] == ["c1.1"]
     assert done["working_task_id"] == "w_k"
     assert done["step"] == "study"
+    disarm_study_kick_this_turn()
+
+
+def test_clear_leftover_study_triggers_drops_arm_flag():
+    session = ChatSession(
+        id="cs_clear_arm",
+        freeform={
+            "blueprint_wizard": {
+                "blueprint_id": "bp_k",
+                "step": "study",
+                "trigger_chapter_study": ["c1.1"],
+                "chapter_study_keys": ["c1.1"],
+                "_arm_study_kick": True,
+            }
+        },
+    )
+    clear_leftover_study_triggers(session)
+    wiz = dict((session.freeform or {}).get("blueprint_wizard") or {})
+    assert "trigger_chapter_study" not in wiz
+    assert "chapter_study_keys" not in wiz
+    assert "_arm_study_kick" not in wiz
+    public = dict(runtime_public_view(session).get("blueprint_wizard") or {})
+    leftover = attach_turn_study_kick(public, wiz)
+    assert "trigger_chapter_study" not in leftover

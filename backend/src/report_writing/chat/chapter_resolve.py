@@ -120,6 +120,28 @@ def _chapter_key_on_task(task: WritingTask, key: str) -> bool:
     return any(str(n.key or "") == k for n in (task.outline.chapters or []))
 
 
+def normalize_chapter_key_tokens(task: WritingTask | None, tokens: list[str] | None) -> list[str]:
+    """把大纲 key 或章节序号统一成 outline key（去重、保序）。
+
+    模型常把 ``1.2`` / ``2.1`` 塞进 chapter_keys；若不解析，开写会误判「没有已分析的」。
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in list(tokens or []):
+        token = str(raw or "").strip()
+        if not token:
+            continue
+        key = ""
+        if task is not None and _chapter_key_on_task(task, token):
+            key = token
+        else:
+            key = resolve_chapter_key_by_sequence(task, token)
+        if key and key not in seen:
+            seen.add(key)
+            out.append(key)
+    return out
+
+
 def pick_focus_chapter_key_extended(
     session: ChatSession,
     task: WritingTask | None,

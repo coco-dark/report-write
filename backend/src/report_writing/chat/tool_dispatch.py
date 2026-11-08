@@ -150,6 +150,21 @@ def _wizard_still_active(session: ChatSession) -> bool:
         return True
     return str(wiz.get("study_mode") or "").strip() != "complete"
 
+# 文档作用域未定时禁止推进分析/开写（否则澄清卡与 study 流同轮打架）
+_BLOCK_WHILE_DOCUMENT_SCOPE = frozenset(
+    {
+        "re_study_chapters",
+        "generate_freeform_points",
+        "select_write_chapters",
+        "write_analyzed_only",
+        "start_writing",
+        "skip_freeform_points",
+        "retry_chapter",
+        "retry_search_chapter",
+    }
+)
+
+
 def execute_dispatch_tool(
     home: Path,
     session: ChatSession,
@@ -162,6 +177,21 @@ def execute_dispatch_tool(
     name = str(step.get("tool") or "").strip()
     args = ChatActionPayload.parse(step.get("args") or step.get("payload")).as_dict()
     text = (message or "").strip()
+    if name in _BLOCK_WHILE_DOCUMENT_SCOPE:
+        from report_writing.chat.clarify_flow import get_pending, pending_document_scope_reply
+        from report_writing.chat.session_runtime import suppress_study_kick_for_document_scope
+
+        if str((get_pending(session) or {}).get("source") or "") == "document_scope":
+            suppress_study_kick_for_document_scope(session)
+            hit = pending_document_scope_reply(session)
+            if hit is not None:
+                reply, cards = hit
+                return reply, list(cards or []), []
+            return (
+                "先确认是新开文档、改名还是继续当前这份，再分析或开写。",
+                [],
+                [],
+            )
     # 口语点名会话内已有文档 → 注入 task/blueprint，并切换焦点（写 A 时说「帮我写 B 那章」）
     # focus_document 自己切焦点，勿先 enrich 否则会误判「已是当前焦点」
     if name not in {
@@ -405,6 +435,23 @@ def execute_dispatch_tool(
     if name == "re_study_chapters":
         from report_writing.chat.session_state import user_chose_skip_blueprint
         from report_writing.chat.wizard_state import is_freeform_sample_wizard_mode
+        from report_writing.chat.write_chapter_intent import (
+            reroute_if_write_not_study,
+            utterance_requests_study,
+        )
+
+        if not utterance_requests_study(text):
+            return (
+                "这句我不按分析章节来。要分析请说「分析第×章」，或在右侧文档窗勾选后点分析。",
+                [],
+                [],
+            )
+
+        write_hit = reroute_if_write_not_study(
+            home, session, text, emit=emit, invoke=invoke
+        )
+        if write_hit is not None:
+            return write_hit
 
         # 纯无蓝本（自动大纲）：对话「学习」= 生成写作要点
         # 依据样本支线仍走样本学习（trigger_chapter_study → 前端 study 流）
@@ -423,9 +470,56 @@ def execute_dispatch_tool(
         if not isinstance(seqs, list) or not seqs:
             seqs = parse_study_sequences_from_message(text)
         clean_seqs = [str(s).strip() for s in seqs if str(s).strip()]
-        # 分类器选了学习但无序号 → 学剩余章（go_study）；不靠口语正则判「全部学习」
+        keys_from_args = [
+            str(k).strip() for k in list(args.get("chapter_keys") or []) if str(k).strip()
+        ]
+        # 无序号：有 chapter_keys 仍按指定章学；「开始学习」才扩到剩余章
         if not clean_seqs:
-            reply, cards = execute_wizard_command(home, session, "go_study")
+            if keys_from_args:
+                try:
+                    reply, cards = execute_wizard_command(
+                        home,
+                        session,
+                        "re_study_chapters",
+                        study_message=text,
+                        chapter_keys=keys_from_args,
+                        study_scope=str(args.get("study_scope") or args.get("scope") or ""),
+                        study_method=str(args.get("study_method") or args.get("study_source") or ""),
+                        study_text=str(args.get("study_text") or args.get("text") or ""),
+                        invoke=invoke,
+                    )
+                except ValueError as error:
+                    msg = str(error)
+                    if "没认出要分析的章节" in msg:
+                        from report_writing.chat.action_slots import build_action_slot_clarify
+                        from report_writing.chat.helpers import _load_task
+                        from report_writing.chat.writing_control_route import _session_writing_task_id
+
+                        tid = str(
+                            _bound_blueprint_id(session)
+                            or _session_writing_task_id(session)
+                            or ""
+                        ).strip()
+                        task = _load_task(home, tid) if tid else None
+                        reply, cards = build_action_slot_clarify(
+                            session,
+                            "re_study_chapters",
+                            {
+                                **dict(args),
+                                "task_id": tid,
+                                "chapter_keys": keys_from_args,
+                                "study_message": text,
+                            },
+                            ["chapter_sequences"],
+                            task=task,
+                            message=text,
+                        )
+                        return reply, list(cards or []), []
+                    raise
+                return reply, list(cards or []), []
+            reply, cards = execute_wizard_command(
+                home, session, "go_study", study_message=text, invoke=invoke
+            )
             return reply, list(cards or []), []
         try:
             reply, cards = execute_wizard_command(
@@ -472,6 +566,13 @@ def execute_dispatch_tool(
     if name == "generate_freeform_points":
         from report_writing.chat.actions import _action_generate_freeform_points
         from report_writing.chat.user_process import emit_tool_done
+        from report_writing.chat.write_chapter_intent import reroute_if_write_not_study
+
+        write_hit = reroute_if_write_not_study(
+            home, session, text, emit=emit, invoke=invoke
+        )
+        if write_hit is not None:
+            return write_hit
 
         reply, cards = _action_generate_freeform_points(
             home, session, dict(args), invoke=invoke, emit=emit

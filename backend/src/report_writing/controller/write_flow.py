@@ -55,6 +55,7 @@ def write_from_study(task_dir: Path, dataset_dir: Path, on_event=None, model=Non
 
     from report_writing.services.corpus import load_task_corpus
     from report_writing.domain.elements import resolve_elements_for_chapter, sync_brief_from_outline
+    from report_writing.domain.write_materials import bind_content_basis
 
     sync_brief_from_outline(task)
     root = dataset_dir if dataset_dir and dataset_dir.is_dir() else None
@@ -83,6 +84,7 @@ def write_from_study(task_dir: Path, dataset_dir: Path, on_event=None, model=Non
             biz_type=normalize_biz_type(task.biz_type or "002"),
             model=model,
         )
+        bind_content_basis(requirement, getattr(task, "writing_content_basis", None))
     managed = run_supervisor(
         phase="write",
         template=template,

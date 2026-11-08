@@ -47,12 +47,14 @@ CONTROL_INSTRUCTIONS = """# Role
 再读每次 Tool 返回的 ok / missing_slots / reply_hint / suggested_next_tools。
 
 # Rules
-- 何时调用、缺了怎么办、禁忌以各 Tool 的 description 为准；参数必填/可选以该参数 schema 为准。不要另写工具清单，不要对用户说出内部工具名。
+- 何时调用、缺了怎么办、禁忌以各 Tool 的 description 为准；参数必填/可选以该参数 schema 为准。不要在总控里复述个别工具用法，不要另写工具清单，不要对用户说出内部工具名。
 - 槽位已齐就调；一句里有多步就连续调用。只补还缺的，不要重走开场流水线。
-- 口语就是这场对话。必填项能从当前这句话和上文拆出来再调；拆不出、填错或返回缺槽：用 reply_hint 接着问，或挂澄清卡等用户点选/下一条补上，再调同一 Tool。不要编造 id、章节、标题，不要假装已经办成。
+- 口语就是这场对话。必填项能从当前这句话和上文拆出来再调；拆不出、填错或返回缺槽：自己开口问缺的那一项，或挂澄清卡等用户点选后再调同一 Tool。不要编造 id、章节、标题，不要假装已经办成。
+- missing_slots / needs_doc_name 时必须由你来问，禁止把 reply_hint 当终稿、禁止念套话。reply_hint 只在槽位已齐、工具办成事后作为事实底稿。
 - 没把握（指代、写还是学、多文档、破坏性动作）就挂澄清卡。禁止猜章节、代选蓝本、静默开写/删除/收录。
 - 寒暄、只看库、问怎么用：口头回应，不起名、不开空文档。
 - 「写一份××」当工作名即可推进。正式名只在用户明确起名或收录/导出时确认。整句口语不要当标题。
+- 已有焦点文档时用户说了另一个题材/题目：先挂文档作用域澄清（新开/改名/继续）。同轮禁止再调 re_study_chapters、generate_freeform_points、start_writing、select_write_chapters。
 - 用户点了按钮（action 非空）：本轮只调同名 Tool，payload 原样传入。对话里的动作指令（如「重写章节[1.1 标题]」）按该动作执行；用户直接打出同类指令与点按钮等价。
 - 调错了就按该 Tool 的 description 改调正确的，不要在错误工具里代做别的事。
 - 默认操作当前焦点文档。用户点名会话里另一份时，先切焦点再动手；新开一份不要切回旧文档。
@@ -192,19 +194,29 @@ def _try_ui_action_shortcut(state: ChatControlState, user_text: str) -> str | No
     if action not in _UI_SHORTCUT_ACTIONS:
         return None
     tool_name = _ui_action_tool_name(action)
-    raw = invoke_named_tool(
-        state,
-        tool_name,
-        _tool_args_for_ui_action(action, payload),
-        via="ui_action",
-    )
+    try:
+        raw = invoke_named_tool(
+            state,
+            tool_name,
+            _tool_args_for_ui_action(action, payload),
+            via="ui_action",
+        )
+    except ValueError as error:
+        return str(error).strip() or None
     if raw is None:
         return None
-    try:
-        data = json.loads(raw or "{}")
-    except json.JSONDecodeError:
-        data = {}
-    return str((data or {}).get("reply_hint") or "").strip() or None
+        try:
+            data = json.loads(raw or "{}")
+        except json.JSONDecodeError:
+            data = {}
+    if isinstance(data, dict):
+        hint = str((data or {}).get("reply_hint") or "").strip()
+        if hint:
+            return hint
+        if data.get("ok") is False:
+            return str(data.get("error") or "").strip() or None
+    text = str(raw or "").strip()
+    return text or None
 
 
 
@@ -441,15 +453,31 @@ _FINAL_TOOL_PRIORITY = (
 )
 
 
+def _ai_message_text(message: AIMessage) -> str:
+    content = message.content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                parts.append(str(item.get("text") or ""))
+            else:
+                parts.append(str(getattr(item, "text", None) or item or ""))
+        content = "".join(parts)
+    return str(content or "").strip()
+
+
 def _final_text(messages: list[Any], state: ChatControlState) -> str:
     tool_hints: dict[str, str] = {}
     last_tool_ok = True
     last_awaiting = False
     last_hint = ""
+    last_missing = False
+    last_tool_name = ""
     for message in messages or []:
         if not isinstance(message, ToolMessage):
             continue
         name = str(getattr(message, "name", None) or "").strip()
+        last_tool_name = name
         try:
             data = json.loads(message.content or "{}")
         except Exception:
@@ -459,37 +487,34 @@ def _final_text(messages: list[Any], state: ChatControlState) -> str:
             tool_hints[name] = hint
         last_hint = hint
         last_awaiting = bool((data or {}).get("awaiting_user_choice"))
-        # 遍历到最后一条 ToolMessage 时覆盖；用于观察闭环失败后采信模型改口
         last_tool_ok = bool((data or {}).get("ok", True))
+        last_missing = bool((data or {}).get("missing_slots")) or bool(
+            (data or {}).get("needs_doc_name")
+        )
+    tool_hint = last_hint
+    ai_text = ""
+    for message in reversed(messages or []):
+        if isinstance(message, AIMessage) and not getattr(message, "tool_calls", None):
+            ai_text = _ai_message_text(message)
+            if ai_text:
+                break
+    # 待补充卡等用户点选：用工具原文，禁止模型改口成「要素还是空的」且丢掉卡片
+    if last_awaiting and last_hint:
+        return last_hint
+    # 缺槽：总控开口；没有开口也不要念 Tool 套话
+    if last_missing or not last_tool_ok:
+        if ai_text:
+            return ai_text
+        if last_tool_name == "get_writing_status":
+            return tool_hint or ai_text
+        if state.cards:
+            return ""
+        return ""
     if last_tool_ok:
         for name in _FINAL_TOOL_PRIORITY:
             if name in tool_hints:
                 return tool_hints[name]
-    tool_hint = ""
-    ai_text = ""
-    for message in reversed(messages or []):
-        if isinstance(message, ToolMessage) and not tool_hint:
-            try:
-                data = json.loads(message.content)
-            except Exception:
-                data = {}
-            tool_hint = str((data or {}).get("reply_hint") or "").strip()
-        if isinstance(message, AIMessage) and not getattr(message, "tool_calls", None) and not ai_text:
-            content = message.content
-            if isinstance(content, list):
-                parts = []
-                for item in content:
-                    if isinstance(item, dict) and item.get("type") == "text":
-                        parts.append(str(item.get("text") or ""))
-                    else:
-                        parts.append(str(getattr(item, "text", None) or item or ""))
-                content = "".join(parts)
-            ai_text = str(content or "").strip()
-    # 待补充卡等用户点选：用工具原文，禁止模型改口成「要素还是空的」且丢掉卡片
-    if last_awaiting and last_hint:
-        return last_hint
-    # Tool 失败后模型根据 missing_slots / reply_hint 改口：优先最终 AI 文本
-    if not last_tool_ok and ai_text:
+    if last_tool_name == "get_writing_status" and ai_text:
         return ai_text
     if tool_hint:
         return tool_hint
@@ -596,10 +621,9 @@ def run_chat_control(
         from report_writing.chat.session_documents import ensure_write_onboarding_started
 
         ensure_write_onboarding_started(
-            state.session,
+                state.session,
             state.home,
             message,
-            invoke=clarify_invoke,
             emit=state.emit,
         )
 
@@ -617,6 +641,33 @@ def run_chat_control(
         hit_reply = _try_ui_action_shortcut(state, user_text)
         if hit_reply is not None:
             return (hit_reply or "").strip() or "好的。"
+    # 异题写意图：先挂文档作用域卡，禁止总控同轮再调分析/开写
+    if not act and message:
+        from report_writing.chat.clarify_flow import (
+            build_document_scope_clarify,
+            get_pending,
+        )
+        from report_writing.chat.session_documents import (
+            quick_title_from_write_message,
+            write_subject_on_active_doc_should_clarify,
+        )
+        from report_writing.chat.session_runtime import suppress_study_kick_for_document_scope
+
+        pending_src = str((get_pending(state.session) or {}).get("source") or "")
+        if pending_src != "document_scope" and write_subject_on_active_doc_should_clarify(
+            state.session,
+            message,
+            title_hint=quick_title_from_write_message(message),
+            invoke=clarify_invoke,
+        ):
+            tip = quick_title_from_write_message(message)
+            scope_reply, scope_cards = build_document_scope_clarify(
+                state.session, message=message, topic_hint=tip
+            )
+            state.cards.extend(scope_cards or [])
+            suppress_study_kick_for_document_scope(state.session)
+            _record_oral_route(state, "document_scope_gate", message=message[:120])
+            return (scope_reply or "").strip() or "先确认一下文档范围。"
     can_agent = hasattr(model, "bind_tools")
     if can_agent:
         try:
@@ -641,10 +692,10 @@ def run_chat_control(
             _, payload, _ = _parse_agent_body(user_text)
         hit = run_ui_action_shortcut(
             home=state.home,
-            session=state.session,
+        session=state.session,
             robot=state.robot,
             invoke=clarify_invoke or state.invoke,
-            emit=state.emit,
+        emit=state.emit,
             action=act,
             payload=payload,
             message=message,
@@ -767,6 +818,9 @@ class ChatControlScriptModel(ScriptedChatModel):
                         "ask_entry_path",
                         {"message": msg, "title_hint": tip},
                     )
+                if data.get("needs_doc_name") or data.get("missing_slots"):
+                    # 缺槽交给总控开口；脚本模型不把套话当终稿
+                    return self.finish("")
                 hint = str(data.get("reply_hint") or "").strip()
                 return self.finish(hint or "好的。")
             if isinstance(message, HumanMessage):
@@ -801,10 +855,10 @@ class ChatControlScriptModel(ScriptedChatModel):
 
         # 离线脚本模拟 ReAct：改名优先于 phase 默认工具；传结构化 title（非生产意图正则）
         if not action and msg and any(
-            k in msg for k in ("改个名字", "改名为", "重命名", "标题改成", "名字改成")
+            k in msg for k in ("改个名字", "改名为", "重命名", "标题改成", "名字改成", "名字改为")
         ):
             tip = ""
-            for sep in ("改个名字", "改名为", "重命名为", "重命名", "标题改成", "名字改成"):
+            for sep in ("改个名字", "改名为", "重命名为", "重命名", "标题改成", "名字改成", "名字改为"):
                 if sep in msg:
                     tip = msg.split(sep, 1)[-1].strip().lstrip("：:为成 \t")
                     break
@@ -900,9 +954,18 @@ class ChatControlScriptModel(ScriptedChatModel):
             return self.call("submit_outline", {"outline_text": msg})
         if phase == ChatPhase.FREEFORM_POINTS.value:
             return self.call("submit_points", {"message": msg})
+        # 写作阶段：禁止无条件 get_writing_status（否则「现在能干什么」也回固定进度句）
+        # 离线脚本无 ReAct：给短指引，不挂进度卡；真正开写由按钮 / 线上 Agent 调 Tool
         if phase == ChatPhase.READY_TO_WRITE.value:
-            return self.call("get_writing_status")
+            if msg:
+                return self.call("select_write_chapters", {"chapter_keys_json": "[]"})
+            return self.call("start_writing", {"chapter_keys_json": "[]"})
         if phase in {ChatPhase.WRITING.value, ChatPhase.CONFIRM_EXPORT.value}:
+            if msg:
+                return self.finish(
+                    "写作进行中。右侧文档窗可看目录与章节配置；"
+                    "可以说写哪几章、写已分析的，或问「写到哪了」；确认后可导出。"
+                )
             return self.call("get_writing_status")
         if phase == ChatPhase.BLUEPRINT_SELECT.value:
             return self.call("list_blueprints", {"q": ""})

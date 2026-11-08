@@ -1836,6 +1836,7 @@ function armStudyLockWatchdog() {
 /** 清掉分析残留锁：study_stream_active / trigger / opsLock / 卡住的 sending */
 function releaseStudyOpsLock({ notify = false, reason = "" } = {}) {
   pageStudyInflight = false;
+  pageStudyKickArmed = false;
   pageStudyToken = "";
   pointsDraftInflight.value = false;
   clearStudyLockWatchdog();
@@ -1942,11 +1943,14 @@ function setDocWindowWriteBusy(on, label = "") {
 }
 
 function onWizardStudySynced(payload = {}) {
-  // 范围学习中途：软刷新即可看到「已分析」；整轮结束仍可 force
+  // 中途：driveDocWindow(analyze) 已补本章要点，勿全量拉目录
   const midStream = Boolean(payload?.chapter_key);
-  if (midStream) noteStudyProgressHeartbeat();
-  bumpDocOutlineReload({ force: !midStream });
-  if (!midStream && !pageStudyInflight && !pointsDraftInflight.value) {
+  if (midStream) {
+    noteStudyProgressHeartbeat();
+    return;
+  }
+  bumpDocOutlineReload({ force: true });
+  if (!pageStudyInflight && !pointsDraftInflight.value) {
     setDocWindowStudyBusy(false);
   }
 }
@@ -4074,7 +4078,8 @@ async function onDocWindowWizardAction(payload) {
       const hasTrigger =
         live.trigger_begin_study === true ||
         (Array.isArray(live.trigger_chapter_study) && live.trigger_chapter_study.length > 0);
-      if (hasTrigger || cmd === "re_study_chapters") {
+      // 仅在已选定分析方式时兜底挂 trigger；方式澄清卡回合不得用勾选章抢跑
+      if (hasTrigger || (cmd === "re_study_chapters" && String(p.study_method || "").trim())) {
         if (
           cmd === "re_study_chapters" &&
           Array.isArray(p.chapter_keys) &&
@@ -4083,13 +4088,21 @@ async function onDocWindowWizardAction(payload) {
         ) {
           liveBlueprintWizard.value = mergeWizardPayload(live, {
             trigger_chapter_study: p.chapter_keys.map((k) => String(k || "").trim()).filter(Boolean),
+            chapter_study_keys: p.chapter_keys.map((k) => String(k || "").trim()).filter(Boolean),
             step: "study",
             ...(String(p.study_method || "").trim()
               ? { study_method: String(p.study_method).trim() }
               : {}),
           });
         }
-        schedulePageStudyKickoff(80);
+        if (
+          hasTrigger ||
+          (Array.isArray(liveBlueprintWizard.value?.trigger_chapter_study) &&
+            liveBlueprintWizard.value.trigger_chapter_study.length) ||
+          liveBlueprintWizard.value?.trigger_begin_study === true
+        ) {
+          schedulePageStudyKickoff(80, { arm: true });
+        }
       }
     }
     if (
@@ -5966,6 +5979,8 @@ const conversationDocuments = computed(() => {
       ...(keepLiveTitle ? {} : { title: liveBp.title || liveBid || (liveWid ? "文档副本" : "蓝本模版") }),
       status: wizardStepCardHeadline(liveStep, liveBp) || "蓝本",
       wizardStep: liveStep,
+      wizardMode:
+        String(liveBp.mode || existingLive?.wizardMode || "").trim() || undefined,
       outlineConfirmed:
         Boolean(liveBp.outline_confirmed) || liveStep === "study" || liveStep === "done",
       study_analyzed: Number(liveBp.study_analyzed ?? 0),
@@ -6174,8 +6189,11 @@ const conversationDocuments = computed(() => {
         (focusKey.startsWith("bp:") && bid && `bp:${bid}` === focusKey) ||
         (focusKey.startsWith("task:") && dTid && focusKey === `task:${dTid}`) ||
         (focusTid && dTid && focusTid === dTid);
-      if (!isFocus && !(!focusKey && docs.length === 1)) continue;
-      if (namedTitle && focusKey && !titleMatchesFocus) continue;
+      if (!isFocus) {
+        if (!(!focusKey && docs.length === 1)) continue;
+        // 无焦点时才用标题对齐，避免把文档2名字画到文档1；焦点文档直接盖会话定名
+        if (namedTitle && !titleMatchesFocus) continue;
+      }
       d.title = displayTitle;
     }
   }
@@ -7483,7 +7501,11 @@ const phaseLabel = computed(() => {
   const wr = writingRuntime.value;
   const prog = wr?.progress;
   if (wr?.active && prog && Number(prog.total) > 0) {
+    const running = Boolean(prog.running);
     const extra = ` · 章 ${prog.confirmed || 0}/${prog.total}`;
+    if (!running && phase.value === "writing") {
+      base = "待继续";
+    }
     return base ? `${base}${extra}` : extra.slice(3);
   }
   if (wr?.paused && base) return `${base} · 已暂停`;
@@ -7635,7 +7657,9 @@ async function onRobotChange(id, options = {}) {
       render_template_ids: [...(currentRobot.value.render_template_ids || [])],
       word_style_ids: [...(currentRobot.value.word_style_ids || [])],
     };
-    await Promise.all([loadRenderTemplatesForRobot(id), loadWordStyles(), loadHistory()]);
+    const sidecars = [loadRenderTemplatesForRobot(id), loadWordStyles()];
+    if (!options.skipHistory) sidecars.push(loadHistory());
+    await Promise.all(sidecars);
     syncDefaultExportTemplate();
     if (
       !skipResourceCheck &&
@@ -8144,6 +8168,19 @@ function buildUiStatePayload() {
   };
 }
 
+/** 流式开写前只带焦点/向导/章节草稿，不扫全部历史卡 */
+function buildStreamClientSync() {
+  const full = buildUiStatePayload();
+  return {
+    used_card_keys: full.used_card_keys,
+    chapter_edits: full.chapter_edits,
+    freeform_patch: full.freeform_patch,
+    focus_task_id: full.focus_task_id,
+    focus_blueprint_id: full.focus_blueprint_id,
+    focus_document_key: full.focus_document_key,
+  };
+}
+
 let persistUiStateInflight = false;
 let persistUiStateQueued = false;
 let lastUiStateFingerprint = "";
@@ -8637,7 +8674,8 @@ async function applySession(session, { suppressAutoPopups = true } = {}) {
     ensureLibraryPendingCardVisible(session);
     if (session.robot_id) {
       robotId.value = session.robot_id;
-      await onRobotChange(session.robot_id, { skipResourceCheck: true });
+      // 先出消息，机器人侧车后台补；boot 已拉过 history
+      void onRobotChange(session.robot_id, { skipResourceCheck: true, skipHistory: true });
     }
     scrollChatToBottom(true);
   } finally {
@@ -8872,9 +8910,13 @@ function applyDoneMeta(data) {
     return live.trigger_begin_study === true || keys.length > 0;
   })();
   if (studyKickFromWizard) {
+    pageStudyKickArmed = true;
     applyLiveWizardFromSource(studyKickFromWizard);
-  } else if (liveHasStudyKick || pageStudyInflight) {
+  } else if (pageStudyInflight || (liveHasStudyKick && pageStudyKickArmed)) {
     // 本轮已排队/开跑的分析：softSync 剥过的 GET 快照不得清掉 trigger
+  } else if (liveHasStudyKick) {
+    // 上一轮残留 trigger：开写/闲聊 GET 不得再点燃自动分析
+    liveBlueprintWizard.value = stripEphemeralWizardTriggers(liveBlueprintWizard.value || {});
   } else if (
     shouldSuppressBlueprintWizardForFreeform(
       {
@@ -8998,7 +9040,7 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
         session_id: sessionId.value || "",
         action,
         action_payload,
-        client_sync: client_sync || buildUiStatePayload(),
+        client_sync: client_sync || buildStreamClientSync(),
       }),
     });
   } catch (error) {
@@ -9465,6 +9507,12 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
         action === "retry_chapter" ||
         action === "save_and_retry" ||
         action === "skip_writing_supplement_check";
+      const isWriteTurn =
+        writingDoneTurn ||
+        action === "select_write_chapters" ||
+        /还没完成蓝本分析|正在按你说的章节准备开写|正在按刚才分析的章节准备开写|开始写「/.test(
+          String(serverReply || "")
+        );
       nextCards = (nextCards || []).filter((c) => {
         if (c?.type !== "blueprint_wizard") return true;
         if (writingDoneTurn) return false;
@@ -9485,13 +9533,21 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
           serverReply || event.reply || ""
         );
       }
+      const doneHasStudyKick =
+        Boolean(studyCardPayload) ||
+        Boolean(eventWizard?.trigger_begin_study === true) ||
+        (Array.isArray(eventWizard?.trigger_chapter_study) &&
+          eventWizard.trigger_chapter_study.length > 0) ||
+        (Array.isArray(eventWizard?.chapter_study_keys) &&
+          eventWizard.chapter_study_keys.length > 0);
       if (
         freeformNow &&
         !keepEarlyWizard &&
         !hasEarlyCreateWizardCard(nextCards) &&
-        !studyCardPayload
+        !doneHasStudyKick
       ) {
         // 本轮已无早期卡才清 live；有提取/确认卡或本轮分析 trigger 时必须保留
+        // 分析卡会被滤掉，但 done.blueprint_wizard 仍可能带 trigger（澄清选「依据样本」后）
         const hasChatWizard = (nextCards || []).some(
           (c) =>
             c?.type === "blueprint_wizard" &&
@@ -9538,13 +9594,23 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
         !freeformNow ||
         keepEarlyWizard ||
         hasEarlyCreateWizardCard(nextCards) ||
-        Boolean(studyCardPayload);
+        Boolean(studyCardPayload) ||
+        doneHasStudyKick;
       // 保存章节配置 / 加要素等不得复活会话里残留的分析 trigger，否则会「保存完就开始分析」
+      // resolve_intent_clarify：点选「依据样本分析」后服务端已挂 trigger，但分析卡被滤掉，必须按分析意图开跑
       const studyIntentAction =
-        !action ||
-        action === "blueprint_wizard" ||
-        action === "re_study_chapters" ||
-        action === "confirm_outline";
+        !isWriteTurn &&
+        (action === "blueprint_wizard" ||
+          action === "re_study_chapters" ||
+          action === "go_study" ||
+          action === "confirm_outline" ||
+          action === "resolve_intent_clarify");
+      if (isWriteTurn) {
+        pageStudyKickArmed = false;
+        liveBlueprintWizard.value = stripEphemeralWizardTriggers(
+          liveBlueprintWizard.value || {}
+        );
+      }
       const hasStudyTriggerInSource =
         source &&
         typeof source === "object" &&
@@ -9555,7 +9621,10 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
             source.chapter_study_keys.length > 0));
       // 依据样本在 study 步常被判 freeform：有分析 trigger 时仍须 apply + kick
       if (source && typeof source === "object" && (allowWizardLive || (studyIntentAction && hasStudyTriggerInSource))) {
-        let applySource = studyIntentAction || studyCardPayload ? source : stripEphemeralWizardTriggers(source);
+        let applySource =
+          studyIntentAction || studyCardPayload || doneHasStudyKick
+            ? source
+            : stripEphemeralWizardTriggers(source);
         // chapter_study_keys 与 trigger_chapter_study 对齐，kick 两边都能读到
         if (applySource && typeof applySource === "object") {
           const keys = (
@@ -9582,8 +9651,15 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
           (Array.isArray(applySource?.trigger_chapter_study) &&
             applySource.trigger_chapter_study.length > 0);
         // 分析卡不进气泡：仅在本轮真有分析意图时兜底开跑
-        if ((studyIntentAction || studyCardPayload) && hasStudyTrigger) {
-          schedulePageStudyKickoff(80);
+        if (
+          !isWriteTurn &&
+          (studyIntentAction || studyCardPayload || doneHasStudyKick) &&
+          hasStudyTrigger
+        ) {
+          if (String(applySource?.study_method || "").trim()) {
+            stashPendingStudySource({ method: String(applySource.study_method).trim() });
+          }
+          schedulePageStudyKickoff(80, { arm: true });
         }
       }
       // 新消息里的向导卡保持服务端快照，禁止用 live 把「上传」卡改写成「确认目录」
@@ -9645,7 +9721,6 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
         });
         if (hasPoints) {
           bumpDocOutlineReload({ force: true });
-          nextTick(() => bumpDocOutlineReload({ force: true }));
         }
       }
       openFocusChapter(msgRef.cards);
@@ -10129,9 +10204,21 @@ function patchLatestBlueprintWizardCardFromServer(session) {
   }
 }
 
+let softSyncInflight = null;
+
 async function softSyncSessionAfterWizardAction() {
   const sid = sessionId.value;
   if (!sid) return;
+  if (softSyncInflight) return softSyncInflight;
+  softSyncInflight = _softSyncSessionAfterWizardAction(sid);
+  try {
+    await softSyncInflight;
+  } finally {
+    softSyncInflight = null;
+  }
+}
+
+async function _softSyncSessionAfterWizardAction(sid) {
   try {
     const session = await request(`/api/writing/chat/sessions/${encodeURIComponent(sid)}`);
     if (session.phase) phase.value = session.phase;
@@ -11121,6 +11208,7 @@ let pendingStudySource = { method: "", text: "" };
 const studySourcePasteDrafts = ref({});
 let pageStudyToken = "";
 let pageStudyInflight = false;
+let pageStudyKickArmed = false;
 let pageStudyKickTimer = null;
 /** 会话世代：换会话/新建时递增，阻断旧分析流回写消息与文档窗 */
 let sessionEpoch = 0;
@@ -11147,6 +11235,7 @@ function isCurrentSessionContext(epoch, sid = "") {
 
 /** 换会话/新建：掐断在途分析与文档窗，禁止旧流串到新会话 */
 function hardResetCrossSessionUi({ closeDocWindow = true } = {}) {
+  pageStudyKickArmed = false;
   bumpSessionEpoch();
   if (pageStudyKickTimer) {
     clearTimeout(pageStudyKickTimer);
@@ -11204,7 +11293,8 @@ function hardResetCrossSessionUi({ closeDocWindow = true } = {}) {
   }
 }
 
-function schedulePageStudyKickoff(delayMs = 120) {
+function schedulePageStudyKickoff(delayMs = 120, { arm = false } = {}) {
+  if (arm) pageStudyKickArmed = true;
   if (pageStudyKickTimer) clearTimeout(pageStudyKickTimer);
   pageStudyKickTimer = setTimeout(() => {
     pageStudyKickTimer = null;
@@ -11243,6 +11333,13 @@ async function kickPageLevelStudyIfNeeded() {
     .map((k) => String(k || "").trim())
     .filter(Boolean);
   const hasTrigger = Boolean(live.trigger_begin_study) || keys.length > 0;
+  if (!pageStudyInflight && !pageStudyKickArmed && hasTrigger && !sending.value) {
+    liveBlueprintWizard.value = stripEphemeralWizardTriggers(live);
+    if (!pointsDraftInflight.value) {
+      setDocWindowStudyBusy(false);
+    }
+    return;
+  }
   const streamFlag = Boolean(live.study_stream_active);
   const beginAll = Boolean(live.trigger_begin_study) && !keys.length;
   const token = `${studyTaskId}:${keys.join(",")}:${beginAll ? "all" : "keys"}`;
@@ -11250,8 +11347,12 @@ async function kickPageLevelStudyIfNeeded() {
   if (!String(sessionId.value || "").trim()) return;
   // 同一批已经跑完，但 softSync/服务端又把 trigger 写回来 → 再上锁却因 token 相同不开跑 = 死锁
   if (!pageStudyInflight && hasTrigger && pageStudyToken && token === pageStudyToken) {
-    clearStudyTriggersAndUnlock({ step: "study" });
-    return;
+    if (pageStudyKickArmed) {
+      pageStudyToken = "";
+    } else {
+      clearStudyTriggersAndUnlock({ step: "study" });
+      return;
+    }
   }
   // 真正在跑 / 待开跑才上锁。裸 study_stream_active 不得在对话已完成后把文档窗锁死。
   if (pageStudyInflight || hasTrigger) {
@@ -11279,7 +11380,13 @@ async function kickPageLevelStudyIfNeeded() {
   if (sending.value) return;
   // 分析卡已从会话气泡剔除，必须由页面兜底开跑；sending 结束后再 kick
   if (!studyTaskId || pageStudyInflight) return;
-  if (normalizeWizardStep(live.step) !== "study") return;
+  if (normalizeWizardStep(live.step) !== "study") {
+    if (pageStudyKickArmed && hasTrigger) {
+      liveBlueprintWizard.value = mergeWizardPayload(live, { step: "study" });
+    } else {
+      return;
+    }
+  }
   if (!keys.length && !beginAll) return;
   // 向导卡若已真正开跑（清了 trigger 并置 stream_active），不要抢跑
   if (streamFlag && !hasTrigger) return;

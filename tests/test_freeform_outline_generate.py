@@ -334,3 +334,31 @@ def test_resolve_outline_mode_flags_fills_confirm_and_generate():
     assert resolve_outline_mode_flags(
         "帮我生成目录", confirm=True, regenerate=True, invoke=None
     ) == (True, False)
+
+
+def test_submit_outline_without_title_asks_in_dialogue(tmp_path: Path):
+    from report_writing.chat.clarify_flow import get_pending
+
+    session = ChatSession(
+        id="s_no_title",
+        phase=ChatPhase.FREEFORM_OUTLINE.value,
+        freeform={"skip_blueprint": True, "meta_confirmed": False},
+    )
+    reply, cards = _collect_freeform_outline(
+        tmp_path,
+        session,
+        "帮我生成目录",
+        invoke=None,
+        regenerate=True,
+    )
+    pending = get_pending(session) or {}
+    assert pending.get("source") == "doc_name"
+    assert session.phase == ChatPhase.FREEFORM_ASK.value
+    assert "还没定文档叫什么" not in (reply or "")
+    assert any(str(getattr(c, "type", "") or "") == "intent_clarify" for c in cards)
+    assert "generate_outline" in list(
+        ((session.freeform or {}).get("onboarding_gaps_snapshot") or {}).get(
+            "residual_intents"
+        )
+        or []
+    )

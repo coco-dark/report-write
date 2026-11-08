@@ -205,6 +205,83 @@ def test_scripted_follows_suggested_not_json_plan(tmp_path: Path):
     assert "submit_points" not in tools
 
 
+def test_script_writing_phase_message_does_not_force_status_card():
+    """writing 阶段闲聊不应无条件 get_writing_status（避免「进度在这儿」刷屏）。"""
+    from langchain_core.messages import HumanMessage
+
+    model = ChatControlScriptModel()
+    msg = model.decide(
+        [
+            HumanMessage(
+                content=json.dumps(
+                    {
+                        "action": "",
+                        "message": "现在能干什么",
+                        "session": {"phase": ChatPhase.WRITING.value},
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        ]
+    )
+    calls = list(getattr(msg, "tool_calls", None) or [])
+    assert not any(c.get("name") == "get_writing_status" for c in calls)
+    assert "进度在这儿" not in str(getattr(msg, "content", "") or "")
+    assert "写作进行中" in str(getattr(msg, "content", "") or "")
+
+
+def test_script_writing_phase_empty_message_still_status():
+    from langchain_core.messages import HumanMessage
+
+    model = ChatControlScriptModel()
+    msg = model.decide(
+        [
+            HumanMessage(
+                content=json.dumps(
+                    {
+                        "action": "",
+                        "message": "",
+                        "session": {"phase": ChatPhase.WRITING.value},
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        ]
+    )
+    calls = list(getattr(msg, "tool_calls", None) or [])
+    assert calls
+    assert calls[0].get("name") == "get_writing_status"
+
+
+def test_write_target_none_skips_status_template(tmp_path: Path):
+    from report_writing.chat.write_chapter_intent import try_write_chapters_from_message
+    from report_writing.controller import ensure_task
+    from report_writing.domain.models import OutlineNode, OutlineTree
+    from report_writing.services.store import TaskStore
+
+    bid = "bp_none_tgt"
+    path = tmp_path / "tasks" / bid
+    ensure_task(path)
+    task = TaskStore(path).load()
+    task.outline = OutlineTree(
+        chapters=[
+            OutlineNode(key="c1", sequence="1", title="章一", points=["p"], keywords=["k"]),
+        ]
+    )
+    task.study_chapter_keys = ["c1"]
+    TaskStore(path).save(task)
+    session = ChatSession(id="s_none", blueprint_id=bid, freeform={})
+
+    def invoke(_s: str, _u: str) -> str:
+        return json.dumps({"target": "none", "chapter_sequences": [], "confidence": 0.9})
+
+    hit = try_write_chapters_from_message(
+        tmp_path, session, "现在可以看什么", invoke=invoke
+    )
+    assert hit is None
+    assert not session.freeform.get("write_chapter_keys")
+
+
 def test_rewrite_another_copy_isolates_then_asks_entry(tmp_path: Path):
     first = handle_chat(
         tmp_path,

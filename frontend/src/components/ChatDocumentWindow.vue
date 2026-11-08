@@ -353,6 +353,7 @@
                   </button>
                 </div>
               </div>
+              <div class="doc-win-tree-scroll">
               <div v-if="!tree.length" class="doc-win-empty sm">还没有章节目录</div>
               <UiTree
  v-else
@@ -394,6 +395,7 @@
                   </span>
                 </template>
               </UiTree>
+              </div>
             </aside>
             <section class="doc-win-detail" aria-label="章节配置与写作信息">
               <template v-if="selectedChapter">
@@ -2377,7 +2379,7 @@ async function runBulkStudy() {
     chapter_keys: keys,
     chapter_sequences: seqs,
     study_message: keys.length === 1 ? chapterLabel(chapters.value.find((c) => c.key === focusKey)) : `已选 ${keys.length} 章`,
-    study_scope: keys.length === 1 ? "self" : "selected",
+    study_scope: "selected",
     locate_chapter_key: focusKey,
   });
 }
@@ -3332,7 +3334,8 @@ const phaseActions = computed(() => {
   if (isSampleStudyDoc.value) {
     const allowSampleRollback =
       isFreeformSampleDoc.value ||
-      String(activeDoc.value?.wizardMode || activeDoc.value?.mode || "").trim() !== "selected";
+      String(activeDoc.value?.wizardMode || activeDoc.value?.mode || "").trim() !==
+        "selected";
     if (!hasOutlineChapters.value) {
       if (allowSampleRollback && String(activeDoc.value?.wizardStep || "").trim()) {
         acts.push({ id: "re_upload", label: "重新上传样板" });
@@ -3573,9 +3576,11 @@ function applyChapterPreview(preview, { switchTopology = false, allowShrink = fa
 
 function scheduleLoadFullOutline({ force = false } = {}) {
   clearTimeout(outlineLoadTimer);
-  // 预约拉取时立刻遮罩，避免打开后空白可点
-  loadLabel.value = force ? "正在拉取目录…" : "正在刷新目录…";
-  loading.value = true;
+  // 已有目录的软刷新不挡操作；首次/强制才立刻遮罩
+  if (force || !outlineFullyLoaded.value || !outlineNodes.value.length) {
+    loadLabel.value = force ? "正在拉取目录…" : "正在刷新目录…";
+    loading.value = true;
+  }
   outlineLoadTimer = setTimeout(() => {
     loadFullOutline({ force }).catch(() => {
       loading.value = false;
@@ -3924,17 +3929,12 @@ watch(
   }
 );
 
-// 学习完成计数变化：节流软刷新，避免每章学完都全量重绘
+// 软刷新只跟 reload token：分析进度用 locate 补本章要点，勿每章全量拉目录
 watch(
-  () =>
-    [
-      Number(props.outlineReloadToken || 0),
-      Number(activeDoc.value?.study_analyzed ?? -1),
-      Number(activeDoc.value?.study_unanalyzed ?? -1),
-    ].join("|"),
-  (sig, prev) => {
-    if (!sig || sig === prev) return;
-    if (!taskId.value) return;
+  () => Number(props.outlineReloadToken || 0),
+  (token, prev) => {
+    if (!token || token === prev) return;
+    if (!taskId.value && !outlineSourceTaskId()) return;
     scheduleLoadFullOutline({ force: false });
   }
 );
@@ -4430,7 +4430,7 @@ async function submitRestudyDialog() {
     chapter_keys: keys,
     chapter_sequences: target.sequences || [],
     study_message: target.label || "",
-    study_scope: keys.length === 1 ? "self" : "selected",
+    study_scope: "selected",
     study_method: method,
     study_text: method === "source" ? sourcePlain : "",
     locate_chapter_key: focusKey,
@@ -6580,15 +6580,18 @@ async function loadFullOutline({ force = false } = {}) {
     outlineInflight = null;
     outlineInflightTid = "";
   }
-  // 已有全量且非强制：少重挂拓扑，但仍显示加载遮罩
+  // 已有全量且非强制：后台刷新，不挡目录操作
   const soft = !force && outlineFullyLoaded.value && outlineNodes.value.length > 0;
   const token = ++fetchToken;
-  loadLabel.value = soft ? "正在刷新目录…" : "正在拉取目录…";
-  loading.value = true;
+  if (!soft) {
+    loadLabel.value = "正在拉取目录…";
+    loading.value = true;
+  }
   outlineInflightTid = tid;
   outlineInflight = (async () => {
     try {
-      const qs = "?fresh=1";
+      // 仅 force 绕过缓存；软刷新走服务端 doc-outline 缓存，避免分析过程反复拉 200+ 章
+      const qs = force ? "?fresh=1" : "";
       const data = await request(
         `/api/writing/tasks/${encodeURIComponent(tid)}/doc-outline${qs}`
       );
@@ -6635,7 +6638,7 @@ async function loadFullOutline({ force = false } = {}) {
         if (Array.isArray(data?.element_nodes) && data.element_nodes.length) {
           writingElements = data.element_nodes;
         }
-      } else if (writingTid && writingTid !== tid) {
+      } else if (writingTid && writingTid !== tid && !/^w/i.test(tid)) {
         // 兼容：无 writingTaskId 挂在文档上时仍可能只拿到库蓝本 id
         try {
           const wData = await request(
@@ -7355,6 +7358,16 @@ onUnmounted(() => {
   border-radius: 10px;
   background: #fbfdff;
 }
+.doc-win-tree {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.doc-win-tree-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
 .doc-win-detail {
   padding: 10px 12px;
 }
@@ -7398,8 +7411,11 @@ onUnmounted(() => {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0;
   padding: 6px 8px 8px;
   border-bottom: 1px solid #e2e8f0;
+  background: #fbfdff;
+  z-index: 2;
 }
 .tree-bulk-all {
   height: auto;

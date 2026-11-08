@@ -56,4 +56,4 @@ def test_help_write_with_session_goal_confirms_meta_without_auto_outline(tmp_pat
     assert session.freeform.get("meta_confirmed") is True
     assert session.phase == ChatPhase.FREEFORM_OUTLINE.value
     assert not any(c.type == "outline_preview" for c in cards)
-    assert "生成目录" in reply or "粘贴" in reply or "目录" in reply
+    assert "述职" in reply or "就叫" in reply

@@ -20,7 +20,7 @@
 | **`tool_dispatch`** | **按 tool 名执行**（卡片/按钮/单测已经决定了 tool+args） | 要（执行器） |
 | `session_state` / `entry_intent` | 会话标志：写作路径、是否跳过蓝本；入口辅助 | 要（状态） |
 | `clarify_invoke` | `invoke_clarify_llm` / `clarify_invoke_fn`；配置键仍叫 `intent.max_tokens` | 要（省成本） |
-| `clarify_llm` | 窄 JSON 分类器：澄清回复、scope、文档名、向导 command 等 | 要 |
+| `clarify_llm` | 窄 JSON：澄清卡回复、写/分析范围槽、向导 command、要素 payload。**不**做整句选 Tool / 入口 / 定名 / 无蓝本动作 | 要（解卡补槽） |
 | `classifier_context` | 分类器共用对话/焦点上下文 | 要 |
 | `chapter_resolve` | 从原话/大纲解析章节 key | 要 |
 | `classifier_action_chain` | 分类器 JSON 多动作排序 | 要 |
