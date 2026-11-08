@@ -654,7 +654,14 @@ def get_draft_preview(
                     preview_task = None
     if preview_task is None:
         preview_task = load_task(tid)
-    preview_task = _hydrate_chapters_from_db(preview_task)
+    # 重写后 task.json 已是本轮正文；不要用 MySQL 旧 official_text 把预览盖回去
+    has_local_body = any(
+        str(getattr(ch, "official_text", "") or "").strip()
+        or getattr(ch, "draft", None)
+        for ch in list(getattr(preview_task, "chapters", None) or [])
+    )
+    if not has_local_body:
+        preview_task = _hydrate_chapters_from_db(preview_task)
     # 蓝本大纲顺序 + clone 正文：若预览落在 clone 且大纲为子集，合并蓝本大纲结构
     if (
         is_writing_task_id(str(getattr(preview_task, "id", "") or ""))

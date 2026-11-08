@@ -1336,6 +1336,8 @@ function driveDocWindow(
     points = null,
     keywords = null,
     describes = "",
+    draftHtml = "",
+    draftTitle = "",
     sessionEpoch: driveEpoch = null,
     sessionId: driveSessionId = "",
   } = {}
@@ -1473,6 +1475,8 @@ function driveDocWindow(
     ...(Array.isArray(points) ? { points } : {}),
     ...(Array.isArray(keywords) ? { keywords } : {}),
     ...(describes ? { describes: String(describes) } : {}),
+    ...(String(draftHtml || "").trim() ? { draftHtml: String(draftHtml) } : {}),
+    ...(String(draftTitle || "").trim() ? { draftTitle: String(draftTitle) } : {}),
   };
 }
 
@@ -1533,6 +1537,8 @@ let pageStudyOwnerTaskId = "";
 let programmaticFocusSyncDepth = 0;
 /** 本轮写作流水线已开跑且尚未 run_done；避免 done/finally 过早解锁小窗 */
 let writingStreamActive = false;
+/** 本章刚写出的完整 HTML，写完立刻铺进全文预览 */
+const liveWriteHtmlByChapter = new Map();
 
 function wizardDocKeyFromPayload(payload, fallback = "") {
   const p = payload && typeof payload === "object" ? payload : {};
@@ -9204,6 +9210,24 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
             }
           }
         }
+        if (step === "write" && st === "done") {
+          const paras = event.result?.paragraphs;
+          const html = Array.isArray(paras)
+            ? paras
+                .map((p) => (typeof p === "string" ? p : p?.text || ""))
+                .filter(Boolean)
+                .join("\n")
+            : "";
+          const writeTid = String(
+            (msgRef.cards || []).find((c) => c?.type === "progress")?.payload?.task_id ||
+              event.task_id ||
+              ""
+          ).trim();
+          const ck = String(event.chapter || "").trim();
+          if (writeTid && ck && html.trim()) {
+            liveWriteHtmlByChapter.set(`${writeTid}::${ck}`, html.trim());
+          }
+        }
         appendWriteProgress(
           msgRef,
           stepLine,
@@ -9290,7 +9314,7 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
         pushChapterWriteDone(msgRef, hit, {
           title: event.title || hit?.title || "",
           statusLabel: st,
-          preview: event.draft_preview || hit?.draft_preview || "",
+          preview: event.draft_html || event.draft_preview || hit?.draft_preview || "",
         });
         expandOnlyChapter(tid || event.task_id, event.chapter, event.cards, { refreshText: true });
       } else if (event.task_id && event.chapter) {
@@ -9300,10 +9324,19 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
         pushChapterWriteDone(msgRef, hit, {
           title: event.title || "",
           statusLabel: st,
-          preview: event.draft_preview || hit?.draft_preview || "",
+          preview: event.draft_html || event.draft_preview || hit?.draft_preview || "",
         });
       } else {
         appendWriteProgress(msgRef, line);
+      }
+      const doneHtml = String(
+        event.draft_html ||
+          liveWriteHtmlByChapter.get(`${doneTid}::${doneKey}`) ||
+          event.draft_preview ||
+          ""
+      ).trim();
+      if (doneTid && doneKey && doneHtml) {
+        liveWriteHtmlByChapter.set(`${doneTid}::${doneKey}`, doneHtml);
       }
       bumpDraftPreviewReload();
       if (doneTid && doneKey) {
@@ -9312,6 +9345,8 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
           chapterKey: doneKey,
           mainView: "preview",
           tab: "content",
+          draftHtml: doneHtml,
+          draftTitle: event.title || "",
         });
       }
       // 软刷目录：把已写章节 status/has_draft 合回蓝本树；刷完后钉回写作进度（获取到的要素）
@@ -9324,6 +9359,8 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
             chapterKey: doneKey,
             mainView: "preview",
             tab: "content",
+            draftHtml: doneHtml,
+            draftTitle: event.title || "",
           });
         });
       }
@@ -10496,6 +10533,7 @@ async function sendAction(action, action_payload = {}, { force = false } = {}) {
             chapterKey: key,
             mainView: "preview",
             tab: "content",
+            draftHtml: liveWriteHtmlByChapter.get(`${tid}::${key}`) || "",
           });
         }
       }

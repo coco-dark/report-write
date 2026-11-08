@@ -327,6 +327,9 @@ def _run_writing_keys(
                 continue
             row = _chapter_progress_row(writing, chapter_state)
             cards_now = _progress_and_confirm_cards(writing, pace=_session_writing_pace(session))
+            from report_writing.chat.cards import _chapter_draft_text
+
+            draft_html = (_chapter_draft_text(chapter_state) or "").strip()
             done_ev = {
                 "type": "chapter_done",
                 "task_id": writing.id,
@@ -337,7 +340,8 @@ def _run_writing_keys(
                 "status": row.get("status"),
                 "status_label": row.get("status_label"),
                 "has_draft": row.get("has_draft"),
-                "draft_preview": (row.get("draft_preview") or "")[:1800],
+                "draft_preview": (row.get("draft_preview") or draft_html)[:1800],
+                "draft_html": draft_html,
                 "cards": [c.to_dict() for c in cards_now],
             }
             events.append(done_ev)

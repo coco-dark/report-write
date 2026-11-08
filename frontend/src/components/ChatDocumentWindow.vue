@@ -3609,7 +3609,7 @@ function clearLocalOutlineState() {
 
 function applyPreviewPayload(tid, data) {
   previewLoadedTid.value = tid;
-  previewHtml.value = String(data?.html || "");
+  previewHtml.value = applyPreviewOverlays(tid, String(data?.html || ""));
   previewWrittenCount.value = Number(data?.written_count || 0);
   previewChapterCount.value = Number(data?.chapter_count || 0);
   previewError.value = "";
@@ -3617,6 +3617,67 @@ function applyPreviewPayload(tid, data) {
     html: previewHtml.value,
     written_count: previewWrittenCount.value,
     chapter_count: previewChapterCount.value,
+  });
+}
+
+const previewOverlayByChapter = new Map();
+
+function escapePreviewRe(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function escapePreviewText(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function previewChapterSectionHtml(key, title, html) {
+  const heading = escapePreviewText(title || key);
+  return (
+    `<section class="rw-preview-chapter" data-chapter-key="${escapePreviewText(key)}">` +
+    `<h3>${heading}</h3>` +
+    `<div class="rw-preview-body">${html}</div>` +
+    `</section>`
+  );
+}
+
+function applyPreviewOverlays(tid, html) {
+  let out = String(html || "");
+  const prefix = `${tid}::`;
+  for (const [mapKey, row] of previewOverlayByChapter) {
+    if (!mapKey.startsWith(prefix) || !row?.html) continue;
+    const key = mapKey.slice(prefix.length);
+    const section = previewChapterSectionHtml(key, row.title, row.html);
+    const re = new RegExp(
+      `<section[^>]*data-chapter-key="${escapePreviewRe(key)}"[\\s\\S]*?</section>`,
+      "i"
+    );
+    if (re.test(out)) out = out.replace(re, section);
+    else if (out.includes("</article>")) out = out.replace("</article>", `${section}</article>`);
+    else out = `<article class="rw-draft-preview">${section}</article>`;
+  }
+  return out;
+}
+
+function upsertPreviewChapterHtml(tid, key, html, title = "") {
+  const body = String(html || "").trim();
+  const ck = String(key || "").trim();
+  const task = String(tid || previewTaskId.value || "").trim();
+  if (!task || !ck || !body) return;
+  previewOverlayByChapter.set(`${task}::${ck}`, { html: body, title: title || ck, at: Date.now() });
+  if (!previewHtml.value) {
+    previewHtml.value = `<article class="rw-draft-preview">${previewChapterSectionHtml(ck, title, body)}</article>`;
+  } else {
+    previewHtml.value = applyPreviewOverlays(task, previewHtml.value);
+  }
+  previewLoadedTid.value = task;
+  previewCacheByTask.set(task, {
+    html: previewHtml.value,
+    written_count: previewWrittenCount.value || 1,
+    chapter_count: previewChapterCount.value || 1,
   });
 }
 
@@ -4062,6 +4123,15 @@ function applyLocate(cmd) {
     if (key) {
       selectChapter(key, tab, { mainView: mainView.value, skipMainView: true });
     }
+    const liveHtml = String(cmd?.draftHtml || "").trim();
+    if (liveHtml && key) {
+      upsertPreviewChapterHtml(
+        String(cmd?.taskId || previewTaskId.value || "").trim(),
+        key,
+        liveHtml,
+        String(cmd?.draftTitle || "").trim()
+      );
+    }
     void loadDraftPreview({ force: true });
   } else if (reason === "analyze") {
     tab = "config";
@@ -4125,6 +4195,15 @@ function applyLocate(cmd) {
     (reason === "write_chapter_done" || reason === "write_awaiting_confirm")
   ) {
     markChapterWrittenLocal(key);
+    const liveHtml = String(cmd?.draftHtml || "").trim();
+    if (liveHtml) {
+      upsertPreviewChapterHtml(
+        String(cmd?.taskId || previewTaskId.value || "").trim(),
+        key,
+        liveHtml,
+        String(cmd?.draftTitle || "").trim()
+      );
+    }
     if (mainView.value === "preview") {
       void loadDraftPreview({ force: true });
     }
