@@ -1070,6 +1070,7 @@
         :force-closing="docWindowClosing"
         :outline-reload-token="docOutlineReloadToken"
         :outline-force-reload-token="docOutlineForceReloadToken"
+        :preview-reload-token="docPreviewReloadToken"
         :draft-text="docWindowDraftText"
         :locate="docWindowLocate"
         :writing-pace="latestWritingPace"
@@ -1280,10 +1281,16 @@ const suppressElementConfigureAutoOpen = ref(false);
 const docOutlineReloadToken = ref(0);
 /** 配置/分析/写作操作完成后强制 fresh 重拉 */
 const docOutlineForceReloadToken = ref(0);
+/** 写完一章后强制重拉全文预览，避免仍显示上一稿 */
+const docPreviewReloadToken = ref(0);
 
 function bumpDocOutlineReload({ force = false } = {}) {
   if (force) docOutlineForceReloadToken.value += 1;
   else docOutlineReloadToken.value += 1;
+}
+
+function bumpDraftPreviewReload() {
+  docPreviewReloadToken.value += 1;
 }
 /** 文档窗定位驱动：token 变化时窗口 watch 并选中章节/切 Tab */
 const docWindowLocate = ref({
@@ -1418,7 +1425,12 @@ function driveDocWindow(
       pinned === `task:${tid}` ||
       pinned === `bp:${tid}`;
     // 已切到另一份文档：后台分析/写作不得把小窗抢回来
-    if (!showing || !pinOk) return;
+    if (!showing || !pinOk) {
+      if (showing && (why === "write_chapter_done" || why === "write_awaiting_confirm")) {
+        bumpDraftPreviewReload();
+      }
+      return;
+    }
   }
   if (!(curId && curWid && curWid === tid && curDoc)) {
     docWindowActiveId.value = hit.id;
@@ -3855,13 +3867,7 @@ function applyChapterSnapshotToSession(tid, key, chapter) {
     compose: normalizeCompose(chapter.compose || cfg.compose, { fixed_output: chapter.fixed_output, presence: chapter.presence || cfg.presence }),
     presence: presenceForCompose(normalizeCompose(chapter.compose || cfg.compose, { fixed_output: chapter.fixed_output, presence: chapter.presence || cfg.presence })),
     structure_only: Boolean(chapter.structure_only),
-    element_ids: Array.isArray(chapter.element_ids)
-      ? [...chapter.element_ids]
-      : Array.isArray(cfg.element_ids)
-        ? [...cfg.element_ids]
-        : Array.isArray(prev.element_ids)
-          ? [...prev.element_ids]
-          : [],
+    element_ids: unionElementIds(chapter.element_ids, cfg.element_ids, prev.element_ids),
   };
   chapterEdits.value = {
     ...chapterEdits.value,
@@ -4549,6 +4555,21 @@ function markChapterTextTouched(taskId, chapterKey) {
   if (edit) edit._touched = true;
 }
 
+function unionElementIds(...candidates) {
+  const out = [];
+  const seen = new Set();
+  for (const raw of candidates) {
+    if (!Array.isArray(raw)) continue;
+    for (const id of raw) {
+      const s = String(id || "").trim();
+      if (!s || seen.has(s)) continue;
+      seen.add(s);
+      out.push(s);
+    }
+  }
+  return out;
+}
+
 function ensureChapterEdit(taskId, ch, { refreshText = false } = {}) {
   const key = chapterEditKey(taskId, ch?.key);
   const raw = ch?.draft_text || ch?.draft_preview || "";
@@ -4574,7 +4595,7 @@ function ensureChapterEdit(taskId, ch, { refreshText = false } = {}) {
         compose: normalizeCompose(cfg.compose, { fixed_output: cfg.fixed_output, presence: cfg.presence }),
         presence: presenceForCompose(normalizeCompose(cfg.compose, { fixed_output: cfg.fixed_output, presence: cfg.presence })),
         structure_only: Boolean(cfg.structure_only || ch?.structure_only),
-        element_ids: [...(cfg.element_ids || [])],
+        element_ids: unionElementIds(cfg.element_ids, ch?.element_ids),
       },
     };
   } else if (refreshText && !chapterEdits.value[key]._touched) {
@@ -4586,8 +4607,12 @@ function ensureChapterEdit(taskId, ch, { refreshText = false } = {}) {
   if (edit && edit.structure_only == null) {
     edit.structure_only = Boolean(ch?.config?.structure_only || ch?.structure_only);
   }
-  if (edit && !Array.isArray(edit.element_ids)) {
-    edit.element_ids = [...(ch?.config?.element_ids || [])];
+  if (edit) {
+    edit.element_ids = unionElementIds(
+      edit.element_ids,
+      ch?.element_ids,
+      ch?.config?.element_ids
+    );
   }
   return edit;
 }
@@ -4941,17 +4966,20 @@ async function applyElementConfigureSavedResult(result) {
     }
   }
   if (!tid || !ck) return;
-  const elementIds = (result.element_ids || [])
-    .map((id) => String(id || "").trim())
-    .filter(Boolean);
+  const progress = latestProgressCards().find((c) => c?.type === "progress");
+  const progCh = (progress?.payload?.chapters || []).find((c) => c?.key === ck);
+  const prevLinked = unionElementIds(
+    chapterEdits.value[chapterEditKey(tid, ck)]?.element_ids,
+    progCh?.element_ids,
+    progCh?.config?.element_ids
+  );
+  const elementIds = unionElementIds(prevLinked, result.element_ids);
   const pointItems = Array.isArray(result.point_items)
     ? result.point_items.map((row) => ({ ...row }))
     : [];
   const points = Array.isArray(result.points)
     ? result.points.map((line) => String(line || "")).filter(Boolean)
     : [];
-  const progress = latestProgressCards().find((c) => c?.type === "progress");
-  const progCh = (progress?.payload?.chapters || []).find((c) => c?.key === ck);
   const ch = {
     key: ck,
     sequence: progCh?.sequence || "",
@@ -6456,15 +6484,7 @@ function touchTaskElements(taskId) {
 
 function syncChapterElementIdsFromConfig(taskId, ch) {
   const edit = ensureChapterEdit(taskId, ch);
-  const fromEdit = Array.isArray(edit.element_ids) ? edit.element_ids : [];
-  const fromCfg = Array.isArray(ch?.config?.element_ids) ? ch.config.element_ids : [];
-  const fromCh = Array.isArray(ch?.element_ids) ? ch.element_ids : [];
-  const picked =
-    (fromEdit.length && fromEdit) ||
-    (fromCfg.length && fromCfg) ||
-    (fromCh.length && fromCh) ||
-    fromEdit;
-  edit.element_ids = [...picked];
+  edit.element_ids = unionElementIds(edit.element_ids, ch?.config?.element_ids, ch?.element_ids);
   return edit;
 }
 
@@ -6552,6 +6572,31 @@ function fallbackElementDraftFromPoint({ slot, pointText, title, sequence }) {
   };
 }
 
+async function collectChapterLinkedIds(taskId, ch, edit) {
+  const tid = String(taskId || "").trim();
+  const ck = String(ch?.key || "").trim();
+  const progress = latestProgressCards().find((c) => c?.type === "progress");
+  const progCh = (progress?.payload?.chapters || []).find((c) => c?.key === ck);
+  let ids = unionElementIds(
+    edit?.element_ids,
+    ch?.element_ids,
+    ch?.config?.element_ids,
+    progCh?.element_ids,
+    progCh?.config?.element_ids
+  );
+  if (ids.length || !tid || !ck) return ids;
+  try {
+    const slim = await request(
+      `/api/writing/tasks/${encodeURIComponent(tid)}/doc-outline`
+    );
+    const node = (slim?.chapters || []).find((item) => String(item?.key || "") === ck);
+    ids = unionElementIds(ids, node?.element_ids, node?.config?.element_ids);
+  } catch {
+    /* 无目录时仍可打开空关联面板 */
+  }
+  return ids;
+}
+
 async function openChapterElementAssociate(taskId, ch) {
   if (!taskId || !ch?.key) return;
   const edit = syncChapterElementIdsFromConfig(taskId, ch);
@@ -6635,7 +6680,7 @@ async function openChapterElementAssociate(taskId, ch) {
         const eid = String(row?.element_id || "").trim();
         return eid ? [eid] : [];
       }
-      return [...(edit.element_ids || [])];
+      return await collectChapterLinkedIds(taskId, ch, edit);
     })(),
     associateScope: ctx ? "point" : "chapter",
     seedCreateDraft,
@@ -6753,6 +6798,7 @@ async function onChapterElementAssociateConfirm({ linkedIds, newElements }) {
       assignOrphans: false,
     });
   } else {
+    // 关联面板提交的是本章完整列表（含取消勾选）；勿再并回 prev，否则无法取消关联
     chapterElementIds = [...linkedIds];
     edit.element_ids = [...chapterElementIds];
   }
@@ -9259,11 +9305,12 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
       } else {
         appendWriteProgress(msgRef, line);
       }
+      bumpDraftPreviewReload();
       if (doneTid && doneKey) {
         driveDocWindow("write_chapter_done", {
           taskId: doneTid,
           chapterKey: doneKey,
-          mainView: "chapter",
+          mainView: "preview",
           tab: "content",
         });
       }
@@ -9271,10 +9318,11 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
       bumpDocOutlineReload({ force: false });
       if (doneTid && doneKey) {
         nextTick(() => {
+          bumpDraftPreviewReload();
           driveDocWindow("write_chapter_done", {
             taskId: doneTid,
             chapterKey: doneKey,
-            mainView: "chapter",
+            mainView: "preview",
             tab: "content",
           });
         });
@@ -9285,6 +9333,7 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
       writingStreamActive = false;
       setDocWindowWriteBusy(false);
       bumpDocOutlineReload({ force: true });
+      bumpDraftPreviewReload();
       if (event.type === "writing_paused") {
         if (Array.isArray(event.cards) && event.cards.length) {
           msgRef.cards = event.cards;
@@ -10441,10 +10490,11 @@ async function sendAction(action, action_payload = {}, { force = false } = {}) {
           null;
         const key = String(hit?.key || preferKey || "").trim();
         if (key) {
+          bumpDraftPreviewReload();
           driveDocWindow("write_chapter_done", {
             taskId: tid,
             chapterKey: key,
-            mainView: "chapter",
+            mainView: "preview",
             tab: "content",
           });
         }
@@ -10672,7 +10722,7 @@ function chapterStubFromAssociateCard(card) {
   const parts = label.split(/\s+/).filter(Boolean);
   const sequence = parts.length > 1 && /^\d+(?:\.\d+)*$/.test(parts[0]) ? parts[0] : "";
   const title = sequence ? parts.slice(1).join(" ") : label || key;
-  return { key, sequence, title, config: { element_ids: [] } };
+  return { key, sequence, title };
 }
 
 function onAssociateElementsCard(card, msgIndex, cardIndex) {

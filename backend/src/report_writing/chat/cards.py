@@ -516,10 +516,7 @@ def _cards_with_export_card(cards: Iterable[ChatCard], task_id: str) -> list[Cha
 
 
 def _chapter_draft_text(chapter) -> str:
-    """合并章节正文为 HTML（与 pipeline._draft_text 一致）。"""
-    official = (getattr(chapter, "official_text", None) or "").strip()
-    if official:
-        return official
+    """合并章节正文为 HTML（与 pipeline._draft_text 一致：本轮草稿优先）。"""
     if chapter.draft and getattr(chapter.draft, "paragraphs", None):
         from report_writing.domain.content_blocks import ensure_html_fragment
 
@@ -528,8 +525,10 @@ def _chapter_draft_text(chapter) -> str:
             for p in chapter.draft.paragraphs
             if getattr(p, "text", None)
         ]
-        return "\n".join(parts)
-    return ""
+        html = "\n".join(parts).strip()
+        if html:
+            return html
+    return (getattr(chapter, "official_text", None) or "").strip()
 
 
 def _chapter_display_body(chapter) -> tuple[str, list[str]]:

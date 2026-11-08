@@ -1106,6 +1106,8 @@ const props = defineProps({
   outlineReloadToken: { type: Number, default: 0 },
   /** 配置/分析/写作操作完成后父组件递增：强制 fresh 直读库 */
   outlineForceReloadToken: { type: Number, default: 0 },
+  /** 写完一章后父组件递增：强制重拉全文预览 */
+  previewReloadToken: { type: Number, default: 0 },
   /** 父组件 DocWindowDriver 定位指令 */
   locate: {
     type: Object,
@@ -1558,6 +1560,21 @@ const topologyOutline = computed(() => {
   return null;
 });
 
+function unionElementIds(...candidates) {
+  const out = [];
+  const seen = new Set();
+  for (const raw of candidates) {
+    if (!Array.isArray(raw)) continue;
+    for (const id of raw) {
+      const s = String(id || "").trim();
+      if (!s || seen.has(s)) continue;
+      seen.add(s);
+      out.push(s);
+    }
+  }
+  return out;
+}
+
 /** 关联 id：优先非空列表。文档/进度卡常带空 []，不能用 || 盖住大纲刚写入的关联 */
 function pickElementIds(...candidates) {
   let fallback = null;
@@ -1576,7 +1593,7 @@ const pendingChapterElementIds = new Map();
 function rememberPendingElementIds(chapterKey, ids) {
   const key = String(chapterKey || "").trim();
   if (!key) return;
-  const list = (ids || []).map((id) => String(id || "").trim()).filter(Boolean);
+  const list = unionElementIds(pendingChapterElementIds.get(key), ids);
   if (list.length) pendingChapterElementIds.set(key, list);
   else pendingChapterElementIds.delete(key);
 }
@@ -1653,7 +1670,7 @@ function mergeOutlinePreserveElementIds(prevList, nextList, { keepMissing = fals
     const key = String(ch?.key || "").trim();
     const prev = prevByKey.get(key);
     const pending = pendingChapterElementIds.get(key);
-    const ids = pickElementIds(
+    const ids = unionElementIds(
       pending,
       ch?.element_ids,
       ch?.config?.element_ids,
@@ -1915,7 +1932,7 @@ function applyChapterPointsLocal(chapterKey, extra = {}) {
 function applyChapterElementIdsLocal(chapterKey, ids, incomingElements, opts = {}) {
   const key = String(chapterKey || "").trim();
   if (!key) return;
-  const list = (ids || []).map((id) => String(id || "").trim()).filter(Boolean);
+  const list = unionElementIds(ids);
   rememberPendingElementIds(key, list);
   if (Array.isArray(incomingElements) && incomingElements.length) {
     elementNodes.value = mergeElementNodesLocal(elementNodes.value, incomingElements);
@@ -1946,11 +1963,19 @@ function applyChapterElementIdsLocal(chapterKey, ids, incomingElements, opts = {
     configDraft.point_items.splice(0, configDraft.point_items.length, ...linkedItems);
     saveHint.value = "";
   }
+  const existingChapterIds = unionElementIds(
+    outlineNodes.value.find((item) => String(item.key || "") === key)?.element_ids,
+    extraChapters.value.find((item) => String(item.key || "") === key)?.element_ids,
+    pendingChapterElementIds.get(key)
+  );
+  const incomingIds = unionElementIds(list);
+  const addingNew =
+    !isPointScope && incomingIds.some((id) => !existingChapterIds.includes(id));
   const chapterIds = isPointScope
-    ? (outlineNodes.value.find((item) => String(item.key || "") === key)?.element_ids || []).map(
-        (id) => String(id || "").trim()
-      ).filter(Boolean)
-    : list;
+    ? existingChapterIds
+    : addingNew
+      ? unionElementIds(existingChapterIds, incomingIds)
+      : incomingIds;
   if (isPointScope && !chapterIds.length) {
     const pending = pendingChapterElementIds.get(key);
     if (Array.isArray(pending) && pending.length) {
@@ -2086,7 +2111,7 @@ const chapters = computed(() => {
         mergedConfig.structure_only = progCfg.structure_only;
       }
       // 大纲优先：蓝本/进度章节 normalize 后常有空 element_ids，勿盖住 outline 已关联的 id
-      const elementIds = pickElementIds(
+      const elementIds = unionElementIds(
         ch.element_ids,
         baseCfg.element_ids,
         prog.element_ids,
@@ -2911,11 +2936,13 @@ function packSchemaPayloadFromRows(rows) {
 const selectedElementIds = computed(() => {
   const node = selectedOutlineNode.value;
   const ch = selectedChapter.value;
+  const key = String(selectedKey.value || node?.key || ch?.key || "").trim();
   // 大纲节点优先，避免文档侧空 [] 把刚关联的要素盖掉
-  return pickElementIds(
+  return unionElementIds(
     node?.element_ids,
     ch?.element_ids,
-    ch?.config?.element_ids
+    ch?.config?.element_ids,
+    key ? pendingChapterElementIds.get(key) : null
   );
 });
 
@@ -3157,7 +3184,7 @@ function chapterLinkedFileSlotElements(ch) {
   const node = key
     ? outlineNodes.value.find((n) => String(n?.key || "") === key)
     : null;
-  const ids = pickElementIds(
+  const ids = unionElementIds(
     node?.element_ids,
     ch?.element_ids,
     ch?.config?.element_ids,
@@ -3616,12 +3643,15 @@ function endTabSwitch(delayMs = 240) {
 
 function switchMainView(view) {
   const next = String(view || "").trim();
-  if (!next || next === mainView.value) return;
+  if (!next || next === mainView.value) {
+    if (next === "preview") void loadDraftPreview({ force: true });
+    return;
+  }
   if (tabControlsDisabled.value) return;
   if (next === "topology") topologyEverOpened.value = true;
   mainView.value = next;
-  // 预览后台拉，不挡切 tab
-  if (next === "preview") void loadDraftPreview();
+  // 切到全文预览必须拉最新稿，禁止吃写完前的缓存
+  if (next === "preview") void loadDraftPreview({ force: true });
 }
 
 function switchDetailTab(tab) {
@@ -3654,6 +3684,8 @@ function refreshCurrentDoc() {
   }
 }
 
+let previewFetchSeq = 0;
+
 async function loadDraftPreview({ force = false } = {}) {
   const tid = previewTaskId.value;
   if (!tid) {
@@ -3664,23 +3696,24 @@ async function loadDraftPreview({ force = false } = {}) {
   if (!force && previewLoadedTid.value === tid && previewHtml.value) {
     return;
   }
+  const seq = ++previewFetchSeq;
   previewLoading.value = true;
   previewError.value = "";
   try {
     const data = await request(
-      `/api/writing/tasks/${encodeURIComponent(tid)}/draft-preview?written_only=true&confirmed_only=false`
+      `/api/writing/tasks/${encodeURIComponent(tid)}/draft-preview?written_only=true&confirmed_only=false&_=${Date.now()}`
     );
-    // 切文档后丢弃过期响应
-    if (previewTaskId.value !== tid) return;
+    // 切文档或后发的旧请求丢弃，避免写完后又被上一稿盖住
+    if (seq !== previewFetchSeq || previewTaskId.value !== tid) return;
     applyPreviewPayload(tid, data || {});
     // 接口已返回则原样展示。不要因 written_count=0 把带标题的 HTML 清掉，
     // 也不要把刚写完、拼章暂未命中的预览打成「还没有正文」。
   } catch (error) {
-    if (previewTaskId.value !== tid) return;
+    if (seq !== previewFetchSeq || previewTaskId.value !== tid) return;
     previewError.value = error?.message || "预览加载失败";
     if (!previewCacheByTask.has(tid)) clearPreviewState();
   } finally {
-    if (previewTaskId.value === tid) previewLoading.value = false;
+    if (seq === previewFetchSeq && previewTaskId.value === tid) previewLoading.value = false;
   }
 }
 
@@ -3797,13 +3830,17 @@ watch(
     outlineInflight = null;
     outlineInflightTid = "";
     scheduleLoadFullOutline({ force: true });
-    if (mainView.value === "preview") {
-      loadDraftPreview({ force: true });
-    } else if (previewTaskId.value) {
-      // 写作后失效本任务预览缓存，下次打开拉新稿
-      previewCacheByTask.delete(previewTaskId.value);
-      if (previewLoadedTid.value === previewTaskId.value) clearPreviewState();
-    }
+    void loadDraftPreview({ force: true });
+  }
+);
+
+watch(
+  () => Number(props.previewReloadToken || 0),
+  (token, prev) => {
+    if (!token || token === prev) return;
+    if (!previewTaskId.value) return;
+    previewCacheByTask.delete(previewTaskId.value);
+    void loadDraftPreview({ force: true });
   }
 );
 
@@ -4016,9 +4053,14 @@ function applyLocate(cmd) {
     reason === "write_batch_advance";
   if (writeLocate) {
     tab = "content";
-    mainView.value = mainViewHint || "preview";
+    const stayPreview =
+      mainView.value === "preview" ||
+      reason === "write_chapter_done" ||
+      reason === "write_awaiting_confirm" ||
+      mainViewHint === "preview";
+    mainView.value = stayPreview ? "preview" : mainViewHint || "preview";
     if (key) {
-      selectChapter(key, tab, { mainView: "preview" });
+      selectChapter(key, tab, { mainView: mainView.value, skipMainView: true });
     }
     void loadDraftPreview({ force: true });
   } else if (reason === "analyze") {
@@ -4110,7 +4152,9 @@ function applyLocate(cmd) {
     return;
   }
   if (writeLocate) {
-    if (mainViewHint === "chapter" && key) {
+    if (mainView.value === "preview") {
+      void loadDraftPreview({ force: true });
+    } else if (mainViewHint === "chapter" && key) {
       selectChapter(key, tab);
     } else if (!key && (mainViewHint || tab === "preview")) {
       mainView.value = mainViewHint || "preview";
@@ -6017,7 +6061,7 @@ async function saveChapterConfig(opts = {}) {
     const local = outlineNodes.value.find((item) => String(item.key || "") === key) || {};
     const draftItems = configDraft.structure_only ? [] : draftPointItemsForSave();
     // 章级 element_ids 与要点 element_id 分开存：保存配置不把要点要素并进章节
-    const chapterElementIds = pickElementIds(
+    const chapterElementIds = unionElementIds(
       local.element_ids,
       local.config?.element_ids,
       selectedElementIds.value

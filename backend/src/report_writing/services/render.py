@@ -221,9 +221,10 @@ def _chapter_body_html(state) -> str:
     if not official and isinstance(state, dict):
         official = str(state.get("official_text") or "").strip()
     draft_html = _draft_paragraphs_html(getattr(state, "draft", None) if not isinstance(state, dict) else state.get("draft"))
-    html = official or draft_html
-    if _visible_text_len(html) < 1 and draft_html:
-        html = draft_html
+    # 本轮草稿优先：重写后 disk/库里的旧 official_text 不得盖住新稿
+    html = draft_html or official
+    if _visible_text_len(html) < 1 and official:
+        html = official
     # 历史正文可能是空格对齐的「工程特性表」纯文本：预览时提升为 <table>
     return promote_tables_in_html(html.strip()) if html.strip() else ""
 
@@ -868,6 +869,8 @@ def _hydrate_chapters_from_db(task: WritingTask) -> WritingTask:
         return task
     for chapter in task.chapters or []:
         if (chapter.official_text or "").strip():
+            continue
+        if getattr(chapter, "draft", None) and getattr(chapter.draft, "paragraphs", None):
             continue
         backup = (by_key.get(chapter.key) or "").strip()
         if backup:

@@ -76,6 +76,34 @@ def test_save_outline_keeps_point_item_element_id(tmp_path: Path):
     assert updated.outline.chapters[0].element_ids == ["el-scale"]
 
 
+def test_save_outline_merges_when_incoming_adds_without_old_ids(tmp_path: Path):
+    path = tmp_path / "tasks" / "wMergeEl"
+    ensure_task(path)
+    save_outline(
+        path,
+        [OutlineNode(key="c1", sequence="1", title="一", element_ids=["el-a", "el-b"])],
+    )
+    updated = save_outline(
+        path,
+        [OutlineNode(key="c1", sequence="1", title="一", element_ids=["el-c"])],
+    )
+    assert updated.outline.chapters[0].element_ids == ["el-a", "el-b", "el-c"]
+
+
+def test_save_outline_allows_subset_unlink(tmp_path: Path):
+    path = tmp_path / "tasks" / "wUnlinkEl"
+    ensure_task(path)
+    save_outline(
+        path,
+        [OutlineNode(key="c1", sequence="1", title="一", element_ids=["el-a", "el-b"])],
+    )
+    updated = save_outline(
+        path,
+        [OutlineNode(key="c1", sequence="1", title="一", element_ids=["el-b"])],
+    )
+    assert updated.outline.chapters[0].element_ids == ["el-b"]
+
+
 def test_apply_chapter_config_empty_element_ids_does_not_wipe():
     task = WritingTask(
         id="wCfg",
@@ -86,6 +114,17 @@ def test_apply_chapter_config_empty_element_ids_does_not_wipe():
     _apply_chapter_config(task, "c1", {"element_ids": [], "describes": "新说明"})
     assert task.outline.chapters[0].element_ids == ["el-keep"]
     assert task.outline.chapters[0].describes == "新说明"
+
+
+def test_apply_chapter_config_new_id_merges_existing():
+    task = WritingTask(
+        id="wCfgAdd",
+        outline=OutlineTree(
+            chapters=[OutlineNode(key="c1", title="章", element_ids=["el-keep"])]
+        ),
+    )
+    _apply_chapter_config(task, "c1", {"element_ids": ["el-new"]})
+    assert task.outline.chapters[0].element_ids == ["el-keep", "el-new"]
 
 
 def test_apply_chapter_config_clear_flag_wipes():

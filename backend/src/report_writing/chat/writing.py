@@ -568,7 +568,14 @@ def _apply_chapter_config(task: WritingTask, chapter_key: str, payload: ChatPayl
         parsed_ids = [str(item).strip() for item in raw_ids if str(item).strip()]
         # 空列表不覆盖：切会话后 chapterEdits 未 hydrate 时重试会把已关联冲掉
         if parsed_ids:
-            node.element_ids = parsed_ids
+            existing = [str(x).strip() for x in (node.element_ids or []) if str(x).strip()]
+            existing_set = set(existing)
+            if existing and any(eid not in existing_set for eid in parsed_ids):
+                from report_writing.domain.elements import union_element_ids
+
+                node.element_ids = union_element_ids(existing, parsed_ids)
+            else:
+                node.element_ids = parsed_ids
         elif bool(payload.get("clear_element_ids")):
             node.element_ids = []
     if "elements" in payload:

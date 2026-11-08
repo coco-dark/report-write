@@ -351,6 +351,13 @@ def _preserve_chapter_element_bindings(
         old_ids = [str(x).strip() for x in (old.element_ids or []) if str(x).strip()]
         if not new_ids and old_ids:
             node.element_ids = list(old_ids)
+        elif new_ids and old_ids:
+            old_set = set(old_ids)
+            # 只提交新关联时不要冲掉已有；纯删减（incoming ⊆ old）仍按提交列表落盘
+            if any(eid not in old_set for eid in new_ids):
+                from report_writing.domain.elements import union_element_ids
+
+                node.element_ids = union_element_ids(old_ids, new_ids)
         _restore_point_links(old, node)
     return incoming
 

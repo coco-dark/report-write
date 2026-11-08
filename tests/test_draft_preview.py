@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from report_writing.domain.content_blocks import ensure_html_fragment, promote_tables_in_html
 from report_writing.domain.models import (
+    ChapterDraft,
     ChapterStatus,
     ChapterState,
     OutlineNode,
     OutlineTree,
+    Paragraph,
     WritingTask,
 )
 from report_writing.services.render import build_written_chapters_preview
@@ -148,6 +150,29 @@ def test_preview_includes_written_structure_only_and_key_mismatch():
     out = build_written_chapters_preview(task, written_only=True, confirmed_only=False)
     assert out["written_count"] >= 1
     assert "辨识与分析" in out["html"]
+
+
+def test_preview_prefers_new_draft_over_old_official():
+    task = WritingTask(
+        id="wPreviewRewrite",
+        title="重写预览",
+        outline=OutlineTree(chapters=[OutlineNode(key="c1", sequence="2.2", title="建设规模")]),
+        chapters=[
+            ChapterState(
+                key="c1",
+                title="建设规模",
+                status=ChapterStatus.CONFIRMED,
+                official_text="<p>国网咸宁供电公司</p>",
+                draft=ChapterDraft(
+                    title="建设规模",
+                    paragraphs=[Paragraph(index=0, text="<p>本工程建设单位</p>")],
+                ),
+            )
+        ],
+    )
+    out = build_written_chapters_preview(task, written_only=True, confirmed_only=False)
+    assert "本工程建设单位" in out["html"]
+    assert "国网咸宁供电公司" not in out["html"]
 
 
 def test_preview_keeps_html_table():

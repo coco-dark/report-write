@@ -459,22 +459,26 @@ def _return_comment(chapter: ChapterState, comment: str):
     return CheckResult(action=CheckAction.REVISE, comments=comments, reason=comment)
 
 
-def _draft_text(chapter: ChapterState) -> str:
-    """合并章节草稿为完整 HTML 正文。"""
-    official = (getattr(chapter, "official_text", None) or "").strip()
-    if official:
-        return official
+def _paragraphs_html(chapter: ChapterState) -> str:
     if chapter.draft is None:
         return ""
     from report_writing.domain.content_blocks import ensure_html_fragment
 
     parts = [ensure_html_fragment(paragraph.text) for paragraph in chapter.draft.paragraphs if paragraph.text]
-    return "\n".join(parts)
+    return "\n".join(parts).strip()
+
+
+def _draft_text(chapter: ChapterState) -> str:
+    """确认/导出：已保存正文优先；没有再拼本轮草稿。"""
+    official = (getattr(chapter, "official_text", None) or "").strip()
+    if official:
+        return official
+    return _paragraphs_html(chapter)
 
 
 def seal_written_chapter(chapter: ChapterState, *, note: str = "写完自动保存") -> bool:
-    """有正文则直接落库为已确认，不再进入待确认/待人工。"""
-    text = _draft_text(chapter).strip()
+    """有正文则直接落库为已确认。重写后以本轮草稿覆盖旧 official_text。"""
+    text = (_paragraphs_html(chapter) or _draft_text(chapter)).strip()
     if not text:
         return False
     chapter.official_text = text
