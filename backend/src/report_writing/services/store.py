@@ -80,6 +80,9 @@ class TaskStore:
                     clear_writing_task_document(tid)
                 except Exception:
                     pass
+                raise RuntimeError(
+                    "写作任务未能写入数据库，已中止保存，请稍后重试"
+                ) from error
         self.path.write_text(json.dumps(disk_payload, ensure_ascii=False, indent=2), encoding="utf-8")
         # 非蓝本写后统一失效（catalog 可能 no-op；重复 invalidate 无害）
         self._invalidate_doc_outline(task, tid)

@@ -797,10 +797,17 @@ def get_doc_outline(
                 for row in b_items
                 if isinstance(row, dict) and str(row.get("element_id") or "").strip()
             )
+            w_eids = len(union_element_ids(getattr(wnode, "element_ids", None)))
+            b_eids = len(union_element_ids(getattr(bp_node, "element_ids", None)))
             if b_links > w_links:
                 overlay_items = b_items
-            # 不要用空关联的副本整章盖掉蓝本已配要素
-            if _content_score(wnode) >= _content_score(bp_node):
+            # 写作副本存在时配置以副本为准；勿因要点行数少就回退蓝本（仅配要素时常见）
+            if (
+                _content_score(wnode) >= _content_score(bp_node)
+                or w_eids >= b_eids
+                or w_links >= b_links
+                or bool(w_items)
+            ):
                 node = wnode
         merged_element_ids = union_element_ids(
             getattr(bp_node, "element_ids", None),

@@ -989,6 +989,7 @@ import {
   elementKindLabel,
   elementSummary,
   kvPairsFromElement,
+  mergeElementNodes,
   normalizeKvElementDraft,
 } from "../elementUi";
 import {
@@ -1601,32 +1602,6 @@ function rememberPendingElementIds(chapterKey, ids) {
   else pendingChapterElementIds.delete(key);
 }
 
-function mergeElementNodesLocal(prev, next) {
-  const byId = new Map();
-  for (const el of prev || []) {
-    const id = String(el?.id || "").trim();
-    if (id) byId.set(id, { ...el });
-  }
-  for (const el of next || []) {
-    const id = String(el?.id || "").trim();
-    if (!id) continue;
-    const prevEl = byId.get(id) || {};
-    const merged = { ...prevEl, ...el };
-    const keepName = humanLabel(el?.name, prevEl?.name);
-    if (keepName) merged.name = keepName;
-    else if (humanLabel(prevEl?.name)) merged.name = String(prevEl.name).trim();
-    // 服务端偶发带回空 file_slots 时保留本地已配引用
-    const prevSlots = Array.isArray(prevEl.file_slots) ? prevEl.file_slots : [];
-    const nextSlots = Array.isArray(el.file_slots) ? el.file_slots : [];
-    const prevHas = prevSlots.some((s) => Number(s?.no) > 0);
-    const nextHas = nextSlots.some((s) => Number(s?.no) > 0);
-    if (prevHas && !nextHas) merged.file_slots = prevSlots.map((s) => ({ ...s }));
-    else if (nextHas) merged.file_slots = nextSlots.map((s) => ({ ...s }));
-    byId.set(id, merged);
-  }
-  return [...byId.values()];
-}
-
 function pickRicherList(nextVal, prevVal) {
   const next = Array.isArray(nextVal) ? nextVal : null;
   const prev = Array.isArray(prevVal) ? prevVal : null;
@@ -1938,7 +1913,7 @@ function applyChapterElementIdsLocal(chapterKey, ids, incomingElements, opts = {
   const list = unionElementIds(ids);
   rememberPendingElementIds(key, list);
   if (Array.isArray(incomingElements) && incomingElements.length) {
-    elementNodes.value = mergeElementNodesLocal(elementNodes.value, incomingElements);
+    elementNodes.value = mergeElementNodes(elementNodes.value, incomingElements);
   }
   const isPointScope =
     String(opts.associateScope || "").trim() === "point" ||
@@ -4241,7 +4216,7 @@ function applyLocate(cmd) {
         associateScope: cmd.associateScope,
       });
     } else if (incoming.length) {
-      elementNodes.value = mergeElementNodesLocal(elementNodes.value, incoming);
+      elementNodes.value = mergeElementNodes(elementNodes.value, incoming);
     }
   }
   if (reason === "library_pending") {
@@ -4873,9 +4848,9 @@ async function saveElementNodes(elements) {
           `/api/writing/tasks/${encodeURIComponent(tid)}/doc-outline?fresh=1`
         );
         const server = Array.isArray(slim?.element_nodes) ? slim.element_nodes : [];
-        toWrite = mergeElementNodesLocal(server, toWrite);
+        toWrite = mergeElementNodes(server, toWrite);
       } catch {
-        toWrite = mergeElementNodesLocal(elementNodes.value, toWrite);
+        toWrite = mergeElementNodes(elementNodes.value, toWrite);
       }
       const updated = await request(`/api/writing/tasks/${encodeURIComponent(tid)}/elements`, {
         method: "PUT",
@@ -6103,17 +6078,11 @@ function draftPointItemsForSave() {
  * @returns {Promise<boolean|null>} true 成功 / false 失败 / null 跳过
  */
 async function patchChapterConfigOnTask(tid, key, chapterFields) {
-  // 优先用本地已加载大纲，避免每次改要点都 ?fresh=1 拉全目录
-  let nodes = (outlineNodes.value || [])
-    .map((item) => ({ ...item }))
-    .filter((item) => String(item?.key || "").trim());
+  // 保存前一律拉库真值再 PATCH，避免用陈旧 outlineNodes 整树覆盖
+  const slim = await request(`/api/writing/tasks/${encodeURIComponent(tid)}/doc-outline?fresh=1`);
+  let nodes = (slim?.chapters || []).map((item) => ({ ...item }));
+  if (!nodes.length) throw new Error("未找到该章节");
   let idx = nodes.findIndex((item) => String(item.key || "") === key);
-  if (idx < 0 || nodes.length < 2) {
-    const slim = await request(`/api/writing/tasks/${encodeURIComponent(tid)}/doc-outline?fresh=1`);
-    nodes = (slim?.chapters || []).map((item) => ({ ...item }));
-    if (!nodes.length) throw new Error("未找到该章节");
-    idx = nodes.findIndex((item) => String(item.key || "") === key);
-  }
   if (idx < 0) throw new Error("未找到该章节");
   const prev = nodes[idx] || {};
   let point_items = [];
@@ -6607,12 +6576,12 @@ async function loadFullOutline({ force = false } = {}) {
   outlineInflightTid = tid;
   outlineInflight = (async () => {
     try {
-      // 仅 force 绕过缓存；软刷新走服务端 doc-outline 缓存，避免分析过程反复拉 200+ 章
-      const qs = force ? "?fresh=1" : "";
+      // 服务端已直读落库；?fresh=1 仅作语义标记。软刷新仍防抖，避免分析中频繁全量拉 200+ 章
+      const qs = "?fresh=1";
       const data = await request(
         `/api/writing/tasks/${encodeURIComponent(tid)}/doc-outline${qs}`
       );
-      // 确认态：force/fresh 可对齐真值；软刷新只允许 false→true，避免缓存把已确认打回
+      // 确认态：force 可对齐真值；软刷新只允许 false→true，避免旧响应把已确认打回
       if (data && Object.prototype.hasOwnProperty.call(data, "outline_confirmed")) {
         const confirmed = Boolean(data.outline_confirmed);
         if (force || confirmed) {
@@ -6738,7 +6707,7 @@ async function loadFullOutline({ force = false } = {}) {
         : Array.isArray(data?.element_nodes)
           ? data.element_nodes
           : [];
-      elementNodes.value = mergeElementNodesLocal(prevElements, serverElements);
+      elementNodes.value = mergeElementNodes(prevElements, serverElements);
       projectFolderIdsLocal.value = projectIds.map((x) => String(x || "").trim()).filter(Boolean);
       projectFolderLabel.value = projectLabel || folderLabelFromTree(projectFolderIdsLocal.value);
       await loadMaterialsPack(packId);

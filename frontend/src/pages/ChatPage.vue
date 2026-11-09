@@ -1175,7 +1175,12 @@ import ChapterElementAssociateDialog from "../components/ChapterElementAssociate
 import ChapterHtmlEditor from "../components/ChapterHtmlEditor.vue";
 import ChapterPickerTree from "../components/ChapterPickerTree.vue";
 import CollectBlueprintDialog from "../components/CollectBlueprintDialog.vue";
-import { elementKindLabel, elementSummary, elementNeedsSupplement } from "../elementUi";
+import {
+  elementKindLabel,
+  elementSummary,
+  elementNeedsSupplement,
+  mergeElementNodes,
+} from "../elementUi";
 import {
   pointsTextFromChapter,
   syncPointItemsFromPoints,
@@ -4659,7 +4664,7 @@ function configPayload(taskId, ch) {
     structure_only: Boolean(edit.structure_only),
   };
   if (elementIds.length) payload.element_ids = elementIds;
-  // 要素体以库为准，勿把对话里缺插槽的缓存整表盖回去
+  // 要素体以库为准：configure_chapter 不传 elements，避免进度卡瘦身列表盖回任务
   return payload;
 }
 
@@ -6483,12 +6488,15 @@ const taskElementNodes = ref({});
 function syncTaskElementsFromProgress(payload) {
   const taskId = payload?.task_id;
   if (!taskId || !Array.isArray(payload?.element_nodes)) return;
+  const prev = taskElementNodes.value[taskId] || [];
+  const merged = mergeElementNodes(prev, payload.element_nodes).map((item) => ({
+    ...item,
+    knowledge_folder_ids: [...(item.knowledge_folder_ids || [])],
+    tags: [...(item.tags || [])],
+  }));
   taskElementNodes.value = {
     ...taskElementNodes.value,
-    [taskId]: payload.element_nodes.map((item) => ({
-      ...item,
-      knowledge_folder_ids: [...(item.knowledge_folder_ids || [])],
-    })),
+    [taskId]: merged,
   };
 }
 

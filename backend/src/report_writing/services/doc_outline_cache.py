@@ -1,4 +1,7 @@
-"""文档窗目录摘要缓存：进程内存 + 可选 Redis，避免每次打远端 MySQL 整包蓝本。"""
+"""文档窗目录摘要缓存（已废弃读路径）。
+
+GET /doc-outline 现一律直读 TaskStore/MySQL；此处仅保留 invalidate 供写后清旧键，get/set 勿再接入新逻辑。
+"""
 
 from __future__ import annotations
 
