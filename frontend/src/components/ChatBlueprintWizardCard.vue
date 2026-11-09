@@ -199,7 +199,7 @@
 import { computed, nextTick, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "../ui.js";
 
-import { authHeaders, readStream, request } from "../api";
+import { authHeaders, docOutlineUrl, readStream, request } from "../api";
 import ChatFlowPipeline from "./ChatFlowPipeline.vue";
 import { mergeWizardPayload, normalizeWizardStep, wizardStepIndex } from "../utils/blueprintWizardSteps";
 import { studySupplementProcessMessage } from "../pointItemsSync";
@@ -372,6 +372,9 @@ const operationalTaskId = computed(
   () =>
     String(payload.value.working_task_id || "").trim() ||
     String(payload.value.blueprint_id || "").trim()
+);
+const sessionWritingTaskId = computed(() =>
+  String(payload.value.working_task_id || "").trim()
 );
 /** 选用已有蓝本：无创建向导（名称/上传/提取） */
 const isSelectedMode = computed(() => String(payload.value.mode || "").trim() === "selected");
@@ -1136,7 +1139,11 @@ async function loadTaskForOutline() {
   hydrateTaskAt = now;
   try {
     // 优先轻量目录，避免刷新页时每张卡打 400KB 全量任务
-    const slim = await request(`/api/writing/tasks/${encodeURIComponent(operationalTaskId.value)}/doc-outline`);
+    const slim = await request(
+      docOutlineUrl(operationalTaskId.value, {
+        writingTaskId: sessionWritingTaskId.value,
+      })
+    );
     if (slim?.chapters?.length) {
       taskData.value = {
         id: slim.id,

@@ -1518,7 +1518,10 @@ def _action_configure_chapter(
     path = home / "tasks" / task_id
     store = TaskStore(path)
     task = store.load()
-    body = payload.as_dict()
+    from report_writing.chat.chapter_configure_sanitize import prepare_configure_chapter_body
+
+    body = prepare_configure_chapter_body(payload.as_dict())
+    payload = ChatActionPayload.parse(body)
     already_persisted = bool(body.get("already_persisted") or body.get("from_doc_window"))
     configure_fields = (
         "points",

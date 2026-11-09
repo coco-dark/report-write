@@ -375,6 +375,7 @@ def execute_dispatch_tool(
         elif name == "generate_chapter_describes":
             reply, cards = _action_generate_chapter_describes(home, session, payload)
         else:
+            payload["_via_agent_tool"] = True
             reply, cards = _action_configure_chapter(home, session, payload)
         return reply, list(cards or []), []
 

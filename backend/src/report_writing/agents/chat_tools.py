@@ -1795,6 +1795,7 @@ def build_chat_tools(state: ChatControlState) -> list:
                 reply_hint="配置章节要先说清是哪一章。",
 
             )
+        payload["_via_agent_tool"] = True
         reply, cards = _action_configure_chapter(
             state.home, state.session, payload, model=state.chat_model
         )
