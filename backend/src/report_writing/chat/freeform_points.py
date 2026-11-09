@@ -16,47 +16,27 @@ InvokeFn = Callable[[str, str], str]
 _POINTS_BATCH = 6
 
 _POINTS_SYSTEM = (
-    "你是专业报告写作教练。根据文档类型、标题与章节目录（无样板原文），"
-    "为每章生成可跨项目复用、足够具体的写作配置，便于用户对照补充资料。\n"
-    "只返回 JSON 数组，不要 Markdown。每项字段：\n"
+    "# Role\n你是资深文档写作专家。文档类型由输入 doc_category 指定（函件、方案、说明书、纪要、合同、述职、报告等），"
+    "不默认研究报告。\n"
+    "# Task\n根据文档类型、标题与章节目录（无样板原文），为每章起草可跨项目复用的写作施工图："
+    "组成部分、格式、怎么写、要点。\n"
+    "# Rules\n"
+    "- 先想本章通常由哪几块组成（开篇、依据、分述、表/清单、结论），再写 point_items，一条一块。\n"
+    "- point_items.text 用「【组成部分】怎么写；版式：段落|条列|表格；须覆盖：信息类型」。"
+    "缺数据处含「（待补充：资料类型）」并 needs_supplement=true、slot 填待补项名称。\n"
+    "- describes 必须 1. 2. 分点，只写怎么写与格式（风格/组成块先后/描述方式/排版/邻章边界），不要内容提纲。\n"
+    "- points 与 point_items 二选一；若只给 points，每条仍须对应一个组成部分。\n"
+    "- material_slots：本章通常需要用户准备的资料类型（无则 []）。\n"
+    "- structure_only 为 true：points/keywords/material_slots 可空，describes 说明仅作目录分组。\n"
+    "- 必须按输入的 key 逐章返回；不要把多章写成同一套概括话术。\n"
+    "# Output\n只返回 JSON 数组，不要 Markdown。每项字段：\n"
     '{"key":"章节key",'
-    '"point_items":[{"id":"p0","text":"写法要点句","slot":"待补项名称或留空",'
+    '"point_items":[{"id":"p0","text":"【组成部分】怎么写；版式：…；须覆盖：…","slot":"待补项名称或留空",'
     '"needs_supplement":false}],'
     '"points":["与 point_items[].text 同序，可省略若已给 point_items"],'
-    '"describes":"80～280字本章说明","keywords":["5～10个检索词"],'
-    '"material_slots":[{"name":"资料名","hint":"补什么"}],"structure_only":false}\n'
-    "规则：\n"
-    "- point_items：每条一条可执行写法；缺数据处 text 含「（待补充：资料类型）」并 needs_supplement=true、slot 填待补项名称。\n"
-    "- describes：本章功能与组织方式（段落/表格/条目）、固定栏目 vs 需填报处；禁止写具体项目实例。\n"
-    "- points：与 point_items 二选一；若只给 points，每条仍须可独立执行。\n"
-    "- material_slots：本章写作通常需要用户准备的资料类型（无则 []）。\n"
-    "- structure_only 为 true：points/keywords/material_slots 可空，describes 说明仅作目录分组。\n"
-    "- 必须按输入的 key 逐章返回；不要把多章写成同一套概括话术。"
+    '"describes":"1. 写作风格：…\\n2. 写作特点：…","keywords":["5～10个术语"],'
+    '"material_slots":[{"name":"资料名","hint":"补什么"}],"structure_only":false}'
 )
-
-
-def wants_generate_points(
-    message: str,
-    *,
-    invoke: InvokeFn | None = None,
-    phase: str = "",
-    task_id: str = "",
-) -> bool:
-    from report_writing.chat.freeform_intent import wants_generate_points as _intent
-
-    return _intent(message, invoke=invoke, phase=phase, task_id=task_id)
-
-
-def wants_skip_points(
-    message: str,
-    *,
-    invoke: InvokeFn | None = None,
-    phase: str = "",
-    task_id: str = "",
-) -> bool:
-    from report_writing.chat.freeform_intent import wants_skip_points as _intent
-
-    return _intent(message, invoke=invoke, phase=phase, task_id=task_id)
 
 
 def count_chapters_missing_points(task: WritingTask) -> int:
@@ -165,14 +145,12 @@ def _fallback_points(title: str, category: str, *, level: int = 1) -> list[str]:
     tip = (title or "本章").strip()
     cat = (category or "报告").strip()
     return [
-        f"开篇用 1～2 句说明「{tip}」在整份{cat}中的作用与读者预期（待补充：本章约束范围）",
-        f"按信息类型分条：对象/范围、依据或标准、现状或过程、结论或建议（缺项标「（待补充：…）」）",
-        "若适合表格：先列表头字段类型，再说明每行应填的内容类别，勿编造具体数值",
-        "若适合条目：用并列小标题组织；每条写清「写什么信息」而非空泛套话",
-        f"与上级/同级章节的边界：本章不重复上级已写内容，下级展开处只留索引（level={level}）",
-        "结尾归纳本章可核查的交付物类型（如清单、表、结论段），并列出仍缺的资料类型",
-        "检索词对应本章核心信息类型，便于后续挂要素与查资料",
-        f"全文语气与{cat}体例一致；禁止编造文号、地址、工程名、型号或具体数值",
+        f"【开篇定位】用 1～2 句说明「{tip}」在整份{cat}中的作用与读者预期；版式：段落；须覆盖：本章约束范围（待补充：本章约束范围）",
+        "【主体分述】按信息类型分条写对象/范围、依据或标准、现状或过程、结论或建议；版式：条列或短段；须覆盖：对应信息类型",
+        "【表格或清单】若本章以表为主：先写表题与列类型，再按行填内容类别；版式：表格；须覆盖：列名与行对象，勿编造数值",
+        "【依据与口径】点明判定所依据的标准、规范或文件类型，不抄实例条款；版式：段落或条列；须覆盖：依据类型",
+        f"【边界】不重复上级已写内容，下级展开处只留索引（level={level}）；版式：段落；须覆盖：与邻章分工",
+        "【收束】归纳本章可核查的交付物类型（清单、表、结论段）；版式：段落；须覆盖：仍缺的资料类型",
     ]
 
 
@@ -180,38 +158,36 @@ def _fallback_describes(title: str, category: str, parent_title: str = "") -> st
     tip = (title or "本章").strip()
     cat = (category or "报告").strip()
     parent = f"隶属「{parent_title}」。" if parent_title else ""
-    return (
-        f"本章「{tip}」用于在{cat}中交代该主题的信息结构与写作边界。{parent}"
-        "正文宜先说明目的与适用范围，再按信息类型分节或列表展开；"
-        "固定栏目写清栏位含义，需项目填报处用「（待补充：资料类型）」占位。"
-        "不写具体实例数据；与上下级章节分工清晰，避免重复概括。"
+    from report_writing.domain.compose_analysis import format_describes_as_points
+
+    return format_describes_as_points(
+        "\n".join(
+            [
+                f"写作风格：与{cat}体例一致，语气克制{('；' + parent.rstrip('。')) if parent else ''}",
+                f"写作特点：「{tip}」先交代目的与适用范围，再按信息类型分节或列表展开",
+                "描述方式：固定栏目写清栏位含义，需项目填报处标明资料类型",
+                "排版格式：分节或列表，层级清楚，避免与上下级章重复概括",
+                "写作注意事项：不写具体实例数据",
+            ]
+        )
     )
 
 
-def _invoke_points_batch(invoke: InvokeFn, system: str, user: str) -> str:
+def _invoke_points_batch(invoke: InvokeFn, system: str, user: str, *, model=None) -> str:
     """要点专用调用：尽量 temperature=0，失败则回落普通 invoke。"""
-    try:
-        from report_writing.api.deps import live_model
+    from report_writing.infra.llm import or_live_model
+    from report_writing.infra.llm_invoke import invoke_prompt
 
-        model = live_model()
-        if model is not None and hasattr(model, "invoke"):
-            # 部分封装支持 temperature；不支持则忽略
+    chosen = or_live_model(model)
+    if chosen is not None:
+        try:
+            cold = chosen.bind(temperature=0.0) if hasattr(chosen, "bind") else chosen
+            return str(invoke_prompt(cold, system, user) or "").strip()
+        except Exception:
             try:
-                if hasattr(model, "bind"):
-                    cold = model.bind(temperature=0.0)
-                    msg = cold.invoke(
-                        [
-                            {"role": "system", "content": system},
-                            {"role": "user", "content": user},
-                        ]
-                    )
-                    content = getattr(msg, "content", None)
-                    if content is not None:
-                        return str(content).strip()
+                return str(invoke_prompt(chosen, system, user) or "").strip()
             except Exception:
                 pass
-    except Exception:
-        pass
     return str(invoke(system, user) or "").strip()
 
 
@@ -223,6 +199,7 @@ def llm_draft_chapter_points(
     max_chapters: int = 40,
     emit: Any = None,
     target_keys: set[str] | list[str] | None = None,
+    model=None,
 ) -> list[OutlineNode]:
     from report_writing.chat.user_process import emit_user_process
 
@@ -273,7 +250,7 @@ def llm_draft_chapter_points(
             },
             ensure_ascii=False,
         )
-        raw = _invoke_points_batch(invoke, _POINTS_SYSTEM, user)
+        raw = _invoke_points_batch(invoke, _POINTS_SYSTEM, user, model=model)
         for row in _parse_chapter_points_json(raw):
             key = str(row.get("key") or "").strip()
             if key:
@@ -303,6 +280,7 @@ def llm_draft_chapter_points(
             data["points"] = []
             data["point_items"] = []
             data["keywords"] = []
+            data["element_ids"] = []
             data["describes"] = (
                 str(draft.get("describes") or "").strip()
                 or f"目录节点「{data.get('title') or key}」，正文由子节展开。"
@@ -322,18 +300,19 @@ def llm_draft_chapter_points(
                 )
             from report_writing.domain.point_items_sync import merge_generated_point_items
 
-            prev_items = list(getattr(node, "point_items", None) or [])
+            # 重新生成要点：不继承旧行要素关联，并清空章级 element_ids
             pts, items = merge_generated_point_items(
-                pts[:12], raw_items if isinstance(raw_items, list) else None, prev_items=prev_items
+                pts[:12], raw_items if isinstance(raw_items, list) else None, prev_items=[]
             )
             data["points"] = pts
             data["point_items"] = items
+            data["element_ids"] = []
             describes = str(draft.get("describes") or "").strip()
             if not describes:
                 describes = _fallback_describes(
                     str(data.get("title") or key), category, parent_title=parent_title
                 )
-            data["describes"] = describes[:500]
+            data["describes"] = describes
             kws = [str(k).strip() for k in (draft.get("keywords") or []) if str(k).strip()]
             data["keywords"] = kws[:10]
             slots = draft.get("material_slots") or draft.get("project_slots") or []
@@ -420,6 +399,7 @@ def apply_generated_points(
                     "keywords": kws,
                     "describes": describes,
                     "structure_only": False,
+                    "clear_element_bindings": True,
                     "study_analyzed": analyzed,
                     "study_unanalyzed": unanalyzed,
                     "freeform_points": True,

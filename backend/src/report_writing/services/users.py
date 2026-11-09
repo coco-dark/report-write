@@ -115,8 +115,13 @@ def _migrate_legacy_shared_data(home: Path, user_id: str, workspace: Path) -> No
 
 
 def ensure_default_user(home: Path) -> UserProfile:
+    sync_users_from_disk(home)
+    stored = _load_stored_user(user_id="default", username="default")
+    if stored:
+        user_workspace(home, stored.profile.id)
+        return stored.profile
     root = users_root(home)
-    index = _load_index(root)
+    index = _load_index_file(root)
     if "default" not in index.values() and "default" not in index:
         profile = UserProfile(
             id="default",
@@ -124,43 +129,46 @@ def ensure_default_user(home: Path) -> UserProfile:
             display_name="默认用户",
             created_at=_now(),
         )
-        _save_profile(root, profile, password_hash="")
-        index["default"] = "default"
-        _save_index(root, index)
+        _persist_user(home, profile, password_hash="")
         return profile
     uid = index.get("default", "default")
     found = get_user(home, uid)
     if found:
         return found
     profile = UserProfile(id="default", username="default", display_name="默认用户", created_at=_now())
-    _save_profile(root, profile, password_hash="")
-    index["default"] = "default"
-    _save_index(root, index)
+    _persist_user(home, profile, password_hash="")
     return profile
 
 
 def list_users(home: Path) -> list[UserProfile]:
     ensure_default_user(home)
-    items: list[UserProfile] = []
+    by_id: dict[str, UserProfile] = {}
     for folder in sorted(users_root(home).iterdir()):
         if not folder.is_dir():
             continue
         profile = _read_profile(folder)
         if profile:
-            items.append(profile)
-    return items
+            by_id[profile.id] = profile
+    if _user_store_ok():
+        from report_writing.services.user_catalog import list_stored_users
+
+        for item in list_stored_users():
+            by_id[item.profile.id] = item.profile
+    return [by_id[key] for key in sorted(by_id)]
 
 
 def get_user(home: Path, user_id: str) -> UserProfile | None:
     uid = _require_id(user_id)
+    stored = _load_stored_user(user_id=uid)
+    if stored:
+        return stored.profile
     folder = users_root(home) / uid
     return _read_profile(folder)
 
 
 def update_user_profile(home: Path, user_id: str, display_name: str) -> UserProfile:
     uid = _require_id(user_id)
-    folder = users_root(home) / uid
-    profile = _read_profile(folder)
+    profile = get_user(home, uid)
     if profile is None:
         raise KeyError(user_id)
     name = (display_name or "").strip() or profile.display_name or profile.username
@@ -170,7 +178,8 @@ def update_user_profile(home: Path, user_id: str, display_name: str) -> UserProf
         display_name=name,
         created_at=profile.created_at,
     )
-    _save_profile(root=users_root(home), profile=profile, password_hash=_read_password_hash(folder) or "")
+    folder = users_root(home) / uid
+    _persist_user(home, profile, password_hash=_read_password_hash(folder) or _stored_password_hash(uid))
     return profile
 
 
@@ -180,9 +189,8 @@ def register_user(home: Path, username: str, password: str, display_name: str = 
         raise ValueError("用户名须为 3–32 位字母、数字或下划线")
     if len(password or "") < 6:
         raise ValueError("密码至少 6 位")
-    root = users_root(home)
-    index = _load_index(root)
-    if name in index:
+    sync_users_from_disk(home)
+    if _load_stored_user(username=name) or name in _load_index(users_root(home)):
         raise ValueError("用户名已存在")
     uid = f"u{uuid.uuid4().hex[:10]}"
     profile = UserProfile(
@@ -191,25 +199,27 @@ def register_user(home: Path, username: str, password: str, display_name: str = 
         display_name=(display_name or name).strip(),
         created_at=_now(),
     )
-    _save_profile(root, profile, password_hash=_hash_password(password))
-    index[name] = uid
-    _save_index(root, index)
+    try:
+        _persist_user(home, profile, password_hash=_hash_password(password))
+    except Exception as error:
+        if "Duplicate" in str(error):
+            raise ValueError("用户名已存在") from error
+        raise
     user_workspace(home, uid)
     return AuthResponse(user_id=uid, username=profile.username, display_name=profile.display_name)
 
 
 def login_user(home: Path, username: str, password: str) -> AuthResponse:
     name = (username or "").strip().lower()
-    root = users_root(home)
-    index = _load_index(root)
-    uid = index.get(name)
+    sync_users_from_disk(home)
+    stored = _load_stored_user(username=name)
+    uid = stored.profile.id if stored else _load_index(users_root(home)).get(name)
     if not uid:
         raise ValueError("用户名或密码错误")
-    folder = root / uid
-    stored = _read_password_hash(folder)
-    if not stored or not _verify_password(password, stored):
+    password_hash = (stored.password_hash if stored else "") or _read_password_hash(users_root(home) / uid)
+    if not password_hash or not _verify_password(password, password_hash):
         raise ValueError("用户名或密码错误")
-    profile = _read_profile(folder)
+    profile = stored.profile if stored else _read_profile(users_root(home) / uid)
     if not profile:
         raise ValueError("用户数据损坏")
     return AuthResponse(user_id=profile.id, username=profile.username, display_name=profile.display_name)
@@ -382,14 +392,43 @@ def record_token_usage(
     )
     raw["recent"] = recent[:80]
     path.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+    if _user_store_ok():
+        from report_writing.services.user_catalog import save_token_usage_doc
+
+        try:
+            save_token_usage_doc(uid, raw)
+        except Exception as error:
+            _log.warning("写入用户 Token 用量失败 user=%s: %s", uid, error)
 
 
 def get_token_usage(home: Path, user_id: str) -> TokenUsageSummary:
     uid = _require_id(user_id)
     path = users_root(home) / uid / "tokens.json"
-    if not path.is_file():
+    raw: dict[str, Any] = {}
+    if _user_store_ok():
+        from report_writing.services.user_catalog import load_token_usage_doc, save_token_usage_doc
+
+        try:
+            stored = load_token_usage_doc(uid)
+        except Exception:
+            stored = None
+        if isinstance(stored, dict) and stored:
+            raw = stored
+        elif path.is_file():
+            try:
+                file_raw = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                file_raw = {}
+            if isinstance(file_raw, dict) and file_raw:
+                raw = file_raw
+                try:
+                    save_token_usage_doc(uid, raw)
+                except Exception as error:
+                    _log.warning("迁移 tokens.json → MySQL 失败 user=%s: %s", uid, error)
+    elif path.is_file():
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    if not raw:
         return TokenUsageSummary(user_id=uid)
-    raw = json.loads(path.read_text(encoding="utf-8"))
     by_day: dict[str, TokenDayBucket] = {}
     for key, value in (raw.get("by_day") or {}).items():
         if not isinstance(value, dict):
@@ -516,12 +555,139 @@ def _read_password_hash(folder: Path) -> str:
     return str((data or {}).get("password_hash") or "")
 
 
-def _load_index(root: Path) -> dict[str, str]:
+def _user_store_ok() -> bool:
+    from report_writing.services.user_catalog import user_store_available
+
+    return user_store_available()
+
+
+def _load_stored_user(*, user_id: str = "", username: str = ""):
+    if not _user_store_ok():
+        return None
+    from report_writing.services.user_catalog import load_user_by_id, load_user_by_username
+
+    try:
+        if user_id:
+            found = load_user_by_id(user_id)
+            if found:
+                return found
+        if username:
+            return load_user_by_username(username)
+    except Exception as error:
+        _log.warning("读取用户账号失败: %s", error)
+    return None
+
+
+def _stored_password_hash(user_id: str) -> str:
+    stored = _load_stored_user(user_id=user_id)
+    return stored.password_hash if stored else ""
+
+
+def _persist_user(home: Path, profile: UserProfile, password_hash: str) -> None:
+    root = users_root(home)
+    hash_value = password_hash or _read_password_hash(root / profile.id)
+    _save_profile(root, profile, password_hash=hash_value)
+    index = _load_index_file(root)
+    if profile.username:
+        index[profile.username] = profile.id
+    _save_index(root, index)
+    if not _user_store_ok():
+        return
+    from report_writing.services.user_catalog import save_user_record
+
+    try:
+        save_user_record(profile, hash_value)
+    except Exception as error:
+        _log.warning("写入用户账号失败 user=%s: %s", profile.id, error)
+        raise
+
+
+def sync_users_from_disk(home: Path) -> int:
+    """把 data/users 账号与 tokens.json 迁入 MySQL（已存在则补密码/用量）。"""
+    if not _user_store_ok():
+        return 0
+    from report_writing.services.user_catalog import (
+        load_token_usage_doc,
+        load_user_by_id,
+        load_user_by_username,
+        save_token_usage_doc,
+        save_user_record,
+    )
+
+    root = users_root(home)
+    written = 0
+    index = _load_index_file(root)
+    folders = {folder.name: folder for folder in root.iterdir() if folder.is_dir()}
+    uids = set(index.values()) | set(folders) | {"default"}
+    for uid in uids:
+        try:
+            key = _require_id(str(uid))
+        except ValueError:
+            continue
+        folder = folders.get(key) or (root / key)
+        profile = _read_profile(folder)
+        if profile is None:
+            username = next((name for name, mapped in index.items() if mapped == key), key)
+            if not (folder.exists() or username):
+                continue
+            profile = UserProfile(
+                id=key,
+                username=username if _USERNAME_RE.match(str(username)) else key,
+                display_name=username or key,
+                created_at=_now(),
+            )
+        disk_hash = _read_password_hash(folder)
+        try:
+            existing = load_user_by_id(profile.id)
+            taken = load_user_by_username(profile.username)
+            if taken and taken.profile.id != profile.id:
+                _log.warning("跳过用户名冲突 %s → %s（库中已是 %s）", profile.username, profile.id, taken.profile.id)
+                continue
+            if existing and existing.password_hash and not disk_hash:
+                disk_hash = existing.password_hash
+            if existing is None:
+                save_user_record(profile, disk_hash)
+                written += 1
+            elif disk_hash and disk_hash != existing.password_hash:
+                save_user_record(profile, disk_hash)
+                written += 1
+            elif profile.display_name and profile.display_name != existing.profile.display_name:
+                save_user_record(profile, disk_hash or existing.password_hash)
+                written += 1
+        except Exception as error:
+            _log.warning("同步用户失败 user=%s: %s", profile.id, error)
+        token_path = folder / "tokens.json"
+        if token_path.is_file():
+            try:
+                if not load_token_usage_doc(profile.id):
+                    doc = json.loads(token_path.read_text(encoding="utf-8"))
+                    if isinstance(doc, dict) and doc:
+                        save_token_usage_doc(profile.id, doc)
+            except Exception as error:
+                _log.warning("同步 Token 用量失败 user=%s: %s", profile.id, error)
+    return written
+
+
+def _load_index_file(root: Path) -> dict[str, str]:
     path = root / "index.json"
     if not path.is_file():
         return {}
     data = json.loads(path.read_text(encoding="utf-8"))
     return dict(data) if isinstance(data, dict) else {}
+
+
+def _load_index(root: Path) -> dict[str, str]:
+    index = _load_index_file(root)
+    if _user_store_ok():
+        from report_writing.services.user_catalog import list_stored_users
+
+        try:
+            for item in list_stored_users():
+                if item.profile.username:
+                    index[item.profile.username] = item.profile.id
+        except Exception as error:
+            _log.debug("合并库内用户索引失败: %s", error)
+    return index
 
 
 def _save_index(root: Path, index: dict[str, str]) -> None:

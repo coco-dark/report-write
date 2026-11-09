@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from report_writing.domain.models import ChatActionPayload, ChatPayload
+
 # tool 名 → 口语化过程说明（会出现在对话过程条）
 USER_TOOL_HINTS: dict[str, str] = {
     "match_blueprints": "正在看看有没有合适的蓝本…",
@@ -24,10 +26,13 @@ USER_TOOL_HINTS: dict[str, str] = {
     "confirm_chapter": "正在处理本章确认…",
     "confirm_all_chapters": "正在批量确认章节…",
     "configure_chapter": "正在更新章节配置…",
+    "get_chapter_info": "正在查看章节配置…",
+    "generate_chapter_describes": "正在生成章节说明…",
+    "generate_chapter_boilerplate": "正在根据原文生成套话正文…",
     "add_chapter_element": "正在为本章添加要素…",
     "dissociate_chapter_element": "正在取消要素关联…",
     "remove_document_element": "正在从本文档移除要素…",
-    "retry_chapter": "正在重试本章写作…",
+    "retry_chapter": "正在准备开始写作…",
     "retry_search_chapter": "正在重新检索本章资料…",
     "remember_writing_goal": "正在记住你的写作要求…",
     "blueprint_subagent": "正在处理蓝本相关事宜…",
@@ -48,6 +53,9 @@ USER_TOOL_HINTS: dict[str, str] = {
 # 工具跑完后补一条完成态，避免过程条一直停在「正在…」
 USER_TOOL_DONE_HINTS: dict[str, str] = {
     "generate_freeform_points": "各章写作要点已起草",
+    "generate_chapter_boilerplate": "套话正文已生成",
+    "get_chapter_info": "章节配置已列出",
+    "generate_chapter_describes": "章节说明已生成",
     "skip_freeform_points": "已跳过要点配置",
     "submit_outline": "章节目录已处理",
     "start_writing": "已开始准备写作",
@@ -86,10 +94,12 @@ def emit_tool_done(emit: Any, tool_name: str) -> None:
         emit_user_process(emit, hint)
 
 
-def emit_action_process(emit: Any, action: str, payload: dict | None = None) -> None:
+def emit_action_process(emit: Any, action: str, payload: ChatPayload = None) -> None:
     """预路由 / UI action 过程条：禁止暴露 snake_case 工具名。"""
     key = (action or "").strip()
-    body = dict(payload or {})
+    from report_writing.domain.models import action_payload_dict
+
+    body = action_payload_dict(payload)
     # 蓝本向导按步骤给过程条，避免一律「打开创建向导」
     if key == "blueprint_wizard":
         step = str(body.get("step") or "").strip()
@@ -113,6 +123,9 @@ def emit_action_process(emit: Any, action: str, payload: dict | None = None) -> 
         if step in step_hints:
             emit_user_process(emit, step_hints[step])
             return
+    if key in {"retry_chapter", "skip_writing_supplement_check", "start_writing"}:
+        emit_user_process(emit, "正在准备开始写作…")
+        return
     hint = user_hint_for_tool(key)
     if hint:
         emit_user_process(emit, hint)

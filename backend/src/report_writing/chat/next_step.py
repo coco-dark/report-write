@@ -19,7 +19,7 @@ def infer_suggested_next_step(
     ff = dict(session.freeform or {})
     blueprint_id = (session.blueprint_id or "").strip()
     task_id = (session.task_id or "").strip()
-    from report_writing.chat.intent_router import user_chose_skip_blueprint
+    from report_writing.chat.session_state import user_chose_skip_blueprint
 
     out: dict[str, Any] = {
         "label": "",
@@ -65,8 +65,8 @@ def infer_suggested_next_step(
             return _fill(
                 out,
                 label="选章节并开写",
-                detail="已选蓝本：select_write_chapters 或卡片选章，再 start_writing。",
-                tools=["select_write_chapters", "start_writing", "get_writing_status"],
+                detail="已选蓝本：用户要写则 select_write_chapters 或卡片选章，再 start_writing。问进度才 get_writing_status。",
+                tools=["select_write_chapters", "start_writing"],
             )
         return _fill(
             out,
@@ -189,8 +189,8 @@ def _writing_step(
         return _fill(
             out,
             label="已暂停，可继续或改章",
-            detail="writing_paused：用户说继续则 start_writing；改章用 configure_chapter / retry_chapter。",
-            tools=["start_writing", "get_writing_status", "configure_chapter"],
+            detail="writing_paused：用户说继续则 start_writing；改章用 configure_chapter / retry_chapter。问进度才 get_writing_status。",
+            tools=["start_writing", "get_chapter_info", "configure_chapter"],
         )
 
     tid = (session.task_id or "").strip()
@@ -201,7 +201,7 @@ def _writing_step(
         task = _load_task(home, tid)
 
     if task is not None:
-        from report_writing.chat.intent_chapter import pick_awaiting_confirm_chapter_key, pick_focus_chapter_key
+        from report_writing.chat.chapter_resolve import pick_awaiting_confirm_chapter_key, pick_focus_chapter_key
 
         focus = pick_focus_chapter_key(task, message) or pick_awaiting_confirm_chapter_key(task)
         awaiting = pick_awaiting_confirm_chapter_key(task)
@@ -211,15 +211,15 @@ def _writing_step(
                 return _fill(
                     out,
                     label="处理需人工介入的章节",
-                    detail=f"章 {ch.key} 需人工：get_writing_status，configure_chapter 或 retry_chapter。",
-                    tools=["get_writing_status", "configure_chapter", "retry_chapter"],
+                    detail=f"章 {ch.key} 需人工：configure_chapter 或 retry_chapter。问进度才 get_writing_status。",
+                    tools=["get_chapter_info", "configure_chapter", "retry_chapter"],
                 )
             if st in {ChapterStatus.SEARCHING.value, ChapterStatus.WRITING.value, ChapterStatus.CHECKING.value}:
                 return _fill(
                     out,
                     label="等待本章写完",
-                    detail="后台在写：get_writing_status；用户急改可 pause_writing。",
-                    tools=["get_writing_status", "pause_writing"],
+                    detail="后台在写：用户急改可 pause_writing。问进度才 get_writing_status。",
+                    tools=["pause_writing"],
                 )
         if awaiting or focus:
             key = focus or awaiting
@@ -233,7 +233,7 @@ def _writing_step(
                 out,
                 label=f"确认本章{' · ' + title if title else ''}",
                 detail=f"进度卡有待确认章（{key}）：用户说确认则 confirm_chapter；要改要点/要素用 configure_chapter、add_chapter_element。",
-                tools=["confirm_chapter", "configure_chapter", "add_chapter_element", "retry_chapter"],
+                tools=["confirm_chapter", "get_chapter_info", "configure_chapter", "add_chapter_element", "retry_chapter"],
                 ui_action="confirm_chapter",
             )
         confirmed = sum(
@@ -247,15 +247,16 @@ def _writing_step(
                 out,
                 label="全部确认，可导出",
                 detail="各章已确认：prepare_export_word 或 confirm_all_chapters 收尾。",
-                tools=["prepare_export_word", "get_writing_status"],
+                tools=["prepare_export_word"],
                 ui_action="prepare_export_word",
             )
 
     return _fill(
         out,
-        label="看写作进度卡片",
-        detail="写作中：get_writing_status；改章 configure_chapter；加要素 add_chapter_element。",
-        tools=["get_writing_status", "configure_chapter", "add_chapter_element"],
+        label="可继续写已分析章，或先分析",
+        detail="没有正在写的章节：用户要写则 start_writing / select_write_chapters / write_analyzed_only；"
+        "问进度才 get_writing_status。闲聊口头说明，不要默认查进度。",
+        tools=["select_write_chapters", "write_analyzed_only", "start_writing", "get_chapter_info"],
     )
 
 
@@ -274,12 +275,3 @@ def _fill(
     out["ui_action"] = (ui_action or "").strip()
     out["confidence"] = confidence
     return out
-
-
-def next_step_prompt_line(session: ChatSession, *, home: Path | None = None, message: str = "") -> str:
-    step = infer_suggested_next_step(session, home=home, message=message)
-    if not step.get("label"):
-        return ""
-    tools = step.get("priority_tools") or []
-    tool_bit = f"优先工具：{', '.join(tools[:4])}" if tools else ""
-    return f"【推测下一步】{step['label']}。{step.get('detail') or ''} {tool_bit}".strip()

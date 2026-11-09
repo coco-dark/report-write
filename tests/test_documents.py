@@ -212,4 +212,4 @@ def test_model_study_keeps_chapter_order_and_sequence():
     )
     brief = _study_with_model(template, Model())
     assert [(item.sequence, item.title) for item in brief.chapters] == [("第一章", "概况"), ("1.2", "规模")]
-    assert brief.chapters[0].describes == "前一章"
+    assert brief.chapters[0].describes == "1. 前一章"

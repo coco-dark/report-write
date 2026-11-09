@@ -6,8 +6,8 @@ import json
 from pathlib import Path
 
 from report_writing.chat.gates import _ensure_analysis_choice_cards
-from report_writing.chat.intent_chapter import resolve_chapter_key_by_title
-from report_writing.chat.intent_llm import resolve_wizard_action
+from report_writing.chat.chapter_resolve import resolve_chapter_key_by_title
+from report_writing.chat.clarify_llm import resolve_wizard_action
 from report_writing.chat.study_chapter_resolve import parse_study_sequences_from_message
 from report_writing.chat.writing_control_route import apply_writing_control_classification
 from report_writing.controller import ensure_task

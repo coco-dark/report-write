@@ -4,32 +4,30 @@
     :class="{ docked }"
     :style="docked ? undefined : boxStyle"
     role="dialog"
-    aria-label="文档目录与写作进度"
+    aria-label="文档目录与章节配置"
   >
       <header class="doc-win-bar" @mousedown.prevent="startDrag">
         <div class="doc-win-bar-main">
           <strong>文档窗口</strong>
-          <el-select
-            v-if="documents.length"
-            :model-value="activeId"
-            size="small"
-            filterable
-            placeholder="切换文档"
-            class="doc-win-select"
-            :disabled="docSwitchBlocked"
-            :title="docSwitchBlocked ? docSwitchBlockReason : '切换文档'"
-            @mousedown.stop
-            @change="onPickDocument"
-          >
-            <el-option
+          <a-select
+ v-if="documents.length"
+ :value="activeId"
+ size="small"
+ placeholder="切换文档"
+ class="doc-win-select"
+ :disabled="docSwitchBlocked"
+ :title="docSwitchBlocked ? docSwitchBlockReason : '切换文档'"
+ @mousedown.stop
+ @change="onPickDocument"
+ show-search>
+            <a-select-option
               v-for="doc in documents"
               :key="doc.id"
-              :label="documentOptionLabel(doc)"
               :value="doc.id"
             >
               <span>{{ documentOptionLabel(doc) }}</span>
-            </el-option>
-          </el-select>
+            </a-select-option>
+          </a-select>
           <button
             v-if="activeDoc"
             type="button"
@@ -100,7 +98,7 @@
         <template v-else>
           <div class="doc-win-meta">
             <span>{{ docWorkspaceLabel }}</span>
-            <span v-if="activeDoc?.status">· {{ activeDoc.status }}</span>
+            <span v-if="headerDocStatus">· {{ headerDocStatus }}</span>
             <span>· {{ chapters.length }} 章</span>
             <span v-if="outlineConfirmed">· 目录已确认</span>
             <span v-else-if="chapters.length">· 目录待确认</span>
@@ -293,6 +291,7 @@
             </p>
             <div
               v-else
+              ref="previewArticleEl"
               class="preview-article"
               v-html="previewHtml"
             />
@@ -325,15 +324,15 @@
           <div v-show="mainView === 'chapter'" class="doc-win-split">
             <aside class="doc-win-tree" aria-label="章节目录">
               <div v-if="flatTree.length && selectableChapterKeys.length" class="tree-bulk">
-                <el-checkbox
-                  class="tree-bulk-all"
-                  :model-value="allSelectableChecked"
-                  :indeterminate="someSelectableChecked && !allSelectableChecked"
-                  :disabled="blockingLoad"
-                  @change="toggleSelectAll"
-                >
+                <a-checkbox
+ class="tree-bulk-all"
+ :checked="allSelectableChecked"
+ :indeterminate="someSelectableChecked && !allSelectableChecked"
+ :disabled="blockingLoad"
+ @change="toggleSelectAll"
+ >
                   全选
-                </el-checkbox>
+                </a-checkbox>
                 <span v-if="checkedKeys.length" class="tree-bulk-count">已选 {{ checkedKeys.length }}</span>
                 <div v-if="checkedKeys.length" class="tree-bulk-actions">
                   <button
@@ -354,24 +353,25 @@
                   </button>
                 </div>
               </div>
+              <div class="doc-win-tree-scroll">
               <div v-if="!tree.length" class="doc-win-empty sm">还没有章节目录</div>
-              <el-tree
-                v-else
-                ref="chapterOutlineTreeRef"
-                class="doc-outline-tree"
-                :data="outlineTreeData"
-                node-key="key"
-                show-checkbox
-                highlight-current
-                :indent="18"
-                :default-expanded-keys="outlineExpandedKeys"
-                :expand-on-click-node="false"
-                :check-on-click-node="false"
-                :props="outlineTreeProps"
-                :current-node-key="selectedKey || undefined"
-                @check="onOutlineTreeCheck"
-                @node-click="onOutlineTreeNodeClick"
-              >
+              <UiTree
+ v-else
+ ref="chapterOutlineTreeRef"
+ class="doc-outline-tree"
+ :data="outlineTreeData"
+ node-key="key"
+ show-checkbox
+ highlight-current
+ :indent="18"
+ :default-expanded-keys="outlineExpandedKeys"
+ :expand-on-click-node="false"
+ :check-on-click-node="false"
+ :props="outlineTreeProps"
+ :current-node-key="selectedKey || undefined"
+ @check="onOutlineTreeCheck"
+ @node-click="onOutlineTreeNodeClick"
+ >
                 <template #default="{ data }">
                   <span
                     class="tree-node-row"
@@ -381,35 +381,34 @@
                     }"
                     :title="chapterTreeTitle(data)"
                   >
-                    <el-tooltip
-                      v-if="chapterSlotMisaligned(data)"
-                      :content="chapterSlotWarnTitle(data)"
-                      placement="top"
-                      :show-after="200"
-                    >
+                    <a-tooltip
+ v-if="chapterSlotMisaligned(data)"
+ :title="chapterSlotWarnTitle(data)"
+ placement="top"
+ >
                       <i class="slot-warn" aria-label="槽位未对齐" tabindex="0">!</i>
-                    </el-tooltip>
+                    </a-tooltip>
                     <span class="label">{{ chapterLabel(data) }}</span>
                     <em v-if="chapterStateLabel(data)" :class="['tone', chapterStateTone(data)]">
                       {{ chapterStateLabel(data) }}
                     </em>
                   </span>
                 </template>
-              </el-tree>
+              </UiTree>
+              </div>
             </aside>
             <section class="doc-win-detail" aria-label="章节配置与写作信息">
               <template v-if="selectedChapter">
                 <div class="detail-sticky">
                   <div class="detail-head">
                     <div class="detail-head-main">
-                      <el-tooltip
-                        v-if="chapterSlotMisaligned(selectedChapter)"
-                        :content="chapterSlotWarnTitle(selectedChapter)"
-                        placement="top"
-                        :show-after="200"
-                      >
+                      <a-tooltip
+ v-if="chapterSlotMisaligned(selectedChapter)"
+ :title="chapterSlotWarnTitle(selectedChapter)"
+ placement="top"
+ >
                         <i class="slot-warn" aria-label="槽位未对齐" tabindex="0">!</i>
-                      </el-tooltip>
+                      </a-tooltip>
                       <strong>{{ chapterLabel(selectedChapter) }}</strong>
                     </div>
                     <em :class="['tone', chapterStateTone(selectedChapter)]">
@@ -461,6 +460,11 @@
                         act.id === "save_config" && saving ? "保存中…" : act.label
                       }}
                     </button>
+                    <span
+                      v-if="chapterWriteScoreLine(selectedChapter)"
+                      class="write-score-chip"
+                      :class="{ bad: selectedChapter?.check_below_threshold }"
+                    >{{ chapterWriteScoreLine(selectedChapter) }}</span>
                     <span v-if="saveHint" class="cfg-hint">{{ saveHint }}</span>
                   </div>
                 </div>
@@ -494,29 +498,26 @@
                     </label>
                     <label class="span-2">
                       <span>上级节点</span>
-                      <el-select
-                        v-model="configDraft.parent"
-                        clearable
-                        filterable
-                        placeholder="无（顶级）"
-                        class="cfg-parent-select"
-                        :disabled="blockingLoad"
-                      >
-                        <el-option
+                      <a-select
+ v-model:value="configDraft.parent"
+ allow-clear
+ placeholder="无（顶级）"
+ class="cfg-parent-select"
+ :disabled="blockingLoad"
+ show-search>
+                        <a-select-option
                           v-for="item in configParentOptions"
                           :key="item.key"
-                          :label="`${item.sequence || '—'} ${item.title || item.key}`"
-                          :value="item.key"
-                        />
-                      </el-select>
+                          :value="item.key">{{ `${item.sequence || '—'} ${item.title || item.key}` }}</a-select-option>
+                      </a-select>
                     </label>
-                    <el-checkbox
-                      v-model="configDraft.structure_only"
-                      class="cfg-switch span-2"
-                      :disabled="blockingLoad"
-                    >
+                    <a-checkbox
+ v-model:checked="configDraft.structure_only"
+ class="cfg-switch span-2"
+ :disabled="blockingLoad"
+ >
                       仅目录节点（不解析 / 不写正文）
-                    </el-checkbox>
+                    </a-checkbox>
                     <label v-if="configDraft.structure_only" class="span-2">
                       <span>章节说明</span>
                       <textarea
@@ -543,9 +544,58 @@
                       <p class="cfg-hint span-2">仅目录节点无需配置写作要点；可在「基本配置」中编辑说明。</p>
                     </template>
                     <template v-else>
-                      <div class="cfg-point-items span-2">
+                      <label class="span-2">
+                        <span>写作策略</span>
+                        <a-select
+                          v-model:value="configDraft.compose"
+                          class="cfg-input"
+                          :disabled="blockingLoad"
+                          :options="composeOptions"
+                          option-label-prop="label"
+                          @change="onComposeChange"
+                        />
+                        <span class="cfg-hint">口径随写作策略变化。固定内容输出不需要要点与章节说明。</span>
+                      </label>
+                      <div v-if="!isFixedComposeMode" class="cfg-chapter-elements span-2">
                         <div class="cfg-point-items-head">
-                          <span>写作要点</span>
+                          <span>
+                            章节要素
+                            <em class="cfg-scope-badge chapter" title="整章引用，不自动挂到各条写作要点">章</em>
+                          </span>
+                          <button
+                            type="button"
+                            class="cfg-el-manage"
+                            :disabled="blockingLoad || !taskId"
+                            @click="associateChapterElements"
+                          >
+                            {{ configChapterElements.length ? "管理章节要素" : "关联章节要素" }}
+                          </button>
+                        </div>
+                        <div v-if="configChapterElements.length" class="cfg-element-tags">
+                          <button
+                            v-for="el in configChapterElements"
+                            :key="el.id"
+                            type="button"
+                            class="cfg-el-tag chapter"
+                            :title="`${el.name || el.id}（章节要素）`"
+                            :disabled="saving || busy"
+                            @click="openElementEditor(el)"
+                          >
+                            <span class="scope">章</span>
+                            <span class="kind">{{ elementKindLabel(el.kind) }}</span>
+                            <span class="name">{{ el.name || el.id }}</span>
+                          </button>
+                        </div>
+                        <p v-else class="cfg-el-empty">
+                          尚未关联章节要素。章节要素供整章检索/写作引用；各条写作要点请在下方单独关联「要点要素」。
+                        </p>
+                      </div>
+                      <div v-if="!isFixedComposeMode" class="cfg-point-items span-2">
+                        <div class="cfg-point-items-head">
+                          <span>
+                            写作要点
+                            <em class="cfg-scope-badge point" title="只挂在本条要点上">要点</em>
+                          </span>
                           <button
                             type="button"
                             class="cfg-el-manage"
@@ -555,6 +605,9 @@
                             添加一行
                           </button>
                         </div>
+                        <p class="cfg-hint" style="margin: 0 0 6px">
+                          「需关联」开关：关=普通要点（可不挂要素）；开=待补项，需关联要点要素。
+                        </p>
                         <div class="cfg-point-table-wrap">
                           <table v-if="configDraft.point_items.length" class="cfg-point-table">
                             <thead>
@@ -562,8 +615,8 @@
                                 <th class="col-idx">#</th>
                                 <th class="col-text">要点内容</th>
                                 <th class="col-slot">待补项</th>
-                                <th class="col-el">关联要素</th>
-                                <th class="col-state">状态</th>
+                                <th class="col-el">要点要素</th>
+                                <th class="col-req" title="开启后需关联要素才能开写；关闭则为普通要点">需关联</th>
                                 <th class="col-op" aria-label="操作" />
                               </tr>
                             </thead>
@@ -587,32 +640,35 @@
                                 </td>
                                 <td class="col-el">
                                   <button
-                                    v-if="rowNeedsPointAssociate(row)"
+                                    v-if="pointItemElementLabel(row)"
+                                    type="button"
+                                    class="cfg-point-el-btn"
+                                    :title="`要点要素：${pointItemElementLabel(row)}`"
+                                    :disabled="saving || busy"
+                                    @click="openPointLinkedElement(row)"
+                                  >
+                                    <span class="cfg-scope-badge point">要点</span>
+                                    {{ pointItemElementLabel(row) }}
+                                  </button>
+                                  <button
+                                    v-else
                                     type="button"
                                     class="cfg-point-link-el"
                                     :disabled="blockingLoad || !taskId"
                                     @click="associatePointItemElement(row, pi)"
                                   >
-                                    关联要素
+                                    关联要点要素
                                   </button>
-                                  <button
-                                    v-else-if="pointItemElementLabel(row)"
-                                    type="button"
-                                    class="cfg-point-el-btn"
-                                    :title="pointItemElementLabel(row)"
-                                    :disabled="saving || busy"
-                                    @click="openPointLinkedElement(row)"
-                                  >
-                                    {{ pointItemElementLabel(row) }}
-                                  </button>
-                                  <span v-else class="muted">—</span>
                                 </td>
-                                <td class="col-state">
-                                  <span
-                                    v-if="row.needs_supplement"
-                                    class="cfg-point-badge warn"
-                                  >待补充</span>
-                                  <span v-else class="muted">就绪</span>
+                                <td class="col-req">
+                                  <a-switch
+                                    size="small"
+                                    :checked="pointItemRequireElementOn(row)"
+                                    :disabled="blockingLoad"
+                                    checked-children="是"
+                                    un-checked-children="否"
+                                    @change="(on) => togglePointItemRequireElement(row, on)"
+                                  />
                                 </td>
                                 <td class="col-op">
                                   <button
@@ -638,7 +694,7 @@
                           <p v-else class="cfg-hint">暂无要点。可手动添加，或先「保存并分析本章」生成。</p>
                         </div>
                       </div>
-                      <div v-if="configReferenceKeywords.length" class="cfg-ref-keywords span-2">
+                      <div v-if="!isFixedComposeMode && configReferenceKeywords.length" class="cfg-ref-keywords span-2">
                         <div class="cfg-ref-keywords-head">
                           <span>参考检索词</span>
                           <span class="cfg-ref-keywords-hint">分析生成 · 仅供参考</span>
@@ -651,89 +707,59 @@
                           >{{ kw }}</span>
                         </div>
                       </div>
-                      <label class="span-2">
-                        <span>章节说明（写作背景）</span>
+                      <label v-if="!isFixedComposeMode" class="span-2">
+                        <span class="cfg-field-head">
+                          章节说明
+                          <button
+                            type="button"
+                            class="cfg-el-manage"
+                            :disabled="blockingLoad || chapterMetaRegenBusy"
+                            @click="refreshChapterMetaFromPoints"
+                          >
+                            {{ chapterMetaRegenBusy ? "正在生成…" : "根据原文/要点生成" }}
+                          </button>
+                        </span>
                         <textarea
                           v-model="configDraft.describes"
                           class="cfg-input"
-                          rows="2"
-                          :disabled="blockingLoad"
+                          rows="6"
+                          :disabled="blockingLoad || chapterMetaRegenBusy"
+                          placeholder="1. 写作风格：…&#10;2. 写作特点：…&#10;3. 描述方式：…&#10;4. 排版格式：…&#10;5. 写作注意事项：…&#10;可手动改，保存时不会覆盖。"
                         />
                       </label>
-                      <label class="span-2">
+                      <label v-if="!isFixedComposeMode" class="span-2">
                         <span>补充提示词</span>
                         <textarea
                           v-model="configDraft.aux_prompt"
                           class="cfg-input"
                           rows="2"
-                          placeholder="写法/体裁约束，勿写工程名、投资额等项目元数据。例：只输出表格，不要导语"
                           :disabled="blockingLoad"
+                          placeholder="可选。留给你自行填写的写法/体裁约束，系统不会自动生成。"
                         />
                       </label>
-                      <el-checkbox
-                        v-model="configDraft.fixed_output"
-                        class="cfg-switch span-2"
-                        :disabled="blockingLoad"
-                      >
-                        固定正文输出
-                      </el-checkbox>
-                      <label v-if="configDraft.fixed_output" class="span-2">
-                        <span>固定正文</span>
-                        <textarea
+                      <div v-if="isSlotReferenceCompose" class="cfg-boilerplate-actions span-2">
+                        <button
+                          type="button"
+                          class="cfg-el-manage"
+                          :disabled="blockingLoad || generatingBoilerplate"
+                          @click="generateBoilerplateFromDraft"
+                        >
+                          {{ generatingBoilerplate ? "正在生成套话…" : "根据原文生成填槽正文" }}
+                        </button>
+                        <span class="cfg-hint">保留原文骨架，仅把项目实例换成 {{槽名}}。</span>
+                      </div>
+                      <div class="cfg-ref-rich span-2">
+                        <span>{{ referenceFieldLabel }}</span>
+                        <ChapterHtmlEditor
                           v-model="configDraft.reference_text"
-                          class="cfg-input"
-                          rows="3"
-                          :disabled="blockingLoad"
+                          class="cfg-ref-editor"
+                          :readonly="blockingLoad"
+                          :placeholder="referenceFieldPlaceholder"
+                          :min-height="160"
+                          :max-height="360"
                         />
-                      </label>
-                      <label v-else class="span-2">
-                        <span>参考正文</span>
-                        <textarea
-                          v-model="configDraft.reference_text"
-                          class="cfg-input"
-                          rows="2"
-                          placeholder="可选，供写作参考"
-                          :disabled="blockingLoad"
-                        />
-                      </label>
+                      </div>
                     </template>
-                    <div
-                      v-if="selectedChapterWriteProcess.length || selectedChapterEvidence.length"
-                      class="write-collect-panel span-2"
-                    >
-                      <div v-if="selectedChapterWriteProcess.length" class="write-collect-block">
-                        <div class="write-collect-head">写作过程</div>
-                        <ol class="write-collect-steps">
-                          <li
-                            v-for="(row, ri) in selectedChapterWriteProcess"
-                            :key="`${row.step || ri}-${row.status || ''}`"
-                            :class="String(row.status || '')"
-                          >
-                            <strong>{{ row.step_label || row.step || "步骤" }}</strong>
-                            <span class="st">{{ row.status_label || row.status || "" }}</span>
-                            <ul v-if="(row.notes || []).length" class="write-collect-notes">
-                              <li v-for="(n, ni) in row.notes" :key="ni">{{ n }}</li>
-                            </ul>
-                            <p v-else-if="row.note" class="write-collect-note">{{ row.note }}</p>
-                          </li>
-                        </ol>
-                      </div>
-                      <div v-if="selectedChapterEvidence.length" class="write-collect-block">
-                        <div class="write-collect-head">
-                          要素收集 · {{ selectedChapterEvidence.length }}
-                        </div>
-                        <ul class="write-collect-evidence">
-                          <li v-for="(ev, ei) in selectedChapterEvidence" :key="ev.id || ei">
-                            <div class="ev-title">
-                              <span class="ev-name">{{ ev.point || "要素" }}</span>
-                              <span v-if="ev.location" class="ev-kind">{{ elementKindLabel(ev.location) }}</span>
-                            </div>
-                            <p v-if="ev.query" class="ev-query">检索词：{{ ev.query }}</p>
-                            <pre v-if="ev.excerpt" class="ev-excerpt">{{ ev.excerpt }}</pre>
-                          </li>
-                        </ul>
-                      </div>
-                    </div>
                   </div>
                 </div>
               </template>
@@ -762,17 +788,14 @@
         @mousedown.prevent="startResize"
       />
 
-    <el-dialog
-      v-model="elementDialogVisible"
-      :title="elementDraft?.name ? `要素 · ${elementDraft.name}` : '查看 / 修改要素'"
-      width="760px"
-      destroy-on-close
-      append-to-body
-      align-center
-      class="doc-win-element-dialog"
-      @closed="onElementDialogClosed"
-    >
-      <el-form v-if="elementDraft" label-position="top">
+    <a-modal
+ v-model:open="elementDialogVisible"
+ :title="elementDraft?.name ? `要素 · ${elementDraft.name}` : '查看 / 修改要素'"
+ width="760px"
+ class="doc-win-element-dialog"
+ @afterClose="onElementDialogClosed"
+ destroy-on-close centered>
+      <a-form v-if="elementDraft" layout="vertical">
         <ElementConfigFields
           v-model="elementDraft"
           :ref-target-options="elementRefTargetOptions"
@@ -780,33 +803,28 @@
           :task-id="taskId"
           :element-id="elementDraft?.id"
         />
-      </el-form>
+      </a-form>
       <template #footer>
-        <el-button
-          type="danger"
-          plain
-          :disabled="saving || !elementDraft?.id"
-          @click="unlinkCurrentElement"
-        >
+        <a-button
+ :disabled="saving || !elementDraft?.id"
+ @click="unlinkCurrentElement"
+ danger>
           取消关联
-        </el-button>
-        <el-button @click="elementDialogVisible = false">关闭</el-button>
-        <el-button type="primary" :loading="saving" :disabled="saving" @click="saveElementDraft">
+        </a-button>
+        <a-button @click="elementDialogVisible = false">关闭</a-button>
+        <a-button type="primary" :loading="saving" :disabled="saving" @click="saveElementDraft">
           保存
-        </el-button>
+        </a-button>
       </template>
-    </el-dialog>
+    </a-modal>
 
-    <el-dialog
-      v-model="libraryPendingDialogVisible"
-      title="待收录要素"
-      width="720px"
-      destroy-on-close
-      append-to-body
-      align-center
-      class="doc-win-library-pending-dialog"
-      @closed="onLibraryPendingDialogClosed"
-    >
+    <a-modal
+ v-model:open="libraryPendingDialogVisible"
+ title="待收录要素"
+ width="720px"
+ class="doc-win-library-pending-dialog"
+ @afterClose="onLibraryPendingDialogClosed"
+ destroy-on-close centered :footer="null">
       <ChatElementLibraryPendingCard
         v-if="libraryPendingDialogVisible && libraryPendingCard"
         :card="libraryPendingCard"
@@ -814,21 +832,21 @@
         @changed="onLibraryPendingCardChanged"
         @done="onLibraryPendingDone"
       />
-    </el-dialog>
+    </a-modal>
 
-    <el-dialog
-      v-model="restudyDialogVisible"
-      title="重新分析本章"
-      width="640px"
-      destroy-on-close
-      append-to-body
-      align-center
-      class="doc-win-restudy-dialog"
-      @closed="onRestudyDialogClosed"
-    >
+    <a-modal
+ v-model:open="restudyDialogVisible"
+ title="重新分析本章"
+ width="640px"
+ class="doc-win-restudy-dialog"
+ @afterClose="onRestudyDialogClosed"
+ destroy-on-close centered>
       <div class="restudy-hero">
         <strong>{{ restudyTarget.label || "当前章节" }}</strong>
-        <p>选择分析方式。根据原文分析时，请把本章内容粘贴到文本框。</p>
+        <p class="restudy-strategy">
+          当前写作策略：<b>{{ restudyComposeLabel }}</b>
+        </p>
+        <p>选择分析方式。分析将按上述策略生成要点、写作背景与补充提示词；根据原文分析时，请把本章内容粘贴到文本框。</p>
       </div>
       <div class="restudy-modes">
         <button
@@ -857,90 +875,149 @@
         </button>
       </div>
       <div v-if="restudyMethod === 'source'" class="restudy-pane">
-        <div
-          ref="restudyPasteBox"
-          class="restudy-rich-paste"
-          contenteditable="true"
-          data-placeholder="在此粘贴本章原文（从 Word / 网页复制即可）…"
-          @input="onRestudyPasteInput"
-          @paste="onRestudyRichPaste"
+        <ChapterHtmlEditor
+          v-model="restudyPasteHtml"
+          class="restudy-rich-editor"
+          placeholder="在此粘贴本章原文（从 Word / 网页复制即可）…"
+          :min-height="180"
+          :max-height="360"
         />
       </div>
       <template #footer>
-        <el-button @click="restudyDialogVisible = false">取消</el-button>
-        <el-button
-          type="primary"
-          :disabled="restudyMethod === 'source' && !restudyPasteText.trim()"
-          @click="submitRestudyDialog"
-        >
+        <a-button @click="restudyDialogVisible = false">取消</a-button>
+        <a-button
+ type="primary"
+ :disabled="restudyMethod === 'source' && !restudyPastePlain"
+ @click="submitRestudyDialog"
+ >
           开始分析
-        </el-button>
+        </a-button>
       </template>
-    </el-dialog>
+    </a-modal>
 
-    <el-dialog
-      v-model="pointItemDialogVisible"
-      title="编辑写作要点"
-      width="520px"
-      destroy-on-close
-      append-to-body
-      align-center
-      class="doc-win-point-item-dialog"
-      @closed="onPointItemDialogClosed"
-    >
-      <el-form label-position="top" class="point-item-edit-form">
-        <el-form-item label="要点内容">
-          <el-input
-            v-model="pointItemEditDraft.text"
-            type="textarea"
+    <a-modal
+ v-model:open="pointItemDialogVisible"
+ title="编辑写作要点"
+ width="520px"
+ class="doc-win-point-item-dialog"
+ @afterClose="onPointItemDialogClosed"
+ destroy-on-close centered>
+      <a-form layout="vertical" class="point-item-edit-form">
+        <a-form-item label="要点内容">
+          <a-textarea
+            v-model:value="pointItemEditDraft.text"
             :rows="4"
             placeholder="写作要点描述"
             :disabled="blockingLoad"
           />
-        </el-form-item>
-        <el-form-item label="待补项">
-          <el-input
-            v-model="pointItemEditDraft.slot"
-            placeholder="待补项名称，如：投资额"
+        </a-form-item>
+        <a-form-item label="待补项">
+          <a-input
+            v-model:value="pointItemEditDraft.slot"
+            placeholder="待补项名称，如：投资额（可选；清空则不强制关联要素）"
             :disabled="blockingLoad"
+            allow-clear
           />
-        </el-form-item>
-      </el-form>
+          <p class="cfg-hint" style="margin-top: 6px">
+            清空待补项并保存，即可改成普通写作要点（可不关联要素）。也可点下方「改为普通要点」。
+          </p>
+        </a-form-item>
+        <a-form-item>
+          <template #label>
+            要点要素
+            <em class="cfg-scope-badge point">要点</em>
+          </template>
+          <div class="point-item-el-row">
+            <span
+              v-if="pointItemEditElementLabel"
+              class="point-item-el-name"
+              :title="pointItemEditElementLabel"
+            >{{ pointItemEditElementLabel }}</span>
+            <span v-else class="muted">未关联要点要素（可选）</span>
+            <a-button
+              size="small"
+              :disabled="blockingLoad || !taskId"
+              @click="associateFromPointItemEditor"
+            >
+              {{ pointItemEditDraft.element_id ? "更换要点要素" : "关联要点要素" }}
+            </a-button>
+            <a-button
+              v-if="pointItemEditDraft.element_id"
+              size="small"
+              :disabled="blockingLoad"
+              @click="clearFromPointItemEditor"
+            >
+              取消关联
+            </a-button>
+          </div>
+        </a-form-item>
+      </a-form>
       <template #footer>
-        <el-button @click="pointItemDialogVisible = false">取消</el-button>
-        <el-button type="primary" :disabled="blockingLoad" @click="savePointItemEditor">
+        <a-button
+          v-if="pointItemEditLooksSupplement"
+          :disabled="blockingLoad"
+          @click="convertPointItemEditorToPlain"
+        >
+          改为普通要点
+        </a-button>
+        <a-button @click="pointItemDialogVisible = false">取消</a-button>
+        <a-button type="primary" :disabled="blockingLoad" @click="savePointItemEditor">
           确定
-        </el-button>
+        </a-button>
       </template>
-    </el-dialog>
+    </a-modal>
   </div>
 </template>
 
 <script setup>
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessage, ElMessageBox } from "../ui.js";
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 
-import { recoverClipboardPlain } from "../chatHtml";
-import { authHeaders, request } from "../api";
+import { htmlToPlain } from "../chatHtml";
+import { authHeaders, docOutlineUrl, draftPreviewUrl, request } from "../api";
+import {
+  COMPOSE_HYBRID,
+  COMPOSE_OPTIONS,
+  composeLabel,
+  isFixedCompose,
+  normalizeCompose,
+  presenceForCompose,
+  usesSlotReference,
+} from "../composeStrategy";
+import ChapterHtmlEditor from "./ChapterHtmlEditor.vue";
 import {
   elementKindLabel,
   elementSummary,
   kvPairsFromElement,
+  mergeElementNodes,
   normalizeKvElementDraft,
 } from "../elementUi";
 import {
   humanLabel,
   linkPointItemsToElements,
+  normalizePointItemRow,
   parseSlotFromText,
+  applyPendingPointItemBindings,
+  bindingsAligned,
+  chapterElementIdsForPersist,
+  shouldClearBindings,
+  collectPointItemBindings,
   elementIdsFromPointItems,
+  mergeChapterElementIds,
   pickPointItemsAuthoritative,
   pickRicherPointItems,
   pointItemsFromChapter,
   pointItemsSignature,
   pointsFromPointItems,
+  stripSupplementMarkers,
   syncPointItemsFromPoints,
   textNeedsSupplement,
 } from "../pointItemsSync";
+import {
+  beginChapterBindingFlight,
+  chapterBindingInFlight,
+  endChapterBindingFlight,
+} from "../chapterBindingsFlight";
 import {
   documentWindowOptionLabel,
   hasWritingCopyWithLibrarySource,
@@ -997,8 +1074,35 @@ function emptyConfigDraft() {
     aux_prompt: "",
     reference_text: "",
     fixed_output: false,
+    presence: presenceForCompose(COMPOSE_HYBRID),
+    compose: COMPOSE_HYBRID,
     structure_only: false,
   };
+}
+
+const composeOptions = COMPOSE_OPTIONS;
+
+async function onComposeChange(value) {
+  if (hydratingConfig.value) return;
+  configDraft.compose = normalizeCompose(value);
+  configDraft.presence = presenceForCompose(configDraft.compose);
+  configDraft.fixed_output = isFixedCompose(configDraft.compose);
+  saveHint.value = "未保存";
+  await saveChapterConfig({ syncSession: false });
+}
+
+const generatingBoilerplate = ref(false);
+
+async function generateBoilerplateFromDraft() {
+  const tid = String(configPersistTaskIds()[0] || taskId.value || "").trim();
+  const key = String(selectedKey.value || "").trim();
+  if (!tid || !key) {
+    ElMessage.warning("请先选中章节");
+    return;
+  }
+  emitWrite("generate_chapter_boilerplate", {
+    source_text: configDraft.reference_text || "",
+  });
 }
 
 const props = defineProps({
@@ -1017,6 +1121,8 @@ const props = defineProps({
   outlineReloadToken: { type: Number, default: 0 },
   /** 配置/分析/写作操作完成后父组件递增：强制 fresh 直读库 */
   outlineForceReloadToken: { type: Number, default: 0 },
+  /** 写完一章后父组件递增：强制重拉全文预览 */
+  previewReloadToken: { type: Number, default: 0 },
   /** 父组件 DocWindowDriver 定位指令 */
   locate: {
     type: Object,
@@ -1130,7 +1236,7 @@ function initialBox() {
 const zoom = ref(1);
 const box = ref(initialBox());
 const selectedKey = ref("");
-/** 左侧勾选：批量分析 / 写作（el-tree 父子联动） */
+/** 左侧勾选：批量分析 / 写作（树勾选，父子独立） */
 const chapterOutlineTreeRef = ref(null);
 const checkedKeys = ref([]);
 const checkedKeySet = computed(() => new Set(checkedKeys.value));
@@ -1147,8 +1253,8 @@ const sampleReadyLocal = ref(false);
 const sampleNameLocal = ref("");
 const restudyDialogVisible = ref(false);
 const restudyMethod = ref("auto");
-const restudyPasteText = ref("");
-const restudyPasteBox = ref(null);
+const restudyPasteHtml = ref("");
+const restudyPastePlain = computed(() => htmlToPlain(restudyPasteHtml.value || "").trim());
 const restudyTarget = ref({ keys: [], sequences: [], label: "", key: "" });
 const loading = ref(true); // 打开即遮罩，等首轮读数结束再关
 const outlineFullyLoaded = ref(false);
@@ -1218,15 +1324,16 @@ const blockingLoad = computed(
 const tabControlsDisabled = computed(
   () => loading.value || saving.value || isClosing.value || Boolean(props.busy)
 );
-/** 分析/写作/配置进行中：禁止切换其它文档 */
-const docSwitchBlocked = computed(
-  () =>
-    Boolean(props.opsLocked) ||
-    loading.value ||
-    saving.value ||
-    isClosing.value ||
-    Boolean(props.busy)
-);
+/** 写作/保存/加载中禁止切文档；分析中允许切到另一份（分析在后台继续） */
+const docSwitchBlocked = computed(() => {
+  if (loading.value || saving.value || isClosing.value || Boolean(props.busy)) return true;
+  if (props.opsLocked) {
+    const label = String(props.opsLockLabel || "").trim();
+    if (/写作|书写/.test(label)) return true;
+    return false;
+  }
+  return false;
+});
 const docSwitchBlockReason = computed(() => {
   if (saving.value) return "正在保存配置，请稍后再切换文档";
   if (props.opsLocked) {
@@ -1256,6 +1363,13 @@ const opsStatusLabel = computed(() => {
   }
   return label || "处理中…";
 });
+const headerDocStatus = computed(() => {
+  const st = String(activeDoc.value?.status || "").trim();
+  if (!st) return "";
+  // 任务态 studying 会显示「分析中」，与操作锁文案叠在一起，像没学完
+  if (/分析中/.test(st)) return "";
+  return st;
+});
 const opsLockDetail = computed(() => {
   if (!props.opsLocked) return "";
   const label = String(props.opsLockLabel || "").trim();
@@ -1281,8 +1395,44 @@ const topologyRenderKey = ref(0);
 /** 首次进入拓扑后再挂载 VueFlow，之后用 v-show 保活 */
 const topologyEverOpened = ref(false);
 const configDraft = reactive(emptyConfigDraft());
+const isFixedComposeMode = computed(() => isFixedCompose(configDraft.compose));
+const isSlotReferenceCompose = computed(() => usesSlotReference(configDraft.compose));
+const referenceFieldLabel = computed(() => {
+  if (isFixedComposeMode.value) return "固定正文";
+  if (isSlotReferenceCompose.value) return "参考正文（填槽）";
+  return "参考正文";
+});
+const referenceFieldPlaceholder = computed(() => {
+  if (isFixedComposeMode.value) return "本章将按原文直接输出，不改写。可从 Word 粘贴。";
+  if (isSlotReferenceCompose.value) {
+    return "分析后保留原文骨架，实例换成 {{工程名称}} 这类槽。可从 Word 粘贴。";
+  }
+  return "分析后保留的原文，供对照写法。可从 Word 粘贴。";
+});
+
+function composeOfChapter(key) {
+  const id = String(key || "").trim();
+  const node = (outlineNodes.value || []).find((item) => String(item?.key || "") === id) || {};
+  const extras = { fixed_output: node.fixed_output, presence: node.presence };
+  if (id && id === String(selectedKey.value || "").trim()) {
+    return normalizeCompose(configDraft.compose || node.compose, {
+      ...extras,
+      presence: configDraft.presence || node.presence,
+    });
+  }
+  return normalizeCompose(node.compose, extras);
+}
+
+const restudyComposeLabel = computed(() => {
+  const keys = (restudyTarget.value?.keys || []).map((k) => String(k || "").trim()).filter(Boolean);
+  if (!keys.length) {
+    return composeLabel(configDraft.compose, { presence: configDraft.presence });
+  }
+  const labels = [...new Set(keys.map((k) => composeLabel(composeOfChapter(k))))];
+  if (labels.length === 1) return labels[0];
+  return `各章不同（${labels.join("；")}）`;
+});
 /** 按 taskId 缓存目录/要素，切回时先恢复本蓝本，禁止用其它蓝本填充 */
-const outlineCacheByTask = new Map();
 let drag = null;
 let fetchToken = 0;
 let outlineInflight = null;
@@ -1317,6 +1467,19 @@ function outlineSourceTaskId(doc = activeDoc.value) {
   const wid = String(doc?.writingTaskId || "").trim();
   if (wid) return wid;
   return String(doc?.taskId || doc?.blueprintId || "").trim();
+}
+
+function sessionWritingTaskId(doc = activeDoc.value) {
+  return String(doc?.writingTaskId || "").trim();
+}
+
+function requestDocOutline(taskId, { fresh = false } = {}) {
+  return request(
+    docOutlineUrl(taskId, {
+      fresh,
+      writingTaskId: sessionWritingTaskId(),
+    })
+  );
 }
 /**
  * 要素/章节配置落盘目标：有写作 clone 时只写 clone，禁止双写库蓝本（否则刷新又从 bp* 盖回）。
@@ -1425,6 +1588,21 @@ const topologyOutline = computed(() => {
   return null;
 });
 
+function unionElementIds(...candidates) {
+  const out = [];
+  const seen = new Set();
+  for (const raw of candidates) {
+    if (!Array.isArray(raw)) continue;
+    for (const id of raw) {
+      const s = String(id || "").trim();
+      if (!s || seen.has(s)) continue;
+      seen.add(s);
+      out.push(s);
+    }
+  }
+  return out;
+}
+
 /** 关联 id：优先非空列表。文档/进度卡常带空 []，不能用 || 盖住大纲刚写入的关联 */
 function pickElementIds(...candidates) {
   let fallback = null;
@@ -1437,41 +1615,177 @@ function pickElementIds(...candidates) {
   return fallback ? [...fallback] : [];
 }
 
-/** 关联确认后、目录尚未拉齐时暂存；拉齐/刷新时合并，避免标签被空数据冲掉 */
+/** 要素关联 PUT 飞行中：乐观态暂存；落盘成功或 GET 对齐后必须清空，勿长期当第二真源 */
 const pendingChapterElementIds = new Map();
+const pendingPointItemBindings = new Map();
+let bindingRevision = 0;
+/** 重分析已清空要素关联的章：合并大纲时勿把旧 element_ids / 要点关联加回来 */
+const studyClearedElementKeys = new Set();
 
-function rememberPendingElementIds(chapterKey, ids) {
+function rememberPendingElementIds(chapterKey, ids, { replace = true } = {}) {
   const key = String(chapterKey || "").trim();
   if (!key) return;
-  const list = (ids || []).map((id) => String(id || "").trim()).filter(Boolean);
-  if (list.length) pendingChapterElementIds.set(key, list);
-  else pendingChapterElementIds.delete(key);
+  const list = unionElementIds(ids);
+  if (!list.length) {
+    pendingChapterElementIds.delete(key);
+    bindingRevision += 1;
+    return;
+  }
+  if (replace) {
+    pendingChapterElementIds.set(key, list);
+  } else {
+    const merged = unionElementIds(pendingChapterElementIds.get(key), list);
+    pendingChapterElementIds.set(key, merged);
+  }
+  bindingRevision += 1;
 }
 
-function mergeElementNodesLocal(prev, next) {
-  const byId = new Map();
-  for (const el of prev || []) {
-    const id = String(el?.id || "").trim();
-    if (id) byId.set(id, { ...el });
+function rememberPendingPointItemBindings(chapterKey, pointItems) {
+  const key = String(chapterKey || "").trim();
+  if (!key) return;
+  const collected = collectPointItemBindings(pointItems);
+  if (!collected.size) return;
+  const prev = pendingPointItemBindings.get(key) || new Map();
+  for (const [rid, bind] of collected) {
+    prev.set(rid, { ...bind });
   }
-  for (const el of next || []) {
-    const id = String(el?.id || "").trim();
-    if (!id) continue;
-    const prevEl = byId.get(id) || {};
-    const merged = { ...prevEl, ...el };
-    const keepName = humanLabel(el?.name, prevEl?.name);
-    if (keepName) merged.name = keepName;
-    else if (humanLabel(prevEl?.name)) merged.name = String(prevEl.name).trim();
-    // 服务端偶发带回空 file_slots 时保留本地已配引用
-    const prevSlots = Array.isArray(prevEl.file_slots) ? prevEl.file_slots : [];
-    const nextSlots = Array.isArray(el.file_slots) ? el.file_slots : [];
-    const prevHas = prevSlots.some((s) => Number(s?.no) > 0);
-    const nextHas = nextSlots.some((s) => Number(s?.no) > 0);
-    if (prevHas && !nextHas) merged.file_slots = prevSlots.map((s) => ({ ...s }));
-    else if (nextHas) merged.file_slots = nextSlots.map((s) => ({ ...s }));
-    byId.set(id, merged);
+  pendingPointItemBindings.set(key, prev);
+  bindingRevision += 1;
+}
+
+function patchChapterBindingsFromServer(chapterKey, serverChapter) {
+  const key = String(chapterKey || "").trim();
+  if (!key || !serverChapter || typeof serverChapter !== "object") return;
+  const items = pickPointItemsAuthoritative([
+    serverChapter.point_items,
+    serverChapter.config?.point_items,
+  ]);
+  const ids = chapterElementIdsForPersist(
+    unionElementIds(serverChapter.element_ids, serverChapter.config?.element_ids),
+    items
+  );
+  const pts = pickRicherList(serverChapter.points, serverChapter.config?.points);
+  const applyOne = (ch) => {
+    if (String(ch?.key || "") !== key) return ch;
+    const cfg = ch.config && typeof ch.config === "object" ? ch.config : {};
+    const nextCfg =
+      serverChapter.config && typeof serverChapter.config === "object"
+        ? serverChapter.config
+        : {};
+    return {
+      ...ch,
+      ...serverChapter,
+      element_ids: [...ids],
+      points: pts.length ? pts : ch.points,
+      point_items: items.map((row) => ({ ...row })),
+      config: {
+        ...cfg,
+        ...nextCfg,
+        element_ids: [...ids],
+        points: pts.length ? pts : cfg.points,
+        point_items: items.map((row) => ({ ...row })),
+      },
+    };
+  };
+  outlineNodes.value = outlineNodes.value.map(applyOne);
+  extraChapters.value = extraChapters.value.map(applyOne);
+  if (String(selectedKey.value || "") === key) hydrateConfigDraft();
+}
+
+/** 关联/配置落盘后：以服务端本章覆盖本地并结束飞行，pending 不再参与 merge */
+function commitChapterBindingsFromServer(chapterKey, serverChapter) {
+  const key = String(chapterKey || "").trim();
+  if (!key) return;
+  if (serverChapter) patchChapterBindingsFromServer(key, serverChapter);
+  pendingChapterElementIds.delete(key);
+  pendingPointItemBindings.delete(key);
+  endChapterBindingFlight(key);
+  bindingRevision += 1;
+}
+
+async function refreshChapterBindingsFromServer(tid, chapterKey) {
+  const key = String(chapterKey || "").trim();
+  const docTid = String(tid || "").trim();
+  if (!docTid || !key) return;
+  const wid = String(activeDoc.value?.writingTaskId || "").trim();
+  try {
+    const data = await request(docOutlineUrl(docTid, { fresh: true, writingTaskId: wid }));
+    const hit = (data?.chapters || []).find((c) => String(c?.key || "") === key);
+    if (hit) commitChapterBindingsFromServer(key, hit);
+    else {
+      pendingChapterElementIds.delete(key);
+      pendingPointItemBindings.delete(key);
+      endChapterBindingFlight(key);
+    }
+  } catch {
+    /* 刷新失败：保留本地已落盘写入 */
+    endChapterBindingFlight(key);
   }
-  return [...byId.values()];
+}
+
+function markStudyClearedElementBindings(chapterKey) {
+  const key = String(chapterKey || "").trim();
+  if (!key) return;
+  studyClearedElementKeys.add(key);
+  pendingChapterElementIds.delete(key);
+  pendingPointItemBindings.delete(key);
+  bindingRevision += 1;
+}
+
+function clearChapterElementBindingsLocal(chapterKey) {
+  const key = String(chapterKey || "").trim();
+  if (!key) return;
+  markStudyClearedElementBindings(key);
+  const stripOne = (ch) => {
+    if (String(ch?.key || "") !== key) return ch;
+    const prevItems = Array.isArray(ch.point_items)
+      ? ch.point_items
+      : Array.isArray(ch?.config?.point_items)
+        ? ch.config.point_items
+        : [];
+    const nextItems = (prevItems || []).map((row, i) => {
+      const norm = normalizePointItemRow(row, i);
+      if (!norm) return null;
+      const next = { ...norm };
+      delete next.element_id;
+      delete next.element_name;
+      const text = String(next.text || "");
+      const slot = String(next.slot || "").trim() || parseSlotFromText(text);
+      if (slot) next.slot = slot;
+      if (slot || textNeedsSupplement(text)) next.needs_supplement = true;
+      else delete next.needs_supplement;
+      return next;
+    }).filter(Boolean);
+    const cfg = ch.config && typeof ch.config === "object" ? ch.config : {};
+    return {
+      ...ch,
+      element_ids: [],
+      point_items: nextItems,
+      config: {
+        ...cfg,
+        element_ids: [],
+        point_items: nextItems,
+      },
+    };
+  };
+  outlineNodes.value = (outlineNodes.value || []).map(stripOne);
+  extraChapters.value = (extraChapters.value || []).map(stripOne);
+  if (String(selectedKey.value || "") === key) {
+    const rows = (configDraft.point_items || []).map((row, i) => {
+      const norm = normalizePointItemRow(row, i);
+      if (!norm) return null;
+      const next = { ...norm };
+      delete next.element_id;
+      delete next.element_name;
+      const text = String(next.text || "");
+      const slot = String(next.slot || "").trim() || parseSlotFromText(text);
+      if (slot) next.slot = slot;
+      if (slot || textNeedsSupplement(text)) next.needs_supplement = true;
+      else delete next.needs_supplement;
+      return next;
+    }).filter(Boolean);
+    configDraft.point_items.splice(0, configDraft.point_items.length, ...rows);
+  }
 }
 
 function pickRicherList(nextVal, prevVal) {
@@ -1490,7 +1804,28 @@ function pickRicherText(nextVal, prevVal) {
   return next || prev || "";
 }
 
-function mergeOutlinePreserveElementIds(prevList, nextList, { keepMissing = false } = {}) {
+/** 串章简述（如接地残留）检测：有新要点时不得被更长旧文盖回 */
+function looksLikeStaleTopicDescribe(text) {
+  const t = String(text || "");
+  return /接地装置|水平接地体|垂直接地极|接地电阻|接触电势|室内接地/.test(t);
+}
+
+function pickStudyDescribes(nextVal, prevVal, nextPoints) {
+  const next = String(nextVal ?? "").trim();
+  const prev = String(prevVal ?? "").trim();
+  const hasPoints = Array.isArray(nextPoints) && nextPoints.some((p) => String(p || "").trim());
+  // 本轮已有要点：简述以服务端为准（允许短文覆盖长串章）；空串则清掉旧串章
+  if (hasPoints) {
+    if (next) return next;
+    if (looksLikeStaleTopicDescribe(prev) && !looksLikeStaleTopicDescribe(nextPoints.join("\n"))) {
+      return "";
+    }
+    return prev || "";
+  }
+  return next || prev || "";
+}
+
+function mergeOutlinePreserveElementIds(prevList, nextList, { keepMissing = false, preferOutlineCompose = false } = {}) {
   const prevByKey = new Map(
     (prevList || []).map((ch) => [String(ch?.key || "").trim(), ch]).filter(([k]) => k)
   );
@@ -1498,14 +1833,21 @@ function mergeOutlinePreserveElementIds(prevList, nextList, { keepMissing = fals
   const mergeOne = (ch) => {
     const key = String(ch?.key || "").trim();
     const prev = prevByKey.get(key);
-    const pending = pendingChapterElementIds.get(key);
-    const ids = pickElementIds(
-      pending,
-      ch?.element_ids,
-      ch?.config?.element_ids,
-      prev?.element_ids,
-      prev?.config?.element_ids
-    );
+    const bindingFlight = chapterBindingInFlight(key);
+    const pending = bindingFlight ? pendingChapterElementIds.get(key) : null;
+    const studyCleared = studyClearedElementKeys.has(key);
+    const pendingPt = bindingFlight ? pendingPointItemBindings.get(key) : null;
+    // 重分析已清空关联：勿用本地旧 element_ids 盖回（章级分存，不含要点行 id）
+    const ids = studyCleared
+      ? mergeChapterElementIds(pending, ch?.element_ids, ch?.config?.element_ids)
+      : mergeChapterElementIds(
+          pending,
+          ch?.element_ids,
+          ch?.config?.element_ids,
+          prev?.element_ids,
+          prev?.config?.element_ids
+        );
+    if (studyCleared && ids.length) studyClearedElementKeys.delete(key);
     const nextStatus = String(ch?.status || "").trim();
     const prevStatus = String(prev?.status || "").trim();
     const prevWritten =
@@ -1521,21 +1863,38 @@ function mergeOutlinePreserveElementIds(prevList, nextList, { keepMissing = fals
     // 软刷新偶发丢写作态时，保留本地已写作标记，避免目录又变回「已分析」
     const keepWritten = prevWritten && !nextWritten;
     // 进度卡/文档预览常把要点放在 config.points，顶层可能是空数组：取最「满」的一份
-    const points = pickRicherList(
-      ch?.points,
-      pickRicherList(
-        ch?.config?.points,
-        pickRicherList(prev?.points, prev?.config?.points)
-      )
-    );
-    const keywords = pickRicherList(
-      ch?.keywords,
-      pickRicherList(ch?.config?.keywords, pickRicherList(prev?.keywords, prev?.config?.keywords))
-    );
-    const describes = pickRicherText(
-      ch?.describes ?? ch?.config?.describes,
-      prev?.describes ?? prev?.config?.describes
-    );
+    const nextPts = pickRicherList(ch?.points, ch?.config?.points);
+    const prevPts = pickRicherList(prev?.points, prev?.config?.points);
+    const prevEpoch = Number(prev?._studyEpoch || prev?.config?._studyEpoch || 0);
+    const nextEpoch = Number(ch?._studyEpoch || ch?.config?._studyEpoch || 0);
+    const keepLocalStudy =
+      prevEpoch > 0 &&
+      prevEpoch >= nextEpoch &&
+      Date.now() - prevEpoch < 180000 &&
+      prevPts.length &&
+      nextPts.length &&
+      prevPts.map((p) => String(p || "").trim()).join("\n") !==
+        nextPts.map((p) => String(p || "").trim()).join("\n");
+    // 刚合入的分析要点：目录刷新带回来的旧蓝本行不得盖掉
+    const points = keepLocalStudy ? prevPts : nextPts.length ? nextPts : prevPts;
+    const nextKws = pickRicherList(ch?.keywords, ch?.config?.keywords);
+    const prevKws = pickRicherList(prev?.keywords, prev?.config?.keywords);
+    const keywords = keepLocalStudy
+      ? (prevKws.length ? prevKws : nextKws)
+      : nextPts.length && nextKws.length
+        ? nextKws
+        : pickRicherList(nextKws, prevKws);
+    const describes = keepLocalStudy
+      ? pickStudyDescribes(
+          prev?.describes ?? prev?.config?.describes,
+          "",
+          points
+        )
+      : pickStudyDescribes(
+          ch?.describes ?? ch?.config?.describes,
+          prev?.describes ?? prev?.config?.describes,
+          points
+        );
     const auxPrompt = pickRicherText(
       ch?.aux_prompt ?? ch?.config?.aux_prompt,
       prev?.aux_prompt ?? prev?.config?.aux_prompt
@@ -1544,11 +1903,63 @@ function mergeOutlinePreserveElementIds(prevList, nextList, { keepMissing = fals
       ch?.reference_text ?? ch?.config?.reference_text,
       prev?.reference_text ?? prev?.config?.reference_text
     );
-    const point_items = pickPointItemsAuthoritative(
-      [ch?.point_items, ch?.config?.point_items],
-      prev?.point_items,
-      prev?.config?.point_items
+    const nextItems = pickPointItemsAuthoritative(
+      [ch?.point_items, ch?.config?.point_items]
     );
+    const prevItems = pickPointItemsAuthoritative(
+      [prev?.point_items, prev?.config?.point_items]
+    );
+    let point_items = keepLocalStudy && prevItems.length
+      ? prevItems
+      : nextItems.length
+        ? nextItems
+        : studyCleared
+          ? pickPointItemsAuthoritative([ch?.point_items, ch?.config?.point_items])
+          : pickPointItemsAuthoritative(
+              [ch?.point_items, ch?.config?.point_items],
+              prev?.point_items,
+              prev?.config?.point_items
+            );
+    if (points.length) {
+      const ptsText = points.map((p) => String(p || "").trim()).filter(Boolean).join("\n");
+      const itemsText = pointsFromPointItems(point_items).join("\n");
+      // 重分析后不得再按旧行继承 element_id
+      const inheritBase = studyCleared ? [] : point_items.length ? point_items : prevItems;
+      if (ptsText && itemsText && ptsText !== itemsText) {
+        point_items = syncPointItemsFromPoints(points, inheritBase);
+      } else if (!point_items.length) {
+        point_items = syncPointItemsFromPoints(points, inheritBase);
+      } else if (studyCleared) {
+        point_items = syncPointItemsFromPoints(points, []);
+      }
+    }
+    // 目录软刷新常带回「同文无 element_id」的要点行；未清关联时从本地 prev 补回，避免刚关联就被冲掉
+    if (!studyCleared && prevItems.length && point_items.length) {
+      const prevByRowId = new Map(
+        prevItems
+          .map((row) => [String(row?.id || "").trim(), row])
+          .filter(([id]) => id)
+      );
+      point_items = point_items.map((row, i) => {
+        if (String(row?.element_id || "").trim()) return row;
+        const prevRow =
+          prevByRowId.get(String(row?.id || "").trim()) ||
+          prevItems[i] ||
+          null;
+        const eid = String(prevRow?.element_id || "").trim();
+        if (!eid) return row;
+        const next = { ...row, element_id: eid, needs_supplement: false };
+        const ename = humanLabel(prevRow?.element_name, row?.element_name, row?.slot);
+        if (ename) next.element_name = ename;
+        return next;
+      });
+    }
+    if (!studyCleared && pendingPt?.size) {
+      point_items = pickPointItemsAuthoritative(
+        [point_items],
+        [applyPendingPointItemBindings(point_items, pendingPt)]
+      );
+    }
     const structureOnly = Boolean(
       Object.prototype.hasOwnProperty.call(ch || {}, "structure_only")
         ? ch.structure_only
@@ -1556,6 +1967,19 @@ function mergeOutlinePreserveElementIds(prevList, nextList, { keepMissing = fals
     );
     const prevCfg = prev?.config && typeof prev.config === "object" ? prev.config : {};
     const nextCfg = ch?.config && typeof ch.config === "object" ? ch.config : {};
+    const composeSrc = preferOutlineCompose
+      ? ch?.compose || nextCfg.compose || prev?.compose || prevCfg.compose
+      : prev?.compose || prevCfg.compose || ch?.compose || nextCfg.compose;
+    const composePick = normalizeCompose(composeSrc, {
+      fixed_output: preferOutlineCompose
+        ? ch?.fixed_output ?? nextCfg.fixed_output ?? prev?.fixed_output
+        : prev?.fixed_output ?? ch?.fixed_output ?? nextCfg.fixed_output,
+      presence: preferOutlineCompose
+        ? ch?.presence || nextCfg.presence || prev?.presence
+        : prev?.presence || ch?.presence || nextCfg.presence,
+    });
+    const presencePick = presenceForCompose(composePick);
+    const fixedPick = isFixedCompose(composePick);
     return {
       ...prev,
       ...ch,
@@ -1566,7 +1990,11 @@ function mergeOutlinePreserveElementIds(prevList, nextList, { keepMissing = fals
       aux_prompt: auxPrompt,
       reference_text: referenceText,
       structure_only: structureOnly,
+      compose: composePick,
+      presence: presencePick,
+      fixed_output: fixedPick,
       element_ids: [...ids],
+      ...(keepLocalStudy ? { _studyEpoch: prevEpoch } : {}),
       config: {
         ...prevCfg,
         ...nextCfg,
@@ -1577,6 +2005,9 @@ function mergeOutlinePreserveElementIds(prevList, nextList, { keepMissing = fals
         aux_prompt: auxPrompt,
         reference_text: referenceText,
         structure_only: structureOnly,
+        compose: composePick,
+        presence: presencePick,
+        fixed_output: fixedPick,
         element_ids: [...ids],
       },
       ...(keepWritten
@@ -1630,7 +2061,7 @@ function markChapterWrittenLocal(chapterKey, extra = {}) {
         status_label: "已写作",
         has_draft: true,
         ...(extra.draft_text
-          ? { draft_text: extra.draft_text, draft_preview: String(extra.draft_text).slice(0, 400) }
+          ? { draft_text: extra.draft_text, draft_preview: String(extra.draft_text).slice(0, 1800) }
           : {}),
       };
     });
@@ -1644,32 +2075,63 @@ function applyChapterPointsLocal(chapterKey, extra = {}) {
   if (!key) return;
   const points = Array.isArray(extra.points) ? [...extra.points] : null;
   const keywords = Array.isArray(extra.keywords) ? [...extra.keywords] : null;
-  const describes =
-    extra.describes != null && String(extra.describes).trim()
-      ? String(extra.describes).trim()
-      : null;
-  if (!points?.length && !keywords?.length && describes == null) return;
+  const pointItemsIn = Array.isArray(extra.point_items) ? extra.point_items : null;
+  // 本轮事件显式带了 describes（含空串）时覆盖旧简述，避免 pickRicher 留住串章长文
+  const describesProvided = Object.prototype.hasOwnProperty.call(extra, "describes");
+  const describes = describesProvided ? String(extra.describes || "").trim() : null;
+  if (!points?.length && !keywords?.length && !describesProvided && !pointItemsIn?.length) return;
+  // 仅显式重分析/换要点时清空关联；普通分析进度回写不得仅因带了 points 就洗掉 element_id
+  const clearBindings = shouldClearBindings(extra.clear_element_bindings);
+  if (clearBindings) markStudyClearedElementBindings(key);
   const patchOne = (ch) => {
     const nextPoints = points?.length ? points : pickRicherList(ch.points, ch.config?.points);
     const nextKeywords = keywords?.length
       ? keywords
       : pickRicherList(ch.keywords, ch.config?.keywords);
     const nextDescribes =
-      describes != null ? describes : pickRicherText(ch.describes, ch.config?.describes);
+      describesProvided ? describes : pickRicherText(ch.describes, ch.config?.describes);
+    // 分析进度只带 points 时，必须重算 point_items，否则右侧表仍显示上一轮串章行
+    let nextItems = null;
+    if (pointItemsIn?.length) {
+      nextItems = pointItemsIn.map((row, i) => {
+        const norm = normalizePointItemRow(row, i);
+        if (!norm) return null;
+        if (!clearBindings) return norm;
+        const next = { ...norm };
+        delete next.element_id;
+        delete next.element_name;
+        const text = String(next.text || "");
+        const slot = String(next.slot || "").trim() || parseSlotFromText(text);
+        if (slot) next.slot = slot;
+        if (slot || textNeedsSupplement(text)) next.needs_supplement = true;
+        else delete next.needs_supplement;
+        return next;
+      }).filter(Boolean);
+    } else if (points?.length) {
+      // 重分析不继承旧行 element_id
+      nextItems = syncPointItemsFromPoints(points, clearBindings ? [] : (ch?.point_items || ch?.config?.point_items || []));
+    }
     const cfg = ch.config && typeof ch.config === "object" ? ch.config : {};
+    const epoch = Date.now();
     return {
       ...ch,
       key: ch.key || key,
       points: nextPoints,
+      ...(nextItems ? { point_items: nextItems } : {}),
+      ...(clearBindings ? { element_ids: [] } : {}),
       keywords: nextKeywords,
       describes: nextDescribes,
       structure_only: Boolean(extra.structure_only ?? ch.structure_only),
+      _studyEpoch: epoch,
       config: {
         ...cfg,
         points: nextPoints,
+        ...(nextItems ? { point_items: nextItems } : {}),
+        ...(clearBindings ? { element_ids: [] } : {}),
         keywords: nextKeywords,
         describes: nextDescribes,
         structure_only: Boolean(extra.structure_only ?? cfg.structure_only ?? ch.structure_only),
+        _studyEpoch: epoch,
       },
     };
   };
@@ -1690,88 +2152,136 @@ function applyChapterPointsLocal(chapterKey, extra = {}) {
 function applyChapterElementIdsLocal(chapterKey, ids, incomingElements, opts = {}) {
   const key = String(chapterKey || "").trim();
   if (!key) return;
-  const list = (ids || []).map((id) => String(id || "").trim()).filter(Boolean);
-  rememberPendingElementIds(key, list);
+  beginChapterBindingFlight(key);
+  const list = unionElementIds(ids);
   if (Array.isArray(incomingElements) && incomingElements.length) {
-    elementNodes.value = mergeElementNodesLocal(elementNodes.value, incomingElements);
+    elementNodes.value = mergeElementNodes(elementNodes.value, incomingElements);
   }
   const isPointScope =
     String(opts.associateScope || "").trim() === "point" ||
     Boolean(opts.pointItemLink || pendingPointItemLink.value);
-  const linkOpts = {
-    elementIds: isPointScope ? list : [],
-    newElementIds: opts.newElementIds || [],
-    pointLink: opts.pointItemLink || pendingPointItemLink.value || null,
-    assignOrphans: false,
-  };
+  const pointLink = opts.pointItemLink || pendingPointItemLink.value || null;
+  const incomingPointItems =
+    Array.isArray(opts.pointItems) && opts.pointItems.length
+      ? opts.pointItems.map((row) => ({ ...row }))
+      : null;
   let linkedItems = null;
   if (isPointScope) {
-    const baseItems =
-      Array.isArray(opts.pointItems) && opts.pointItems.length
-        ? opts.pointItems.map((row) => ({ ...row }))
-        : configDraft.point_items.map((row) => ({ ...row }));
+    // 要点作用域：只回写 point_items，绝不碰章级 element_ids / pending
+    const baseItems = incomingPointItems?.length
+      ? incomingPointItems
+      : configDraft.point_items.map((row) => ({ ...row }));
     if (baseItems.length) {
-      linkedItems = linkPointItemsToElements(baseItems, elementNodes.value, {
-        ...linkOpts,
-        elementIds: list.length ? list : linkOpts.elementIds,
+      const alreadyLinked = baseItems.some((row) => String(row?.element_id || "").trim());
+      if (alreadyLinked && incomingPointItems?.length) {
+        linkedItems = baseItems;
+      } else {
+        const pointElementIds = unionElementIds(
+          opts.newElementIds,
+          baseItems.map((row) => row?.element_id)
+        );
+        linkedItems = linkPointItemsToElements(baseItems, elementNodes.value, {
+          elementIds: pointElementIds,
+          newElementIds: opts.newElementIds || [],
+          pointLink,
+          assignOrphans: false,
+        });
+      }
+    }
+    if (String(selectedKey.value || "") === key && linkedItems?.length) {
+      const prevById = new Map(
+        configDraft.point_items.map((row) => [String(row?.id || ""), row])
+      );
+      const mergedRows = linkedItems.map((row, i) => {
+        const prev =
+          prevById.get(String(row?.id || "")) ||
+          configDraft.point_items[i] ||
+          null;
+        const text =
+          String(row?.text || "").trim() ||
+          String(prev?.text || "").trim() ||
+          "";
+        return text ? { ...row, text } : { ...row };
       });
+      const keepRows = mergedRows.filter((row) => String(row?.text || "").trim());
+      if (keepRows.length) {
+        configDraft.point_items.splice(0, configDraft.point_items.length, ...keepRows);
+      }
+      saveHint.value = "";
     }
-  }
-  if (String(selectedKey.value || "") === key && linkedItems?.length) {
-    configDraft.point_items.splice(0, configDraft.point_items.length, ...linkedItems);
-    saveHint.value = "";
-  }
-  const chapterIds = isPointScope
-    ? (outlineNodes.value.find((item) => String(item.key || "") === key)?.element_ids || []).map(
-        (id) => String(id || "").trim()
-      ).filter(Boolean)
-    : list;
-  if (isPointScope && !chapterIds.length) {
-    const pending = pendingChapterElementIds.get(key);
-    if (Array.isArray(pending) && pending.length) {
-      chapterIds.push(...pending);
-    }
-  }
-  const patchPointItems = (ch) => {
-    if (!linkedItems?.length) return ch;
-    return {
-      ...ch,
-      point_items: linkedItems.map((row) => ({ ...row })),
-      points: pointsFromPointItems(linkedItems),
-      config: {
-        ...(ch.config && typeof ch.config === "object" ? ch.config : {}),
-        point_items: linkedItems.map((row) => ({ ...row })),
-        points: pointsFromPointItems(linkedItems),
-      },
+    const patchPointOnly = (ch) => {
+      if (!linkedItems?.length) return ch;
+      const nextItems = linkedItems.map((row) => ({ ...row }));
+      const nextPoints = pointsFromPointItems(nextItems);
+      const keepPoints = nextPoints.length
+        ? nextPoints
+        : pickRicherList(ch?.points, ch?.config?.points);
+      return {
+        ...ch,
+        point_items: nextItems,
+        points: keepPoints.length ? keepPoints : ch.points,
+        config: {
+          ...(ch.config && typeof ch.config === "object" ? ch.config : {}),
+          point_items: nextItems,
+          points: keepPoints.length ? keepPoints : ch?.config?.points,
+        },
+      };
     };
-  };
+    outlineNodes.value = outlineNodes.value.map((item) =>
+      String(item?.key || "") === key ? patchPointOnly(item) : item
+    );
+    extraChapters.value = extraChapters.value.map((item) =>
+      String(item?.key || "") === key ? patchPointOnly(item) : item
+    );
+    if (linkedItems?.length) rememberPendingPointItemBindings(key, linkedItems);
+    pendingPointItemLink.value = null;
+    return;
+  }
+  // 章级作用域：更新 pending + chapter.element_ids
+  if (list.length) studyClearedElementKeys.delete(key);
+  const existingChapterIds = unionElementIds(
+    outlineNodes.value.find((item) => String(item.key || "") === key)?.element_ids,
+    extraChapters.value.find((item) => String(item.key || "") === key)?.element_ids,
+    pendingChapterElementIds.get(key)
+  );
+  const incomingIds = unionElementIds(list);
+  const addingNew = incomingIds.some((id) => !existingChapterIds.includes(id));
+  const chapterIds = addingNew
+    ? unionElementIds(existingChapterIds, incomingIds)
+    : incomingIds;
+  rememberPendingElementIds(key, chapterIds, { replace: true });
   const idx = outlineNodes.value.findIndex((item) => String(item.key || "") === key);
   if (idx >= 0) {
     outlineNodes.value = outlineNodes.value.map((item, i) =>
       i === idx
-        ? patchPointItems({
+        ? {
             ...item,
             element_ids: [...chapterIds],
             config: {
               ...(item.config && typeof item.config === "object" ? item.config : {}),
               element_ids: [...chapterIds],
             },
-          })
+          }
         : item
     );
-  }
-  // 目录尚未到位：写入 extraChapters 占位，等全量大纲合并时仍能回显
-  if (idx < 0 && chapterIds.length) {
+  } else if (chapterIds.length) {
     const extraIdx = extraChapters.value.findIndex((item) => String(item.key || "") === key);
     if (extraIdx >= 0) {
       extraChapters.value = extraChapters.value.map((item, i) =>
-        i === extraIdx ? patchPointItems({ ...item, element_ids: [...chapterIds] }) : item
+        i === extraIdx
+          ? {
+              ...item,
+              element_ids: [...chapterIds],
+              config: {
+                ...(item.config && typeof item.config === "object" ? item.config : {}),
+                element_ids: [...chapterIds],
+              },
+            }
+          : item
       );
     }
   }
-  if (!isPointScope) {
-    rememberPendingElementIds(key, chapterIds);
-  }
+  if (incomingPointItems?.length) rememberPendingPointItemBindings(key, incomingPointItems);
   pendingPointItemLink.value = null;
 }
 
@@ -1791,22 +2301,37 @@ const chapters = computed(() => {
       const baseCfg = ch.config && typeof ch.config === "object" ? ch.config : {};
       const progCfg = prog.config && typeof prog.config === "object" ? prog.config : {};
       // 列表字段取更「满」的一侧，禁止空 points [] 盖掉进度卡里已生成的要点
-      const mergedPoints = pickRicherList(
-        ch?.points,
-        pickRicherList(baseCfg.points, pickRicherList(prog?.points, progCfg.points))
+      const outlinePts = pickRicherList(ch?.points, baseCfg.points);
+      const progPts = pickRicherList(prog?.points, progCfg.points);
+      const mergedPoints = outlinePts.length ? outlinePts : progPts;
+      // 大纲 point_items 为真源（含「已取消关联」）；勿再从进度卡把旧 element_id 合并回来
+      const outlineItems = pickRicherPointItems(
+        ch?.point_items,
+        ch?.config?.point_items,
+        baseCfg.point_items
       );
-      const mergedPointItems = pickPointItemsAuthoritative(
-        [ch?.point_items, ch?.config?.point_items, baseCfg.point_items],
-        prog?.point_items,
-        progCfg.point_items
-      );
-      const mergedKeywords = pickRicherList(
-        ch?.keywords,
-        pickRicherList(baseCfg.keywords, pickRicherList(prog?.keywords, progCfg.keywords))
-      );
-      const mergedDescribes = pickRicherText(
+      let mergedPointItems = outlineItems.length
+        ? outlineItems
+        : pickPointItemsAuthoritative(
+            [],
+            prog?.point_items,
+            progCfg.point_items
+          );
+      if (mergedPoints.length) {
+        const ptsText = mergedPoints.map((p) => String(p || "").trim()).filter(Boolean).join("\n");
+        const itemsText = pointsFromPointItems(mergedPointItems).join("\n");
+        if (ptsText && ptsText !== itemsText) {
+          mergedPointItems = syncPointItemsFromPoints(mergedPoints, mergedPointItems);
+        }
+      }
+      const outlineKws = pickRicherList(ch?.keywords, baseCfg.keywords);
+      const mergedKeywords = mergedPoints.length && outlineKws.length
+        ? outlineKws
+        : pickRicherList(outlineKws, pickRicherList(prog?.keywords, progCfg.keywords));
+      const mergedDescribes = pickStudyDescribes(
         ch?.describes ?? baseCfg.describes,
-        prog?.describes ?? progCfg.describes
+        prog?.describes ?? progCfg.describes,
+        mergedPoints
       );
       const mergedAux = pickRicherText(
         ch?.aux_prompt ?? baseCfg.aux_prompt,
@@ -1831,6 +2356,11 @@ const chapters = computed(() => {
       } else if (Object.prototype.hasOwnProperty.call(baseCfg, "fixed_output")) {
         mergedConfig.fixed_output = baseCfg.fixed_output;
       }
+      mergedConfig.compose = normalizeCompose(
+        ch.compose || baseCfg.compose,
+        { fixed_output: mergedConfig.fixed_output, presence: ch.presence || baseCfg.presence || prog?.presence }
+      );
+      mergedConfig.presence = presenceForCompose(mergedConfig.compose);
       if (Object.prototype.hasOwnProperty.call(ch, "structure_only")) {
         mergedConfig.structure_only = ch.structure_only;
       } else if (Object.prototype.hasOwnProperty.call(baseCfg, "structure_only")) {
@@ -1841,7 +2371,7 @@ const chapters = computed(() => {
         mergedConfig.structure_only = progCfg.structure_only;
       }
       // 大纲优先：蓝本/进度章节 normalize 后常有空 element_ids，勿盖住 outline 已关联的 id
-      const elementIds = pickElementIds(
+      const elementIds = unionElementIds(
         ch.element_ids,
         baseCfg.element_ids,
         prog.element_ids,
@@ -1868,6 +2398,16 @@ const chapters = computed(() => {
             : Object.prototype.hasOwnProperty.call(mergedConfig, "fixed_output")
               ? mergedConfig.fixed_output
               : prog.fixed_output
+        ),
+        compose: normalizeCompose(
+          ch.compose || mergedConfig.compose,
+          { fixed_output: ch.fixed_output || mergedConfig.fixed_output, presence: ch.presence || mergedConfig.presence }
+        ),
+        presence: presenceForCompose(
+          normalizeCompose(
+            ch.compose || mergedConfig.compose,
+            { fixed_output: ch.fixed_output || mergedConfig.fixed_output, presence: ch.presence || mergedConfig.presence }
+          )
         ),
         config: { ...mergedConfig, element_ids: [...elementIds], structure_only: structureOnly },
         element_ids: [...elementIds],
@@ -1905,12 +2445,26 @@ const chapters = computed(() => {
             ch.has_draft ||
             ch.draft_text ||
             ch.draft_preview ||
-            ["confirmed", "awaiting_confirm"].includes(String(ch.status || "")) ||
-            ["confirmed", "awaiting_confirm"].includes(String(prog.status || ""))
+            ["confirmed", "awaiting_confirm", "needs_human"].includes(String(ch.status || "")) ||
+            ["confirmed", "awaiting_confirm", "needs_human"].includes(String(prog.status || "")) ||
+            Number(prog.revision_count || ch.revision_count || 0) > 0 ||
+            Number(prog.check_score || ch.check_score || 0) > 0
         ),
+        revision_count: Number(prog.revision_count ?? ch.revision_count ?? 0),
+        max_revisions: Number(prog.max_revisions ?? ch.max_revisions ?? 5),
+        write_score_pass: Number(prog.write_score_pass ?? ch.write_score_pass ?? 70),
+        check_score: Number(prog.check_score ?? ch.check_score ?? 0),
+        check_below_threshold: Boolean(
+          prog.check_below_threshold ?? ch.check_below_threshold
+        ),
+        check_action: prog.check_action || ch.check_action || "",
+        check_reason: prog.check_reason || ch.check_reason || "",
         steps: prog.steps?.length ? prog.steps : ch.steps,
         checks: prog.checks?.length ? prog.checks : ch.checks,
         evidence: prog.evidence?.length ? prog.evidence : ch.evidence,
+        element_results: prog.element_results?.length
+          ? prog.element_results
+          : ch.element_results,
       };
     });
   };
@@ -2002,7 +2556,8 @@ function onOutlineTreeNodeClick(data) {
 }
 
 function toggleSelectAll(on) {
-  const keys = on ? [...selectableChapterKeys.value] : [];
+  const checked = typeof on === "boolean" ? on : Boolean(on?.target?.checked);
+  const keys = checked ? [...selectableChapterKeys.value] : [];
   checkedKeys.value = keys;
   applyCheckedKeysToTree(keys);
 }
@@ -2018,7 +2573,7 @@ watch(selectedKey, (key) => {
 watch(
   () => selectableChapterKeys.value.join(","),
   () => {
-    // 目录键变化时裁掉失效勾选并回写树（父子联动由 el-tree 负责）
+    // 目录键变化时裁掉失效勾选并回写树
     const allowed = new Set(selectableChapterKeys.value);
     const keep = checkedKeys.value.filter((k) => allowed.has(k));
     checkedKeys.value = keep;
@@ -2081,7 +2636,7 @@ async function runBulkStudy() {
     chapter_keys: keys,
     chapter_sequences: seqs,
     study_message: keys.length === 1 ? chapterLabel(chapters.value.find((c) => c.key === focusKey)) : `已选 ${keys.length} 章`,
-    study_scope: keys.length === 1 ? "self" : "selected",
+    study_scope: "selected",
     locate_chapter_key: focusKey,
   });
 }
@@ -2117,26 +2672,134 @@ const selectedChapter = computed(() => chapters.value.find((ch) => ch?.key === s
 const selectedOutlineNode = computed(
   () => outlineNodes.value.find((ch) => String(ch?.key || "") === String(selectedKey.value || "")) || null
 );
-/** 正文页：写作过程步骤（检索/写作/检查） */
+/** 写作进度页：检索/写作/检查步骤 */
 const selectedChapterWriteProcess = computed(() => {
   const steps = selectedChapter.value?.steps;
-  return Array.isArray(steps) ? steps.filter((s) => s && (s.step || s.step_label || s.note)) : [];
+  if (!Array.isArray(steps)) return [];
+  return steps.filter((s) => {
+    if (!s || !(s.step || s.step_label || s.note)) return false;
+    const blob = `${s.note || ""}\n${(s.notes || []).join("\n")}\n${s.step_label || ""}`;
+    if (/章节级检索词已停用/.test(blob)) return false;
+    return true;
+  });
 });
-/** 正文页：要素解析收集到的资料（证据卡） */
-const selectedChapterEvidence = computed(() => {
-  const list = selectedChapter.value?.evidence;
-  if (!Array.isArray(list)) return [];
-  return list
-    .filter((ev) => ev && typeof ev === "object")
-    .map((ev) => ({
-      id: String(ev.id || ""),
-      point: String(ev.point || ev.name || "要素").trim() || "要素",
-      location: String(ev.location || ev.kind || ""),
-      query: String(ev.query || "").trim(),
-      excerpt: String(ev.excerpt || ev.value || "").trim(),
-    }))
-    .filter((ev) => ev.excerpt || ev.query || ev.point);
+/** 本章已关联的要素 id（章级 + 要点级） */
+const selectedChapterLinkedElementIds = computed(() => {
+  const chapterIds = selectedElementIds.value.map((id) => String(id || "").trim()).filter(Boolean);
+  const pointIds = elementIdsFromPointItems(configDraft.point_items);
+  return [...new Set([...chapterIds, ...pointIds])];
 });
+
+const selectedChapterHasLinkedElements = computed(
+  () => selectedChapterLinkedElementIds.value.length > 0
+);
+const selectedChapterLinkedElementCount = computed(
+  () => selectedChapterLinkedElementIds.value.length
+);
+
+/**
+ * 写作/检索后「获取到的要素」：优先 element_results / evidence，再回落要素节点 result。
+ * scope 区分章级与要点级。
+ */
+const selectedChapterObtainedElements = computed(() => {
+  const ch = selectedChapter.value;
+  const chapterIdSet = new Set(
+    selectedElementIds.value.map((id) => String(id || "").trim()).filter(Boolean)
+  );
+  const pointIdSet = new Set(elementIdsFromPointItems(configDraft.point_items));
+  const byId = new Map(
+    (elementNodes.value || [])
+      .map((el) => [String(el?.id || "").trim(), el])
+      .filter(([id]) => id)
+  );
+  const rows = new Map();
+
+  const upsert = (raw) => {
+    if (!raw || typeof raw !== "object") return;
+    let eid = String(raw.id || "").trim();
+    if (eid.startsWith("el-el-")) eid = eid.slice(3);
+    const name = humanLabel(
+      raw.name,
+      raw.point,
+      byId.get(eid)?.name,
+      eid
+    ) || "要素";
+    const key = eid || `name:${name}`;
+    const excerpt = String(raw.value || raw.excerpt || raw.result || "").trim();
+    const query = String(raw.query || byId.get(eid)?.query || "").trim();
+    const kind = String(raw.kind || raw.location || byId.get(eid)?.kind || "").trim();
+    const slot_missing = Array.isArray(raw.slot_missing) ? raw.slot_missing : [];
+    const scope =
+      pointIdSet.has(eid) && !chapterIdSet.has(eid)
+        ? "point"
+        : chapterIdSet.has(eid)
+          ? "chapter"
+          : pointIdSet.has(eid)
+            ? "point"
+            : "chapter";
+    const prev = rows.get(key);
+    const ok = Boolean(raw.ok ?? excerpt);
+    if (!prev) {
+      rows.set(key, {
+        id: eid || key,
+        name,
+        kind,
+        query,
+        excerpt: excerpt.slice(0, 800),
+        ok,
+        scope,
+        slot_missing,
+      });
+      return;
+    }
+    rows.set(key, {
+      ...prev,
+      name: prev.name || name,
+      kind: prev.kind || kind,
+      query: prev.query || query,
+      excerpt: prev.excerpt || excerpt.slice(0, 800),
+      ok: prev.ok || ok,
+      scope: prev.scope === "point" || scope === "point" ? prev.scope : scope,
+      slot_missing: prev.slot_missing?.length ? prev.slot_missing : slot_missing,
+    });
+  };
+
+  for (const row of ch?.element_results || []) upsert(row);
+  for (const ev of ch?.evidence || []) {
+    upsert({
+      id: String(ev?.id || "").replace(/^el-/, "") || ev?.id,
+      name: ev?.point || ev?.name,
+      kind: ev?.location || ev?.kind,
+      query: ev?.query,
+      value: ev?.excerpt || ev?.value,
+      ok: Boolean(String(ev?.excerpt || ev?.value || "").trim()),
+    });
+  }
+  for (const eid of selectedChapterLinkedElementIds.value) {
+    const el = byId.get(eid);
+    if (!el) {
+      upsert({ id: eid, name: eid, ok: false });
+      continue;
+    }
+    upsert({
+      id: eid,
+      name: el.name,
+      kind: el.kind,
+      query: el.query,
+      value: el.result,
+      ok: Boolean(String(el.result || "").trim()),
+    });
+  }
+  return [...rows.values()].sort((a, b) => {
+    if (a.ok !== b.ok) return a.ok ? -1 : 1;
+    if (a.scope !== b.scope) return a.scope === "chapter" ? -1 : 1;
+    return String(a.name).localeCompare(String(b.name), "zh");
+  });
+});
+
+const selectedChapterObtainedOkCount = computed(
+  () => selectedChapterObtainedElements.value.filter((row) => row.ok).length
+);
 
 /** 上级节点选项：排除自身及子孙，避免成环 */
 const configParentOptions = computed(() => {
@@ -2533,12 +3196,16 @@ function packSchemaPayloadFromRows(rows) {
 const selectedElementIds = computed(() => {
   const node = selectedOutlineNode.value;
   const ch = selectedChapter.value;
-  // 大纲节点优先，避免文档侧空 [] 把刚关联的要素盖掉
-  return pickElementIds(
+  const key = String(selectedKey.value || node?.key || ch?.key || "").trim();
+  const pointItems = chapterPointItemsForState(ch || node);
+  const raw = unionElementIds(
     node?.element_ids,
     ch?.element_ids,
-    ch?.config?.element_ids
+    ch?.config?.element_ids,
+    key ? pendingChapterElementIds.get(key) : null
   );
+  // 章节要素区只展示章级 element_ids，不把要点行上的 id 当作「章」标签
+  return chapterElementIdsForPersist(raw, pointItems);
 });
 
 /** 配置完成后在基本/内容 Tab 顶部展示章节说明与要点关联概况 */
@@ -2548,14 +3215,21 @@ const configChapterMetaBanner = computed(() => {
     return d ? [`目录说明：${d.slice(0, 200)}${d.length > 200 ? "…" : ""}`] : ["目录节点：可在下方填写章节说明"];
   }
   const lines = [];
+  lines.push(`写作策略：${composeLabel(configDraft.compose, { presence: configDraft.presence })}`);
   const describes = String(configDraft.describes || "").trim();
   if (describes) {
     lines.push(
-      `章节说明（背景）：${describes.slice(0, 160)}${describes.length > 160 ? "…" : ""}`
+      `章节说明：${describes.slice(0, 160)}${describes.length > 160 ? "…" : ""}`
     );
   } else {
-    lines.push("章节说明（背景）：尚未填写，分析或保存配置后会在此显示");
+    lines.push("章节说明：尚未填写，可点「根据原文/要点生成」或手动填写");
   }
+  const chapterElCount = configChapterElements.value.length;
+  lines.push(
+    chapterElCount
+      ? `章节要素：${chapterElCount} 个（整章引用）`
+      : "章节要素：尚未关联（整章检索/写作用）"
+  );
   const total = configDraft.point_items.length;
   if (total) {
     let linked = 0;
@@ -2564,7 +3238,9 @@ const configChapterMetaBanner = computed(() => {
       if (rowNeedsPointAssociate(row)) open += 1;
       else if (String(row?.element_id || "").trim()) linked += 1;
     }
-    lines.push(`写作要点：共 ${total} 条，已关联要素 ${linked} 条${open ? `，待关联 ${open} 条` : ""}`);
+    lines.push(
+      `写作要点：共 ${total} 条，要点要素 ${linked} 条${open ? `，待关联 ${open} 条` : ""}`
+    );
   }
   const aux = String(configDraft.aux_prompt || "").trim();
   if (aux) {
@@ -2573,10 +3249,18 @@ const configChapterMetaBanner = computed(() => {
   return lines;
 });
 
-const configLinkedElements = computed(() => {
+/** 章级关联：来自 chapter.element_ids（与要点行上的 element_id 分开展示） */
+const configChapterElements = computed(() => {
   const byId = new Map(elementNodes.value.map((el) => [String(el?.id || ""), el]));
-  return selectedElementIds.value.map((id) => byId.get(id)).filter(Boolean);
+  return selectedElementIds.value
+    .map((id) => byId.get(String(id || "").trim()))
+    .filter(Boolean);
 });
+
+function associateChapterElements() {
+  pendingPointItemLink.value = null;
+  emitWrite("associate_elements", { associateScope: "chapter" });
+}
 
 /** 分析生成的章节检索词：只读展示，供配要素/写检索时参考 */
 const configReferenceKeywords = computed(() => {
@@ -2694,9 +3378,9 @@ function chapterHasDraft(ch) {
   if (!ch) return false;
   if (ch.has_draft || ch.draft_text || ch.draft_preview) return true;
   const st = String(ch.status || "").trim();
-  if (st === "confirmed" || st === "awaiting_confirm") return true;
-  // needs_human 但已有正文（旧数据）也算已写作
-  if (st === "needs_human" && (ch.has_draft || ch.draft_text || ch.draft_preview)) return true;
+  // 写完自动落库后 confirmed / awaiting_confirm / needs_human 都算已写作
+  if (st === "confirmed" || st === "awaiting_confirm" || st === "needs_human") return true;
+  if (Number(ch.revision_count || 0) > 0 || Number(ch.check_score || 0) > 0) return true;
   // 当前选中章：编辑区已有正文也算已写作（进度卡可能已滑走）
   if (String(ch.key || "") === String(selectedKey.value || "")) {
     const html = String(props.draftText || "");
@@ -2711,15 +3395,16 @@ function chapterWriteStatusLabel(ch) {
   if (["searching", "writing", "checking", "running"].includes(st)) {
     return statusLabel(st) || "写作中";
   }
+  // 与后端 _CHAPTER_STATUS_LABEL 一致：写完态统一「已写作」，勿再显示「待重写」
   if (st === "awaiting_confirm" || st === "confirmed" || st === "needs_human") {
-    // 有正文或已落库：统一「已写作」，不再展示待确认/待人工
-    if (st === "confirmed" || st === "awaiting_confirm" || chapterHasDraft(ch)) return "已写作";
-    return "待重写";
+    return "已写作";
   }
   if (st === "skipped") return statusLabel(st) || "已跳过";
-  // 有正文一律「已写作」，优先于「已分析」
   if (chapterHasDraft(ch)) return "已写作";
-  if (ch.status_label && st && st !== "pending") return ch.status_label;
+  if (ch.status_label && st && st !== "pending") {
+    if (String(ch.status_label).includes("待重写")) return chapterHasDraft(ch) ? "已写作" : ch.status_label;
+    return ch.status_label;
+  }
   return "";
 }
 
@@ -2761,7 +3446,7 @@ function chapterLinkedFileSlotElements(ch) {
   const node = key
     ? outlineNodes.value.find((n) => String(n?.key || "") === key)
     : null;
-  const ids = pickElementIds(
+  const ids = unionElementIds(
     node?.element_ids,
     ch?.element_ids,
     ch?.config?.element_ids,
@@ -2864,6 +3549,20 @@ function chapterStateTone(ch) {
   return statusTone(st);
 }
 
+function chapterWriteScoreLine(ch) {
+  if (!ch || chapterIsStructure(ch)) return "";
+  const score = Number(ch.check_score || 0);
+  const pass = Number(ch.write_score_pass || 70);
+  const rev = Number(ch.revision_count || 0);
+  const maxRev = Number(ch.max_revisions || 5);
+  const parts = [];
+  if (rev > 0) parts.push(`重试 ${rev}/${maxRev}`);
+  if (score > 0) {
+    parts.push(`评分 ${score}/${pass}${score < pass ? " 未达" : " 达线"}`);
+  }
+  return parts.join(" · ");
+}
+
 function appendChapterWriteActions(acts, ch) {
   if (!ch || chapterIsStructure(ch) || chapterNeedsStudy(ch)) return acts;
   const st = String(ch.status || "");
@@ -2894,7 +3593,8 @@ const phaseActions = computed(() => {
   if (isSampleStudyDoc.value) {
     const allowSampleRollback =
       isFreeformSampleDoc.value ||
-      String(activeDoc.value?.wizardMode || activeDoc.value?.mode || "").trim() !== "selected";
+      String(activeDoc.value?.wizardMode || activeDoc.value?.mode || "").trim() !==
+        "selected";
     if (!hasOutlineChapters.value) {
       if (allowSampleRollback && String(activeDoc.value?.wizardStep || "").trim()) {
         acts.push({ id: "re_upload", label: "重新上传样板" });
@@ -3004,12 +3704,12 @@ const chapterActions = computed(() => {
     } else if (chapterNeedsStudy(ch)) {
       acts.push({ id: "study_chapter", label: "分析本章", primary: true });
       if (!chapterIsStructure(ch)) {
-        acts.push({ id: "associate_elements", label: "关联要素" });
+        acts.push({ id: "associate_elements", label: "关联章节要素" });
       }
     } else if (!chapterIsStructure(ch)) {
       appendChapterWriteActions(acts, ch);
       acts.push({ id: "study_chapter", label: "重新分析本章" });
-      acts.push({ id: "associate_elements", label: "关联要素" });
+      acts.push({ id: "associate_elements", label: "关联章节要素" });
     }
     return acts;
   }
@@ -3019,21 +3719,21 @@ const chapterActions = computed(() => {
       acts.push({ id: "confirm_outline", label: "确认大纲并继续", primary: true });
       return acts;
     }
-    // 与蓝本对齐：未配要点也可先关联要素；配要点后再开写本章
+    // 与蓝本对齐：未配要点也可先关联章节要素；配要点后再开写本章
     if (chapterNeedsStudy(ch)) {
       acts.push({
         id: "study_chapter",
         label: "分析本章",
         primary: true,
       });
-      acts.push({ id: "associate_elements", label: "关联要素" });
+      acts.push({ id: "associate_elements", label: "关联章节要素" });
     } else {
       acts.push({
         id: "study_chapter",
         label: "重新分析本章",
       });
       appendChapterWriteActions(acts, ch);
-      acts.push({ id: "associate_elements", label: "关联要素" });
+      acts.push({ id: "associate_elements", label: "关联章节要素" });
     }
     return acts;
   }
@@ -3043,7 +3743,7 @@ const chapterActions = computed(() => {
     if (!chapterNeedsStudy(ch) && !ch.has_draft && !ch.status) {
       acts.push({ id: "retry_search", label: "重试要素解析" });
     }
-    acts.push({ id: "associate_elements", label: "关联要素" });
+    acts.push({ id: "associate_elements", label: "关联章节要素" });
   }
   return acts;
 });
@@ -3135,9 +3835,11 @@ function applyChapterPreview(preview, { switchTopology = false, allowShrink = fa
 
 function scheduleLoadFullOutline({ force = false } = {}) {
   clearTimeout(outlineLoadTimer);
-  // 预约拉取时立刻遮罩，避免打开后空白可点
-  loadLabel.value = force ? "正在拉取目录…" : "正在刷新目录…";
-  loading.value = true;
+  // 已有目录的软刷新不挡操作；首次/强制才立刻遮罩
+  if (force || !outlineFullyLoaded.value || !outlineNodes.value.length) {
+    loadLabel.value = force ? "正在拉取目录…" : "正在刷新目录…";
+    loading.value = true;
+  }
   outlineLoadTimer = setTimeout(() => {
     loadFullOutline({ force }).catch(() => {
       loading.value = false;
@@ -3157,33 +3859,6 @@ function requestClose() {
   emit("close");
 }
 
-function snapshotOutlineCache(tid) {
-  const id = String(tid || "").trim();
-  if (!id || !outlineFullyLoaded.value || !outlineNodes.value.length) return;
-  outlineCacheByTask.set(id, {
-    outlineNodes: outlineNodes.value.map((ch) => ({ ...ch })),
-    extraChapters: extraChapters.value.map((ch) => ({ ...ch })),
-    elementNodes: Array.isArray(elementNodes.value) ? elementNodes.value.map((n) => ({ ...n })) : [],
-    selectedKey: String(selectedKey.value || ""),
-    outlineConfirmed: Boolean(outlineConfirmedLocal.value),
-  });
-}
-
-function restoreOutlineCache(tid) {
-  const id = String(tid || "").trim();
-  const hit = id ? outlineCacheByTask.get(id) : null;
-  if (!hit?.outlineNodes?.length) return false;
-  outlineNodes.value = hit.outlineNodes.map((ch) => ({ ...ch }));
-  extraChapters.value = (hit.extraChapters || []).map((ch) => ({ ...ch }));
-  elementNodes.value = Array.isArray(hit.elementNodes) ? hit.elementNodes.map((n) => ({ ...n })) : [];
-  selectedKey.value = String(hit.selectedKey || hit.outlineNodes[0]?.key || "");
-  outlineConfirmedLocal.value = Boolean(hit.outlineConfirmed);
-  outlineFullyLoaded.value = true;
-  loadedOutlineTaskId = id;
-  hydrateConfigDraft();
-  return true;
-}
-
 function clearLocalOutlineState() {
   outlineNodes.value = [];
   extraChapters.value = [];
@@ -3195,12 +3870,18 @@ function clearLocalOutlineState() {
   Object.assign(configDraft, emptyConfigDraft());
   loadedOutlineTaskId = "";
   pendingChapterElementIds.clear();
+  pendingPointItemBindings.clear();
+  studyClearedElementKeys.clear();
+  bindingRevision = 0;
 }
 
 function applyPreviewPayload(tid, data) {
   previewLoadedTid.value = tid;
-  previewHtml.value = String(data?.html || "");
-  previewWrittenCount.value = Number(data?.written_count || 0);
+  previewHtml.value = applyPreviewOverlays(tid, String(data?.html || ""));
+  previewWrittenCount.value = Math.max(
+    Number(data?.written_count || 0),
+    overlayWrittenCount(tid)
+  );
   previewChapterCount.value = Number(data?.chapter_count || 0);
   previewError.value = "";
   previewCacheByTask.set(tid, {
@@ -3208,6 +3889,124 @@ function applyPreviewPayload(tid, data) {
     written_count: previewWrittenCount.value,
     chapter_count: previewChapterCount.value,
   });
+  scrollPreviewToFocus();
+}
+
+const previewOverlayByChapter = new Map();
+const previewArticleEl = ref(null);
+let previewFocusKey = "";
+
+function escapePreviewRe(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function escapePreviewText(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function previewChapterSectionHtml(key, title, html) {
+  const heading = escapePreviewText(title || key);
+  return (
+    `<section class="rw-preview-chapter" data-chapter-key="${escapePreviewText(key)}">` +
+    `<h3>${heading}</h3>` +
+    `<div class="rw-preview-body">${html}</div>` +
+    `</section>`
+  );
+}
+
+function previewTaskAliases(tid = "") {
+  const ids = new Set();
+  for (const value of [
+    tid,
+    previewTaskId.value,
+    outlineSourceTaskId(),
+    resolveWritingTaskId(),
+    activeDoc.value?.writingTaskId,
+    activeDoc.value?.taskId,
+    activeDoc.value?.blueprintId,
+  ]) {
+    const id = String(value || "").trim();
+    if (id) ids.add(id);
+  }
+  return ids;
+}
+
+function overlayWrittenCount(tid) {
+  const aliases = previewTaskAliases(tid);
+  let n = 0;
+  for (const [mapKey, row] of previewOverlayByChapter) {
+    if (!row?.html) continue;
+    if (![...aliases].some((id) => mapKey.startsWith(`${id}::`))) continue;
+    n += 1;
+  }
+  return n;
+}
+
+function applyPreviewOverlays(tid, html) {
+  let out = String(html || "");
+  const aliases = previewTaskAliases(tid);
+  const seen = new Set();
+  for (const [mapKey, row] of previewOverlayByChapter) {
+    if (!row?.html) continue;
+    const prefix = [...aliases].find((id) => mapKey.startsWith(`${id}::`));
+    if (!prefix) continue;
+    const key = mapKey.slice(prefix.length + 2);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    const section = previewChapterSectionHtml(key, row.title, row.html);
+    const re = new RegExp(
+      `<section[^>]*data-chapter-key="${escapePreviewRe(key)}"[\\s\\S]*?</section>`,
+      "i"
+    );
+    if (re.test(out)) out = out.replace(re, section);
+    else if (out.includes("</article>")) out = out.replace("</article>", `${section}</article>`);
+    else out = `<article class="rw-draft-preview">${section}</article>`;
+  }
+  return out;
+}
+
+function scrollPreviewToFocus() {
+  const ck = String(previewFocusKey || "").trim();
+  if (!ck) return;
+  nextTick(() => {
+    const root = previewArticleEl.value;
+    if (!root) return;
+    const node = root.querySelector(`[data-chapter-key="${ck}"]`);
+    if (node && typeof node.scrollIntoView === "function") {
+      node.scrollIntoView({ block: "start", behavior: "smooth" });
+    }
+  });
+}
+
+function upsertPreviewChapterHtml(tid, key, html, title = "") {
+  const body = String(html || "").trim();
+  const ck = String(key || "").trim();
+  if (!ck || !body) return;
+  const row = { html: body, title: title || ck, at: Date.now() };
+  for (const id of previewTaskAliases(tid)) {
+    previewOverlayByChapter.set(`${id}::${ck}`, row);
+  }
+  previewFocusKey = ck;
+  const task = String(previewTaskId.value || tid || "").trim();
+  if (!previewHtml.value) {
+    previewHtml.value = `<article class="rw-draft-preview">${previewChapterSectionHtml(ck, title, body)}</article>`;
+  } else {
+    previewHtml.value = applyPreviewOverlays(task, previewHtml.value);
+  }
+  previewLoadedTid.value = task || previewLoadedTid.value;
+  previewWrittenCount.value = Math.max(previewWrittenCount.value || 0, overlayWrittenCount(task) || 1);
+  if (task) {
+    previewCacheByTask.set(task, {
+      html: previewHtml.value,
+      written_count: previewWrittenCount.value || 1,
+      chapter_count: previewChapterCount.value || 1,
+    });
+  }
+  scrollPreviewToFocus();
 }
 
 function clearPreviewState() {
@@ -3233,12 +4032,15 @@ function endTabSwitch(delayMs = 240) {
 
 function switchMainView(view) {
   const next = String(view || "").trim();
-  if (!next || next === mainView.value) return;
+  if (!next || next === mainView.value) {
+    if (next === "preview") void loadDraftPreview({ force: true });
+    return;
+  }
   if (tabControlsDisabled.value) return;
   if (next === "topology") topologyEverOpened.value = true;
   mainView.value = next;
-  // 预览后台拉，不挡切 tab
-  if (next === "preview") void loadDraftPreview();
+  // 切到全文预览必须拉最新稿，禁止吃写完前的缓存
+  if (next === "preview") void loadDraftPreview({ force: true });
 }
 
 function switchDetailTab(tab) {
@@ -3271,6 +4073,8 @@ function refreshCurrentDoc() {
   }
 }
 
+let previewFetchSeq = 0;
+
 async function loadDraftPreview({ force = false } = {}) {
   const tid = previewTaskId.value;
   if (!tid) {
@@ -3281,34 +4085,24 @@ async function loadDraftPreview({ force = false } = {}) {
   if (!force && previewLoadedTid.value === tid && previewHtml.value) {
     return;
   }
-  if (!force) {
-    const cached = previewCacheByTask.get(tid);
-    if (cached?.html) {
-      applyPreviewPayload(tid, cached);
-      // 后台静默刷新
-    }
-  }
+  const seq = ++previewFetchSeq;
   previewLoading.value = true;
   previewError.value = "";
   try {
     const data = await request(
-      `/api/writing/tasks/${encodeURIComponent(tid)}/draft-preview?written_only=true&confirmed_only=false`
+      draftPreviewUrl(tid, { writingTaskId: sessionWritingTaskId() })
     );
-    // 切文档后丢弃过期响应
-    if (previewTaskId.value !== tid) return;
+    // 切文档或后发的旧请求丢弃，避免写完后又被上一稿盖住
+    if (seq !== previewFetchSeq || previewTaskId.value !== tid) return;
     applyPreviewPayload(tid, data || {});
-    // force 刷新且真无正文时才清空；非 force 保留已有展示，避免错误 tid 误伤缓存
-    if (force && (!previewHtml.value || !previewWrittenCount.value)) {
-      previewHtml.value = "";
-    } else if (!force && !previewHtml.value && !previewWrittenCount.value) {
-      previewHtml.value = "";
-    }
+    // 接口已返回则原样展示。不要因 written_count=0 把带标题的 HTML 清掉，
+    // 也不要把刚写完、拼章暂未命中的预览打成「还没有正文」。
   } catch (error) {
-    if (previewTaskId.value !== tid) return;
+    if (seq !== previewFetchSeq || previewTaskId.value !== tid) return;
     previewError.value = error?.message || "预览加载失败";
     if (!previewCacheByTask.has(tid)) clearPreviewState();
   } finally {
-    if (previewTaskId.value === tid) previewLoading.value = false;
+    if (seq === previewFetchSeq && previewTaskId.value === tid) previewLoading.value = false;
   }
 }
 
@@ -3328,54 +4122,36 @@ watch(
     }
     const nextTid = outlineSourceTaskId(activeDoc.value);
     const prevTid = loadedOutlineTaskId;
-    // 跨蓝本/任务：先缓存上一份；优先恢复目标缓存，避免先清空导致下拉后空白卡几秒
     if (prevTid && prevTid !== nextTid) {
-      snapshotOutlineCache(prevTid);
       fetchToken += 1;
       outlineInflight = null;
       outlineInflightTid = "";
     }
     lastDocIdentity = identity;
     const preview = Array.isArray(activeDoc.value?.chapters) ? activeDoc.value.chapters : [];
-    const restored = restoreOutlineCache(nextTid);
-    if (!restored) {
-      clearLocalOutlineState();
-      if (preview.length) {
-        applyChapterPreview(preview, {
-          switchTopology: true,
-          allowShrink: true,
-        });
-        if (preview[0]?.key) selectedKey.value = preview[0].key;
-      }
+    clearLocalOutlineState();
+    if (preview.length) {
+      applyChapterPreview(preview, {
+        switchTopology: true,
+        allowShrink: true,
+      });
+      if (preview[0]?.key) selectedKey.value = preview[0].key;
     }
     saveHint.value = "";
     // 切文档：立刻摘掉上一份资料包，避免空目录/未拉完大纲时仍显示旧绑
     void resetMaterialsPackForActiveDoc();
-    // 切文档时按文档项对齐；确认态只升不降见下方 outlineConfirmed watch
-    if (!restored) {
-      outlineConfirmedLocal.value = Boolean(activeDoc.value?.outlineConfirmed);
-    } else if (activeDoc.value?.outlineConfirmed) {
-      outlineConfirmedLocal.value = true;
-    }
-    // 有缓存先展示再软刷新；无缓存才 force。
-    // 若文档项已确认而缓存仍是待确认，必须 force，避免确认态不同步
-    const needConfirmSync =
-      Boolean(activeDoc.value?.outlineConfirmed) && !outlineConfirmedLocal.value;
+    outlineConfirmedLocal.value = Boolean(activeDoc.value?.outlineConfirmed);
     if (nextTid) {
-      scheduleLoadFullOutline({ force: !restored || needConfirmSync });
+      scheduleLoadFullOutline({ force: true });
     } else {
       loading.value = false;
     }
-    // 全文预览按文档隔离：切文档后清掉上一份展示，若停在预览页则重载本份
     const nextPreviewTid = resolveWritingTaskId(activeDoc.value);
     if (previewLoadedTid.value && previewLoadedTid.value !== nextPreviewTid) {
       clearPreviewState();
-      const cached = nextPreviewTid ? previewCacheByTask.get(nextPreviewTid) : null;
-      if (cached?.html) applyPreviewPayload(nextPreviewTid, cached);
     }
     if (mainView.value === "preview") {
-      const hasPreviewCache = Boolean(nextPreviewTid && previewCacheByTask.get(nextPreviewTid)?.html);
-      loadDraftPreview({ force: !hasPreviewCache });
+      loadDraftPreview({ force: true });
     }
   },
   { immediate: true }
@@ -3415,17 +4191,12 @@ watch(
   }
 );
 
-// 学习完成计数变化：节流软刷新，避免每章学完都全量重绘
+// 软刷新只跟 reload token：分析进度用 locate 补本章要点，勿每章全量拉目录
 watch(
-  () =>
-    [
-      Number(props.outlineReloadToken || 0),
-      Number(activeDoc.value?.study_analyzed ?? -1),
-      Number(activeDoc.value?.study_unanalyzed ?? -1),
-    ].join("|"),
-  (sig, prev) => {
-    if (!sig || sig === prev) return;
-    if (!taskId.value) return;
+  () => Number(props.outlineReloadToken || 0),
+  (token, prev) => {
+    if (!token || token === prev) return;
+    if (!taskId.value && !outlineSourceTaskId()) return;
     scheduleLoadFullOutline({ force: false });
   }
 );
@@ -3438,20 +4209,22 @@ watch(
     if (!taskId.value && !outlineSourceTaskId()) return;
     const tid = outlineSourceTaskId();
     const bp = String(taskId.value || "").trim();
-    if (tid) outlineCacheByTask.delete(tid);
-    if (bp && bp !== tid) outlineCacheByTask.delete(bp);
     // 作废进行中的软刷新，确保本次 force 走 ?fresh=1
     fetchToken += 1;
     outlineInflight = null;
     outlineInflightTid = "";
     scheduleLoadFullOutline({ force: true });
-    if (mainView.value === "preview") {
-      loadDraftPreview({ force: true });
-    } else if (previewTaskId.value) {
-      // 写作后失效本任务预览缓存，下次打开拉新稿
-      previewCacheByTask.delete(previewTaskId.value);
-      if (previewLoadedTid.value === previewTaskId.value) clearPreviewState();
-    }
+    void loadDraftPreview({ force: true });
+  }
+);
+
+watch(
+  () => Number(props.previewReloadToken || 0),
+  (token, prev) => {
+    if (!token || token === prev) return;
+    if (!previewTaskId.value) return;
+    previewCacheByTask.delete(previewTaskId.value);
+    void loadDraftPreview({ force: true });
   }
 );
 
@@ -3468,6 +4241,18 @@ watch(
       return;
     }
     void loadMaterialsPack(pid);
+  }
+);
+
+watch(
+  () => String(materialsPackTargetTid.value || "").trim(),
+  (tid, prev) => {
+    if (!tid || tid === prev) return;
+    const pending = String(props.pendingMaterialsPackId || "").trim();
+    const bound = String(materialsPackIdLocal.value || "").trim();
+    if (pending && pending !== bound) {
+      void putTaskMaterialsPack(pending);
+    }
   }
 );
 
@@ -3511,9 +4296,28 @@ watch(
 );
 
 watch(
-  () => [selectedKey.value, selectedOutlineNode.value],
+  () => String(selectedKey.value || ""),
   () => {
     hydrateConfigDraft();
+  }
+);
+
+watch(
+  () => Boolean(configDraft.structure_only),
+  (on, prev) => {
+    if (hydratingConfig.value || prev === on) return;
+    if (on) {
+      configDraft.point_items.splice(0, configDraft.point_items.length);
+    } else if (!configDraft.point_items.length) {
+      configDraft.point_items.push({
+        id: "p0",
+        text: "",
+        slot: "",
+        needs_supplement: false,
+      });
+    }
+    syncStructureOnlyToLocalOutline();
+    if (!on) syncConfigPointItemsToLocalOutline();
   }
 );
 
@@ -3572,7 +4376,7 @@ function scrollTreeToKey(key) {
     const root = document.querySelector(".doc-win-tree");
     if (!root) return;
     const active =
-      root.querySelector(".el-tree-node.is-current > .el-tree-node__content") ||
+      root.querySelector(".ant-tree-node-selected") ||
       root.querySelector(".tree-node-row.active");
     if (active && typeof active.scrollIntoView === "function") {
       active.scrollIntoView({ block: "nearest", behavior: "smooth" });
@@ -3583,7 +4387,11 @@ function scrollTreeToKey(key) {
 function normalizeDetailTab(tab) {
   const raw = String(tab || "").trim();
   if (raw === "content" || raw === "writing" || raw === "prep") return "content";
-  if (raw === "draft" || raw === "process" || raw === "text" || raw === "preview") return "content";
+  // 写作进度统一在会话窗口；文档窗写作后落到写作准备 / 全文预览
+  if (raw === "draft" || raw === "process" || raw === "text" || raw === "progress" || raw === "write") {
+    return "content";
+  }
+  if (raw === "preview") return "content";
   if (raw === "config") return "config";
   return "config";
 }
@@ -3648,21 +4456,44 @@ function applyLocate(cmd) {
     reason === "write_batch_advance";
   if (writeLocate) {
     tab = "content";
-    mainView.value = mainViewHint || "preview";
+    const stayPreview =
+      mainView.value === "preview" ||
+      reason === "write_chapter_done" ||
+      reason === "write_awaiting_confirm" ||
+      mainViewHint === "preview";
+    mainView.value = stayPreview ? "preview" : mainViewHint || "preview";
     if (key) {
-      selectChapter(key, tab, { mainView: "preview" });
+      selectChapter(key, tab, { mainView: mainView.value, skipMainView: true });
+    }
+    const liveHtml = String(cmd?.draftHtml || "").trim();
+    if (key) previewFocusKey = key;
+    if (liveHtml && key) {
+      upsertPreviewChapterHtml(
+        String(cmd?.taskId || previewTaskId.value || "").trim(),
+        key,
+        liveHtml,
+        String(cmd?.draftTitle || "").trim()
+      );
     }
     void loadDraftPreview({ force: true });
   } else if (reason === "analyze") {
     tab = "config";
     if (key) analyzingKey.value = key;
     // 无蓝本要点流：事件里带 points 时立刻合入，避免右侧仍显示「待配要点」
-    if (key && (Array.isArray(cmd?.points) || Array.isArray(cmd?.keywords) || cmd?.describes)) {
+    if (
+      key &&
+      (Array.isArray(cmd?.points) ||
+        Array.isArray(cmd?.point_items) ||
+        Array.isArray(cmd?.keywords) ||
+        cmd?.describes != null)
+    ) {
       applyChapterPointsLocal(key, {
         points: cmd.points,
+        point_items: cmd.point_items,
         keywords: cmd.keywords,
         describes: cmd.describes,
         structure_only: cmd.structure_only,
+        ...(cmd.clear_element_bindings ? { clear_element_bindings: true } : {}),
       });
       outlineConfirmedLocal.value = true;
     }
@@ -3671,12 +4502,27 @@ function applyLocate(cmd) {
   if (key && (tab === "topology" || tab === "preview") && !writeLocate) {
     if (tab === "topology") {
       tab = "config";
+    } else if (tab === "preview") {
+      tab = "progress";
     }
   }
   const tid = String(cmd?.taskId || "").trim();
   const elementId = String(cmd?.elementId || "").trim();
   const wantKnowledge = Boolean(cmd?.associateKnowledge) || reason === "associate_element_knowledge";
   // 关联确认后乐观合并要素库与本章 element_ids，标签立刻可见
+  if (reason === "bindings_committed" && key) {
+    if (cmd?.serverChapter) {
+      commitChapterBindingsFromServer(key, cmd.serverChapter);
+    } else {
+      pendingChapterElementIds.delete(key);
+      pendingPointItemBindings.delete(key);
+      endChapterBindingFlight(key);
+      bindingRevision += 1;
+    }
+  }
+  if (reason === "bindings_refresh" && key && tid) {
+    void refreshChapterBindingsFromServer(tid, key);
+  }
   if (
     reason === "elements_associated" ||
     (reason === "config_saved" && Array.isArray(cmd?.elementIds))
@@ -3690,7 +4536,7 @@ function applyLocate(cmd) {
         associateScope: cmd.associateScope,
       });
     } else if (incoming.length) {
-      elementNodes.value = mergeElementNodesLocal(elementNodes.value, incoming);
+      elementNodes.value = mergeElementNodes(elementNodes.value, incoming);
     }
   }
   if (reason === "library_pending") {
@@ -3706,6 +4552,18 @@ function applyLocate(cmd) {
     (reason === "write_chapter_done" || reason === "write_awaiting_confirm")
   ) {
     markChapterWrittenLocal(key);
+    const liveHtml = String(cmd?.draftHtml || "").trim();
+    if (liveHtml) {
+      upsertPreviewChapterHtml(
+        String(cmd?.taskId || previewTaskId.value || "").trim(),
+        key,
+        liveHtml,
+        String(cmd?.draftTitle || "").trim()
+      );
+    }
+    if (mainView.value === "preview") {
+      void loadDraftPreview({ force: true });
+    }
   }
   // 写作任务 id 常挂在蓝本项的 writingTaskId 上：当前文档已匹配则不要切走
   if (tid && taskId.value && tid !== taskId.value) {
@@ -3730,7 +4588,9 @@ function applyLocate(cmd) {
     return;
   }
   if (writeLocate) {
-    if (mainViewHint === "chapter" && key) {
+    if (mainView.value === "preview") {
+      void loadDraftPreview({ force: true });
+    } else if (mainViewHint === "chapter" && key) {
       selectChapter(key, tab);
     } else if (!key && (mainViewHint || tab === "preview")) {
       mainView.value = mainViewHint || "preview";
@@ -3825,43 +4685,12 @@ function openRestudyDialog({ keys, sequences, label, key } = {}) {
     key: String(key || chapterKeys[0] || "").trim(),
   };
   restudyMethod.value = boundRestudyMethod.value;
-  restudyPasteText.value = "";
+  restudyPasteHtml.value = "";
   restudyDialogVisible.value = true;
-  nextTick(() => {
-    if (restudyPasteBox.value) restudyPasteBox.value.innerHTML = "";
-  });
 }
 
 function onRestudyDialogClosed() {
-  restudyPasteText.value = "";
-  if (restudyPasteBox.value) restudyPasteBox.value.innerHTML = "";
-}
-
-function onRestudyPasteInput(event) {
-  const el = event?.target;
-  restudyPasteText.value = String(el?.innerText || el?.textContent || "");
-}
-
-function onRestudyRichPaste(event) {
-  const recovered = recoverClipboardPlain(event);
-  if (!recovered.trim()) return;
-  event.preventDefault();
-  const box = restudyPasteBox.value;
-  if (!box) return;
-  const selection = window.getSelection();
-  const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
-  if (range && box.contains(range.commonAncestorContainer)) {
-    range.deleteContents();
-    const node = document.createTextNode(recovered);
-    range.insertNode(node);
-    range.setStartAfter(node);
-    range.collapse(true);
-    selection.removeAllRanges();
-    selection.addRange(range);
-  } else {
-    box.innerText = recovered;
-  }
-  restudyPasteText.value = box.innerText || recovered;
+  restudyPasteHtml.value = "";
 }
 
 async function submitRestudyDialog() {
@@ -3872,18 +4701,23 @@ async function submitRestudyDialog() {
     restudyDialogVisible.value = false;
     return;
   }
-  if (method === "source" && !String(restudyPasteText.value || "").trim()) {
+  const sourcePlain = restudyPastePlain.value;
+  if (method === "source" && !sourcePlain) {
     ElMessage.warning("请先粘贴本章原文");
     return;
   }
   if (!(await flushConfigBeforeWrite())?.ok) return;
   const focusKey = String(target.key || keys[0] || "").trim();
   if (focusKey) selectChapter(focusKey, "config");
+  // 确认重分析即清空本章旧要素关联（结果落地前先清 UI，避免残留标签）
+  for (const k of keys) clearChapterElementBindingsLocal(k);
   restudyDialogVisible.value = false;
+  const compose = composeOfChapter(focusKey);
   if (method === "auto") {
     emitWrite("generate_freeform_points", {
       chapterKeys: keys,
       chapterKey: focusKey || undefined,
+      compose,
     });
     return;
   }
@@ -3893,10 +4727,11 @@ async function submitRestudyDialog() {
     chapter_keys: keys,
     chapter_sequences: target.sequences || [],
     study_message: target.label || "",
-    study_scope: keys.length === 1 ? "self" : "selected",
+    study_scope: "selected",
     study_method: method,
-    study_text: method === "source" ? String(restudyPasteText.value || "").trim() : "",
+    study_text: method === "source" ? sourcePlain : "",
     locate_chapter_key: focusKey,
+    compose,
   });
 }
 
@@ -4242,6 +5077,7 @@ async function runPhaseAction(act) {
       buildWriteActionPayload(chapterKeys, focusKey, {
         already_persisted: Boolean(flushed.already_persisted),
         from_doc_window: true,
+        chapterConfig: currentChapterConfigPayload(),
       })
     );
     return;
@@ -4261,6 +5097,7 @@ async function runPhaseAction(act) {
       writeMode,
       already_persisted: Boolean(flushed.already_persisted),
       from_doc_window: true,
+      chapterConfig: currentChapterConfigPayload(),
     });
     return;
   }
@@ -4302,6 +5139,8 @@ function onTopologyAdd(index) {
     aux_prompt: "",
     reference_text: "",
     fixed_output: false,
+    presence: presenceForCompose(COMPOSE_HYBRID),
+    compose: COMPOSE_HYBRID,
     structure_only: false,
     element_ids: [],
     material_files: [],
@@ -4325,13 +5164,27 @@ async function saveElementNodes(elements) {
   try {
     let latest = elements || [];
     for (const tid of targets) {
+      let toWrite = elements || [];
+      try {
+        const slim = await request(
+          docOutlineUrl(tid, {
+            fresh: true,
+            writingTaskId: String(activeDoc.value?.writingTaskId || "").trim(),
+          })
+        );
+        const server = Array.isArray(slim?.element_nodes) ? slim.element_nodes : [];
+        toWrite = mergeElementNodes(server, toWrite);
+      } catch {
+        toWrite = mergeElementNodes(elementNodes.value, toWrite);
+      }
       const updated = await request(`/api/writing/tasks/${encodeURIComponent(tid)}/elements`, {
         method: "PUT",
         headers: authHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ elements }),
+        body: JSON.stringify({ elements: toWrite }),
       });
+      latest = updated?.element_nodes || toWrite || [];
       if (tid === targets[0]) {
-        latest = updated?.element_nodes || elements || [];
+        latest = [...latest];
       }
     }
     elementNodes.value = latest;
@@ -4340,6 +5193,7 @@ async function saveElementNodes(elements) {
     for (const tid of targets) {
       emit("elements-saved", { taskId: tid, elementNodes: elementNodes.value });
     }
+    await loadFullOutline({ force: true });
   } catch (error) {
     saveHint.value = error?.message || "保存要素失败";
     throw error;
@@ -4896,7 +5750,7 @@ async function saveElementDraft() {
         });
         if (Number(data?.queued) > 0) {
           ElMessage.info("新要素可收入个人库，请点「待收录要素」");
-          openLibraryPendingAfterRefresh = true;
+          // 只入队刷新角标，不自动弹出收录弹窗
           emit("library-pending-changed");
         }
       } catch {
@@ -4908,46 +5762,125 @@ async function saveElementDraft() {
   }
 }
 
+function clearElementLinkOnChapter(ch, elementId) {
+  const id = String(elementId || "").trim();
+  const key = String(ch?.key || "").trim();
+  if (!id || !key) return ch;
+  const nextIds = (Array.isArray(ch.element_ids) ? ch.element_ids : []).filter(
+    (item) => String(item || "") !== id
+  );
+  const prevItems = Array.isArray(ch.point_items)
+    ? ch.point_items
+    : Array.isArray(ch?.config?.point_items)
+      ? ch.config.point_items
+      : [];
+  const nextItems = (prevItems || []).map((row) => {
+    if (!row || typeof row !== "object") return row;
+    if (String(row.element_id || "").trim() !== id) return { ...row };
+    const next = { ...row };
+    delete next.element_id;
+    delete next.element_name;
+    const text = String(next.text || "");
+    const slot = String(next.slot || "").trim() || parseSlotFromText(text);
+    if (slot) next.slot = slot;
+    if (slot || textNeedsSupplement(text)) next.needs_supplement = true;
+    return next;
+  });
+  return {
+    ...ch,
+    element_ids: nextIds,
+    point_items: nextItems,
+    points: pointsFromPointItems(nextItems),
+    config: {
+      ...(ch.config && typeof ch.config === "object" ? ch.config : {}),
+      element_ids: nextIds,
+      point_items: nextItems,
+      points: pointsFromPointItems(nextItems),
+    },
+  };
+}
+
 async function unlinkCurrentElement() {
   const id = String(elementDraft.value?.id || "").trim();
   const key = String(selectedKey.value || "").trim();
   const persistTid = outlineSourceTaskId();
   if (!id || !key || !persistTid) return;
-  let nodes = outlineNodes.value.length
-    ? outlineNodes.value.map((item) => ({ ...item }))
-    : [];
-  if (!nodes.length) {
-    try {
-      const slim = await request(`/api/writing/tasks/${encodeURIComponent(persistTid)}/doc-outline`);
-      nodes = (slim?.chapters || []).map((item) => ({ ...item }));
-    } catch (error) {
-      ElMessage.error(error?.message || "读取目录失败");
-      return;
+  beginChapterBindingFlight(key);
+  // 先清本地（含仅挂在要点上的乐观关联），再调后端；后端已幂等，不再弹「该章未关联」
+  const hadLocalPointLink = (configDraft.point_items || []).some(
+    (row) => String(row?.element_id || "").trim() === id
+  );
+  outlineNodes.value = outlineNodes.value.map((ch) =>
+    String(ch?.key || "") === key ? clearElementLinkOnChapter(ch, id) : ch
+  );
+  extraChapters.value = extraChapters.value.map((ch) =>
+    String(ch?.key || "") === key ? clearElementLinkOnChapter(ch, id) : ch
+  );
+  if (String(selectedKey.value || "") === key) {
+    configDraft.point_items.splice(
+      0,
+      configDraft.point_items.length,
+      ...configDraft.point_items.map((row) => {
+        if (String(row?.element_id || "").trim() !== id) return row;
+        const next = { ...row };
+        delete next.element_id;
+        delete next.element_name;
+        const text = String(next.text || "");
+        const slot = String(next.slot || "").trim() || parseSlotFromText(text);
+        if (slot) next.slot = slot;
+        if (slot || textNeedsSupplement(text)) next.needs_supplement = true;
+        return next;
+      })
+    );
+  }
+  pendingChapterElementIds.delete(key);
+  const ptMap = pendingPointItemBindings.get(key);
+  if (ptMap?.size) {
+    for (const [rid, bind] of [...ptMap]) {
+      if (String(bind?.element_id || "").trim() === id) ptMap.delete(rid);
     }
+    if (!ptMap.size) pendingPointItemBindings.delete(key);
   }
-  const idx = nodes.findIndex((item) => String(item.key || "") === key);
-  if (idx < 0) {
-    ElMessage.warning("未找到该章节");
-    return;
-  }
-  const prevIds = Array.isArray(nodes[idx].element_ids) ? nodes[idx].element_ids : [];
-  nodes[idx] = {
-    ...nodes[idx],
-    element_ids: prevIds.filter((item) => String(item || "") !== id),
-  };
   try {
-    await persistOutlineNodes(nodes, { selectKey: key });
+    await request(
+      `/api/writing/tasks/${encodeURIComponent(persistTid)}/chapters/${encodeURIComponent(key)}/elements/${encodeURIComponent(id)}`,
+      { method: "DELETE", headers: authHeaders() }
+    );
+    // 本地要点关联可能尚未落盘：再静默写回本章 point_items，避免刷新后又挂上
+    if (hadLocalPointLink) {
+      syncConfigPointItemsToLocalOutline();
+      schedulePersistChapterConfig(0);
+    }
     elementDialogVisible.value = false;
+    const chapter =
+      outlineNodes.value.find((ch) => String(ch?.key || "") === key) ||
+      extraChapters.value.find((ch) => String(ch?.key || "") === key) ||
+      null;
     emit("config-saved", {
       taskId: persistTid,
       chapterKey: key,
-      chapter: nodes[idx],
+      chapter,
       elementNodes: elementNodes.value,
       syncSession: false,
+      alreadyPersisted: true,
+      quiet: true,
     });
-    ElMessage.success("已取消本章关联");
+    await refreshChapterBindingsFromServer(persistTid, key);
+    ElMessage.success("已取消关联");
   } catch (error) {
-    ElMessage.error(error?.message || "取消关联失败");
+    const msg = String(error?.message || "");
+    if (msg.includes("该章未关联此要素")) {
+      if (hadLocalPointLink) {
+        syncConfigPointItemsToLocalOutline();
+        schedulePersistChapterConfig(0);
+      }
+      elementDialogVisible.value = false;
+      await refreshChapterBindingsFromServer(persistTid, key);
+      ElMessage.success("已取消关联");
+      return;
+    }
+    ElMessage.error(msg || "取消关联失败");
+    endChapterBindingFlight(key);
   }
 }
 
@@ -4965,7 +5898,10 @@ async function persistOutlineNodes(nodes, { selectKey = "", replaceTree = false 
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ chapters: nodes, replace_tree: Boolean(replaceTree) }),
     });
-    outlineNodes.value = (updated?.outline?.chapters || nodes).map((item) => ({ ...item }));
+    const nextList = (updated?.outline?.chapters || nodes).map((item) => ({ ...item }));
+    outlineNodes.value = mergeOutlinePreserveElementIds(outlineNodes.value, nextList, {
+      preferOutlineCompose: true,
+    });
     extraChapters.value = outlineNodes.value.map((ch) => ({
       key: ch.key,
       sequence: ch.sequence,
@@ -4996,7 +5932,7 @@ async function addChapter() {
       ? outlineNodes.value.map((item) => ({ ...item }))
       : [];
     if (!nodes.length) {
-      const slim = await request(`/api/writing/tasks/${encodeURIComponent(persistTid)}/doc-outline`);
+      const slim = await requestDocOutline(persistTid);
       nodes = (slim?.chapters || []).map((item) => ({ ...item }));
     }
     const anchor = nodes.find((item) => item.key === selectedKey.value) || nodes[nodes.length - 1] || {};
@@ -5014,6 +5950,8 @@ async function addChapter() {
       aux_prompt: "",
       reference_text: "",
       fixed_output: false,
+      presence: presenceForCompose(COMPOSE_HYBRID),
+      compose: COMPOSE_HYBRID,
       structure_only: false,
       element_ids: [],
       material_files: [],
@@ -5064,7 +6002,7 @@ async function removeSelectedChapters() {
       ? outlineNodes.value.map((item) => ({ ...item }))
       : [];
     if (!nodes.length) {
-      const slim = await request(`/api/writing/tasks/${encodeURIComponent(persistTid)}/doc-outline`);
+      const slim = await requestDocOutline(persistTid);
       nodes = (slim?.chapters || []).map((item) => ({ ...item }));
     }
     const next = nodes.filter((item) => !drop.has(String(item.key || "").trim()));
@@ -5099,7 +6037,7 @@ async function removeChapter() {
       ? outlineNodes.value.map((item) => ({ ...item }))
       : [];
     if (!nodes.length) {
-      const slim = await request(`/api/writing/tasks/${encodeURIComponent(persistTid)}/doc-outline`);
+      const slim = await requestDocOutline(persistTid);
       nodes = (slim?.chapters || []).map((item) => ({ ...item }));
     }
     const next = nodes.filter((item) => String(item.key || "") !== key);
@@ -5120,7 +6058,20 @@ async function removeChapter() {
 }
 
 const hydratingConfig = ref(false);
-let configAutosaveTimer = 0; // 仅用于取消防抖残留；配置不再自动保存
+let configAutosaveTimer = 0;
+
+/** 要点编辑后防抖静默落盘，不锁 UI、不弹成功提示 */
+function schedulePersistChapterConfig(delayMs = 450) {
+  if (configAutosaveTimer) {
+    clearTimeout(configAutosaveTimer);
+    configAutosaveTimer = 0;
+  }
+  saveHint.value = "未保存";
+  configAutosaveTimer = window.setTimeout(() => {
+    configAutosaveTimer = 0;
+    void saveChapterConfig({ syncSession: false, quiet: true });
+  }, delayMs);
+}
 
 function hydrateConfigDraft() {
   hydratingConfig.value = true;
@@ -5128,35 +6079,81 @@ function hydrateConfigDraft() {
   const ch = selectedChapter.value;
   const cfg = ch?.config && typeof ch.config === "object" ? ch.config : {};
   const src = node || cfg || ch || {};
-  const points = pickRicherList(
-    node?.points,
-    pickRicherList(ch?.points, cfg?.points)
-  );
+  const nodeEpoch = Number(node?._studyEpoch || node?.config?._studyEpoch || 0);
+  const points = nodeEpoch
+    ? pickRicherList(node?.points, node?.config?.points)
+    : pickRicherList(
+        node?.points,
+        pickRicherList(ch?.points, cfg?.points)
+      );
   Object.assign(configDraft, {
     sequence: String(src.sequence || ch?.sequence || "").trim(),
     title: String(src.title || ch?.title || ch?.key || "").trim(),
     parent: String(src.parent || ch?.parent || cfg?.parent || "").trim(),
-    describes: pickRicherText(src.describes, ch?.describes || cfg?.describes),
+    describes: pickStudyDescribes(
+      src.describes,
+      ch?.describes || cfg?.describes,
+      points
+    ),
     aux_prompt: pickRicherText(src.aux_prompt, ch?.aux_prompt || cfg?.aux_prompt),
     reference_text: pickRicherText(src.reference_text, ch?.reference_text || cfg?.reference_text),
-    fixed_output: Boolean(src.fixed_output ?? ch?.fixed_output ?? cfg?.fixed_output),
+    compose: normalizeCompose(
+      src.compose || ch?.compose || cfg?.compose,
+      {
+        fixed_output: src.fixed_output ?? ch?.fixed_output ?? cfg?.fixed_output,
+        presence: src.presence || ch?.presence || cfg?.presence,
+      }
+    ),
+    presence: presenceForCompose(
+      normalizeCompose(
+        src.compose || ch?.compose || cfg?.compose,
+        {
+          fixed_output: src.fixed_output ?? ch?.fixed_output ?? cfg?.fixed_output,
+          presence: src.presence || ch?.presence || cfg?.presence,
+        }
+      )
+    ),
     // 勿用 ||：取消「仅目录」后 false 会被章节旧 true 盖回
     structure_only: Boolean(
       node?.structure_only ?? ch?.structure_only ?? cfg?.structure_only ?? false
     ),
   });
+  configDraft.fixed_output = isFixedCompose(configDraft.compose);
+  const chapterKey = String(selectedKey.value || node?.key || ch?.key || "").trim();
   const loadedItems = pointItemsFromChapter(node, ch, cfg);
-  let rows =
-    !loadedItems.length && points.length
-      ? syncPointItemsFromPoints(points, [])
-      : loadedItems;
-  const linkIds = pickElementIds(
-    node?.element_ids,
-    ch?.element_ids,
-    cfg?.element_ids
+  const pendingPt = pendingPointItemBindings.get(chapterKey);
+  const draftFallback =
+    chapterKey && chapterKey === String(selectedKey.value || "").trim()
+      ? configDraft.point_items.map((row) => ({ ...row }))
+      : [];
+  let rows = pickPointItemsAuthoritative(
+    [loadedItems],
+    draftFallback.length ? [draftFallback] : [],
+    pendingPt?.size ? [applyPendingPointItemBindings(loadedItems, pendingPt)] : []
   );
-  if (rows.length && linkIds.length) {
-    rows = linkPointItemsToElements(rows, elementNodes.value, { elementIds: linkIds });
+  const loadedTexts = pointsFromPointItems(rows);
+  const pointsSig = (points || []).map((p) => String(p || "").trim()).filter(Boolean).join("\n");
+  const itemsSig = loadedTexts.join("\n");
+  // 大纲/进度已换新 points，但 point_items 仍是旧串章行时，按 points 重建表格
+  if (points.length && (!rows.length || (pointsSig && pointsSig !== itemsSig))) {
+    rows = syncPointItemsFromPoints(points, rows);
+    rows = pickPointItemsAuthoritative(
+      [rows],
+      draftFallback.length ? [draftFallback] : [],
+      pendingPt?.size ? [applyPendingPointItemBindings(rows, pendingPt)] : []
+    );
+  }
+  // 只补全已关联行的展示名；禁止按章 element_ids 自动挂回「刚取消关联」的要点
+  if (rows.length && elementNodes.value.length) {
+    rows = rows.map((row) => {
+      const eid = String(row?.element_id || "").trim();
+      if (!eid) return row;
+      const el = elementNodes.value.find((item) => String(item?.id || "") === eid);
+      if (!el) return row;
+      const ename = humanLabel(el.name, row.element_name, row.slot);
+      if (!ename || ename === String(row.element_name || "").trim()) return row;
+      return { ...row, element_name: ename, needs_supplement: false };
+    });
   }
   configDraft.point_items.splice(
     0,
@@ -5181,33 +6178,99 @@ function pointItemElementLabel(row) {
   const eid = String(row.element_id || "").trim();
   if (!eid) return "";
   const el = elementNodes.value.find((item) => String(item?.id || "") === eid);
-  if (!el) return "";
-  const name = humanLabel(el.name, row.element_name, row.slot);
-  if (!name) return "";
-  return `${name}（${elementKindLabel(el.kind)}）`;
+  const name = humanLabel(el?.name, row.element_name, row.slot);
+  // 要素体尚未合入本地库时，仍用 slot / 占位名回显，避免「已关联却空白」
+  if (!name) return el ? `已关联要素（${elementKindLabel(el.kind)}）` : "已关联要素";
+  return el ? `${name}（${elementKindLabel(el.kind)}）` : name;
 }
 
 function onConfigPointRowEdit(row) {
   if (!row || typeof row !== "object") return;
   const text = String(row.text || "");
-  row.needs_supplement = textNeedsSupplement(text);
+  const slot = String(row.slot || "").trim();
+  // 无待补项且正文无占位 → 普通要点，不强制关联
+  if (!slot && !textNeedsSupplement(text)) {
+    row.needs_supplement = false;
+    delete row.slot;
+  } else {
+    row.needs_supplement = textNeedsSupplement(text);
+    if (!slot) {
+      const parsed = parseSlotFromText(text);
+      if (parsed) row.slot = parsed;
+    }
+  }
   if (String(row.element_id || "").trim()) {
     row.needs_supplement = false;
-  }
-  if (!String(row.slot || "").trim()) {
-    const slot = parseSlotFromText(text);
-    if (slot) row.slot = slot;
   }
 }
 
 const pointItemDialogVisible = ref(false);
 const pointItemEditIndex = ref(-1);
-const pointItemEditDraft = reactive({ text: "", slot: "" });
+const pointItemEditDraft = reactive({
+  text: "",
+  slot: "",
+  element_id: "",
+  element_name: "",
+});
+
+const pointItemEditElementLabel = computed(() =>
+  pointItemElementLabel({
+    element_id: pointItemEditDraft.element_id,
+    element_name: pointItemEditDraft.element_name,
+    slot: pointItemEditDraft.slot,
+  })
+);
+
+const pointItemEditLooksSupplement = computed(() => {
+  const slot = String(pointItemEditDraft.slot || "").trim();
+  const text = String(pointItemEditDraft.text || "");
+  return Boolean(slot) || textNeedsSupplement(text);
+});
 
 function onPointItemDialogClosed() {
   pointItemEditIndex.value = -1;
   pointItemEditDraft.text = "";
   pointItemEditDraft.slot = "";
+  pointItemEditDraft.element_id = "";
+  pointItemEditDraft.element_name = "";
+}
+
+/** 去掉待补占位与 slot，改成可不关联要素的普通写作要点 */
+function convertPointItemEditorToPlain() {
+  pointItemEditDraft.text = stripSupplementMarkers(pointItemEditDraft.text);
+  pointItemEditDraft.slot = "";
+}
+
+function applyPointItemEditorDraftToRow() {
+  const index = pointItemEditIndex.value;
+  const row = configDraft.point_items[index];
+  if (!row) return null;
+  let text = String(pointItemEditDraft.text || "").trim();
+  let slot = String(pointItemEditDraft.slot || "").trim();
+  // 清空待补项 = 改为普通要点：去掉正文里的「（待补充：…）」
+  if (!slot) {
+    text = stripSupplementMarkers(text);
+    pointItemEditDraft.text = text;
+  }
+  row.text = text;
+  if (slot) row.slot = slot;
+  else delete row.slot;
+  const eid = String(pointItemEditDraft.element_id || "").trim();
+  if (eid) {
+    row.element_id = eid;
+    const ename = humanLabel(pointItemEditDraft.element_name, row.slot);
+    if (ename) row.element_name = ename;
+    else delete row.element_name;
+  } else {
+    delete row.element_id;
+    delete row.element_name;
+  }
+  onConfigPointRowEdit(row);
+  // 显式落盘：普通要点不得再被旧 needs_supplement 粘住
+  if (!String(row.slot || "").trim() && !textNeedsSupplement(String(row.text || ""))) {
+    row.needs_supplement = false;
+  }
+  return row;
 }
 
 function openPointItemEditor(index) {
@@ -5216,44 +6279,108 @@ function openPointItemEditor(index) {
   pointItemEditIndex.value = index;
   pointItemEditDraft.text = String(row.text || "");
   pointItemEditDraft.slot = String(row.slot || "");
+  pointItemEditDraft.element_id = String(row.element_id || "").trim();
+  pointItemEditDraft.element_name = humanLabel(row.element_name, row.slot);
   pointItemDialogVisible.value = true;
 }
 
 function savePointItemEditor() {
-  const index = pointItemEditIndex.value;
-  const row = configDraft.point_items[index];
-  if (!row) {
-    pointItemDialogVisible.value = false;
-    return;
-  }
-  row.text = String(pointItemEditDraft.text || "").trim();
-  row.slot = String(pointItemEditDraft.slot || "").trim();
-  onConfigPointRowEdit(row);
+  const row = applyPointItemEditorDraftToRow();
   pointItemDialogVisible.value = false;
+  if (!row) return;
   syncConfigPointItemsToLocalOutline();
-  scheduleChapterMetaFromPoints();
-  saveHint.value = "未保存";
+  // 本地立刻更新状态；后台防抖落盘，避免每次编辑都卡在全量大纲读写
+  schedulePersistChapterConfig();
+}
+
+function associateFromPointItemEditor() {
+  const index = pointItemEditIndex.value;
+  const row = applyPointItemEditorDraftToRow();
+  pointItemDialogVisible.value = false;
+  if (!row) return;
+  syncConfigPointItemsToLocalOutline();
+  nextTick(() => associatePointItemElement(row, index));
+}
+
+function clearFromPointItemEditor() {
+  pointItemEditDraft.element_id = "";
+  pointItemEditDraft.element_name = "";
+  // 立刻回写当前行，避免点「取消关联」后弹窗里仍显示旧名、确定前又被 hydrate 盖回
+  applyPointItemEditorDraftToRow();
 }
 
 function rowNeedsPointAssociate(row) {
   if (!row || typeof row !== "object") return false;
   const eid = String(row.element_id || "").trim();
-  if (eid && elementNodes.value.some((el) => String(el?.id || "") === eid)) {
+  if (eid && (pointItemElementLabel(row) || elementNodes.value.some((el) => String(el?.id || "") === eid))) {
     return false;
   }
   return Boolean(row.needs_supplement) || textNeedsSupplement(String(row.text || ""));
 }
 
+/** 列表开关：是否强制要求关联要点要素（关闭=普通要点） */
+function pointItemRequireElementOn(row) {
+  if (!row || typeof row !== "object") return false;
+  if (row.needs_supplement === false && !textNeedsSupplement(String(row.text || "")) && !String(row.slot || "").trim()) {
+    return false;
+  }
+  return (
+    Boolean(row.needs_supplement) ||
+    textNeedsSupplement(String(row.text || "")) ||
+    Boolean(String(row.slot || "").trim())
+  );
+}
+
+function togglePointItemRequireElement(row, requireOn) {
+  if (!row || typeof row !== "object" || blockingLoad.value) return;
+  const on = requireOn === true || requireOn === 1 || requireOn === "true";
+  if (on) {
+    const text = String(row.text || "").trim();
+    let slot =
+      String(row.slot || "").trim() ||
+      parseSlotFromText(text) ||
+      humanLabel(row.element_name) ||
+      "";
+    // 普通要点打开「需关联」时必须落 slot + 占位；否则 onConfigPointRowEdit 会立刻把 needs_supplement 清回 false，开关看起来点不动
+    if (!slot) {
+      const plain = stripSupplementMarkers(text) || text;
+      slot = (plain.replace(/[（(].*$/, "").trim() || plain || "待补充项").slice(0, 24);
+    }
+    row.slot = slot;
+    if (!textNeedsSupplement(text)) {
+      row.text = `${stripSupplementMarkers(text) || text || slot}（待补充：${slot}）`.trim();
+    }
+    row.needs_supplement = true;
+  } else {
+    row.text = stripSupplementMarkers(String(row.text || ""));
+    row.slot = "";
+    row.needs_supplement = false;
+  }
+  // 勿再走 onConfigPointRowEdit：它会按「无 slot / 无占位」把显式开关意图抹掉
+  if (String(row.element_id || "").trim()) {
+    row.needs_supplement = false;
+  }
+  syncConfigPointItemsToLocalOutline();
+  schedulePersistChapterConfig();
+}
+
 const pendingPointItemLink = ref(null);
 
 function associatePointItemElement(row, index) {
+  const text = String(row?.text || row?.label || "").trim();
+  const slot =
+    String(row?.slot || "").trim() ||
+    (text.match(/（待补充[：:]([^）)]*)）/) || [])[1]?.trim() ||
+    "";
   pendingPointItemLink.value = {
     index: Number(index),
     id: String(row?.id || "").trim(),
-    slot: String(row?.slot || "").trim(),
+    slot,
   };
   if (row && String(row.slot || "").trim()) {
-    saveHint.value = `请为待补项「${String(row.slot).trim()}」关联要素`;
+    saveHint.value = `请为待补项「${String(row.slot).trim()}」关联要点要素`;
+  } else {
+    saveHint.value = "请为本条写作要点关联要点要素";
   }
   emitWrite("associate_elements", {
     associateScope: "point",
@@ -5282,6 +6409,33 @@ function addConfigPointRow() {
   nextTick(() => openPointItemEditor(i));
 }
 
+function syncStructureOnlyToLocalOutline() {
+  const key = String(selectedKey.value || "").trim();
+  if (!key) return;
+  const flag = Boolean(configDraft.structure_only);
+  const patchChapter = (ch) => {
+    if (String(ch?.key || "") !== key) return ch;
+    const cfg = ch?.config && typeof ch.config === "object" ? ch.config : {};
+    const next = {
+      ...ch,
+      structure_only: flag,
+      config: { ...cfg, structure_only: flag },
+    };
+    if (flag) {
+      next.points = [];
+      next.point_items = [];
+      next.config = {
+        ...next.config,
+        points: [],
+        point_items: [],
+      };
+    }
+    return next;
+  };
+  outlineNodes.value = outlineNodes.value.map(patchChapter);
+  extraChapters.value = extraChapters.value.map(patchChapter);
+}
+
 function syncConfigPointItemsToLocalOutline() {
   const key = String(selectedKey.value || "").trim();
   if (!key) return;
@@ -5289,6 +6443,7 @@ function syncConfigPointItemsToLocalOutline() {
   const points = pointsFromPointItems(items);
   const describes = String(configDraft.describes || "").trim();
   const aux_prompt = String(configDraft.aux_prompt || "").trim();
+  // 只同步要点；章级 element_ids 保持不动，与要点要素分开存
   const patchChapter = (ch) => {
     if (String(ch?.key || "") !== key) return ch;
     const cfg = ch?.config && typeof ch.config === "object" ? ch.config : {};
@@ -5308,64 +6463,25 @@ function syncConfigPointItemsToLocalOutline() {
     };
   };
   outlineNodes.value = outlineNodes.value.map(patchChapter);
+  extraChapters.value = extraChapters.value.map(patchChapter);
 }
 
-let chapterMetaRegenTimer = 0;
 const chapterMetaRegenBusy = ref(false);
 
 async function refreshChapterMetaFromPoints() {
-  if (configDraft.structure_only) return;
+  if (configDraft.structure_only || isFixedCompose(configDraft.compose)) return;
   const tid = configPersistTaskIds()[0] || String(taskId.value || "").trim();
   const key = String(selectedKey.value || "").trim();
   if (!tid || !key || chapterMetaRegenBusy.value || blockingLoad.value) return;
-  const point_items = draftPointItemsForSave();
-  if (!point_items.length) {
-    configDraft.describes = "";
-    configDraft.aux_prompt = "";
-    syncConfigPointItemsToLocalOutline();
-    saveHint.value = "未保存";
-    return;
-  }
-  chapterMetaRegenBusy.value = true;
-  try {
-    const data = await request(
-      `/api/writing/tasks/${encodeURIComponent(tid)}/outline/meta-from-points`,
-      {
-        method: "POST",
-        headers: authHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({
-          chapter_key: key,
-          title: configDraft.title || "",
-          sequence: configDraft.sequence || "",
-          point_items,
-        }),
-      }
-    );
-    configDraft.describes = String(data?.describes || "").trim();
-    configDraft.aux_prompt = String(data?.aux_prompt || "").trim();
-    syncConfigPointItemsToLocalOutline();
-    saveHint.value = "未保存";
-  } catch (error) {
-    ElMessage.warning(error?.message || "未能根据要点更新章节说明");
-  } finally {
-    chapterMetaRegenBusy.value = false;
-  }
-}
-
-function scheduleChapterMetaFromPoints() {
-  if (configDraft.structure_only) return;
-  if (chapterMetaRegenTimer) clearTimeout(chapterMetaRegenTimer);
-  chapterMetaRegenTimer = window.setTimeout(() => {
-    chapterMetaRegenTimer = 0;
-    refreshChapterMetaFromPoints();
-  }, 450);
+  emitWrite("generate_chapter_describes", {
+    point_items: draftPointItemsForSave(),
+  });
 }
 
 function removeConfigPointRow(index) {
   configDraft.point_items.splice(index, 1);
   syncConfigPointItemsToLocalOutline();
-  scheduleChapterMetaFromPoints();
-  saveHint.value = "未保存";
+  schedulePersistChapterConfig();
 }
 
 function draftPointItemsForSave() {
@@ -5376,7 +6492,11 @@ function draftPointItemsForSave() {
       const out = { id, text };
       const slot = humanLabel(row?.slot);
       if (slot) out.slot = slot;
-      if (textNeedsSupplement(text) || row?.needs_supplement) out.needs_supplement = true;
+      if (row?.needs_supplement === false && !textNeedsSupplement(text)) {
+        out.needs_supplement = false;
+      } else if (textNeedsSupplement(text) || row?.needs_supplement) {
+        out.needs_supplement = true;
+      }
       const eid = String(row?.element_id || "").trim();
       if (eid) {
         out.element_id = eid;
@@ -5395,10 +6515,12 @@ function draftPointItemsForSave() {
  * @returns {Promise<boolean|null>} true 成功 / false 失败 / null 跳过
  */
 async function patchChapterConfigOnTask(tid, key, chapterFields) {
-  const slim = await request(`/api/writing/tasks/${encodeURIComponent(tid)}/doc-outline?fresh=1`);
-  const nodes = (slim?.chapters || []).map((item) => ({ ...item }));
+  // 保存前一律拉库真值再 PATCH，避免用陈旧 outlineNodes 整树覆盖
+  const wid = String(activeDoc.value?.writingTaskId || "").trim();
+  const slim = await request(docOutlineUrl(tid, { fresh: true, writingTaskId: wid }));
+  let nodes = (slim?.chapters || []).map((item) => ({ ...item }));
   if (!nodes.length) throw new Error("未找到该章节");
-  const idx = nodes.findIndex((item) => String(item.key || "") === key);
+  let idx = nodes.findIndex((item) => String(item.key || "") === key);
   if (idx < 0) throw new Error("未找到该章节");
   const prev = nodes[idx] || {};
   let point_items = [];
@@ -5413,7 +6535,11 @@ async function patchChapterConfigOnTask(tid, key, chapterFields) {
       const out = { id, text };
       const slot = humanLabel(row?.slot);
       if (slot) out.slot = slot;
-      if (textNeedsSupplement(text) || row?.needs_supplement) out.needs_supplement = true;
+      if (row?.needs_supplement === false && !textNeedsSupplement(text)) {
+        out.needs_supplement = false;
+      } else if (textNeedsSupplement(text) || row?.needs_supplement) {
+        out.needs_supplement = true;
+      }
       const eid = String(row?.element_id || "").trim();
       if (eid) {
         out.element_id = eid;
@@ -5431,19 +6557,13 @@ async function patchChapterConfigOnTask(tid, key, chapterFields) {
       !draftPoints.length && prevPoints.length ? [...prevPoints] : draftPoints;
     point_items = syncPointItemsFromPoints(points, prev.point_items);
   }
-  // 调用方带了本章关联就以它为准。服务端 element_ids 常是空数组，
-  // 若优先用服务端，界面上已挂的「建设规模」不会进大纲，写作检索就当没关联。
-  let prevIds = Array.isArray(chapterFields.element_ids)
+  // 章级 element_ids 与要点 element_id 分开：调用方带了章级关联就以它为准，勿把要点要素并进来。
+  // 写作检索并集由后端 element_ids_for_chapter_node 处理。
+  const prevIds = Array.isArray(chapterFields.element_ids)
     ? chapterFields.element_ids.map((id) => String(id || "").trim()).filter(Boolean)
     : Array.isArray(prev.element_ids)
       ? prev.element_ids.map((id) => String(id || "").trim()).filter(Boolean)
       : [];
-  const idSet = new Set(prevIds);
-  for (const row of point_items) {
-    const eid = String(row?.element_id || "").trim();
-    if (eid) idSet.add(eid);
-  }
-  prevIds = [...idSet];
   const parentKey = String(chapterFields.parent || "").trim();
   let parentSeq = "";
   let level = Number(prev.level) > 0 ? Number(prev.level) : 1;
@@ -5470,6 +6590,10 @@ async function patchChapterConfigOnTask(tid, key, chapterFields) {
     aux_prompt: chapterFields.structure_only ? "" : chapterFields.aux_prompt,
     reference_text: chapterFields.reference_text,
     fixed_output: Boolean(chapterFields.fixed_output) && !chapterFields.structure_only,
+    compose: normalizeCompose(chapterFields.compose, { fixed_output: chapterFields.fixed_output, presence: chapterFields.presence }),
+    presence: presenceForCompose(
+      normalizeCompose(chapterFields.compose, { fixed_output: chapterFields.fixed_output, presence: chapterFields.presence })
+    ),
     structure_only: Boolean(chapterFields.structure_only),
     element_ids: prevIds,
   };
@@ -5483,29 +6607,29 @@ async function patchChapterConfigOnTask(tid, key, chapterFields) {
 
 async function saveChapterConfig(opts = {}) {
   const syncSession = opts.syncSession !== false;
+  const quiet = Boolean(opts.quiet);
   const targets = configPersistTaskIds();
   const primaryTid = targets[0] || "";
   const key = String(selectedKey.value || "").trim();
   if (!primaryTid || !key || saving.value) return null;
+  beginChapterBindingFlight(key);
   if (configAutosaveTimer) {
     clearTimeout(configAutosaveTimer);
     configAutosaveTimer = 0;
   }
-  saving.value = true;
-  saveHint.value = "";
+  if (!quiet) {
+    saving.value = true;
+    saveHint.value = "";
+  } else {
+    saveHint.value = "保存中…";
+  }
   try {
-    if (chapterMetaRegenTimer) {
-      clearTimeout(chapterMetaRegenTimer);
-      chapterMetaRegenTimer = 0;
-      await refreshChapterMetaFromPoints();
-    }
     const local = outlineNodes.value.find((item) => String(item.key || "") === key) || {};
     const draftItems = configDraft.structure_only ? [] : draftPointItemsForSave();
-    const idsFromPoints = elementIdsFromPointItems(draftItems);
-    const idsFromSelect = pickElementIds(
-      selectedElementIds.value,
-      local.element_ids,
-      local.config?.element_ids
+    // 章级只取大纲章级字段；剔除已挂在要点上的 id（清洗历史泄漏）
+    const chapterElementIds = chapterElementIdsForPersist(
+      unionElementIds(local.element_ids, local.config?.element_ids),
+      draftItems
     );
     const fields = {
       sequence: configDraft.sequence,
@@ -5515,9 +6639,12 @@ async function saveChapterConfig(opts = {}) {
       describes: configDraft.describes,
       aux_prompt: configDraft.aux_prompt,
       reference_text: configDraft.reference_text,
-      fixed_output: configDraft.fixed_output,
+      fixed_output: isFixedCompose(configDraft.compose),
+      compose: normalizeCompose(configDraft.compose),
+      preserve_chapter_meta: true,
+      presence: presenceForCompose(configDraft.compose),
       structure_only: configDraft.structure_only,
-      element_ids: [...new Set([...idsFromSelect, ...idsFromPoints])],
+      element_ids: [...chapterElementIds],
     };
     let primaryChapter = null;
     let primaryNodes = null;
@@ -5532,22 +6659,51 @@ async function saveChapterConfig(opts = {}) {
       }
     }
     if (primaryNodes?.length) {
-      outlineNodes.value = mergeOutlinePreserveElementIds(outlineNodes.value, primaryNodes);
-      extraChapters.value = outlineNodes.value.map((ch) => ({
-        key: ch.key,
-        sequence: ch.sequence,
-        title: ch.title,
-        parent: ch.parent,
-        structure_only: Boolean(ch.structure_only),
-        points: Array.isArray(ch.points) ? [...ch.points] : [],
-        element_ids: Array.isArray(ch.element_ids) ? [...ch.element_ids] : [],
-        status: chapters.value.find((row) => row.key === ch.key)?.status || "",
-      }));
+      outlineNodes.value = mergeOutlinePreserveElementIds(outlineNodes.value, primaryNodes, {
+        preferOutlineCompose: true,
+      });
+      if (primaryChapter) {
+        commitChapterBindingsFromServer(key, primaryChapter);
+      } else {
+        endChapterBindingFlight(key);
+      }
+      if (!quiet) {
+        extraChapters.value = outlineNodes.value.map((ch) => ({
+          key: ch.key,
+          sequence: ch.sequence,
+          title: ch.title,
+          parent: ch.parent,
+          structure_only: Boolean(ch.structure_only),
+          points: Array.isArray(ch.points) ? [...ch.points] : [],
+          element_ids: Array.isArray(ch.element_ids) ? [...ch.element_ids] : [],
+          status: chapters.value.find((row) => row.key === ch.key)?.status || "",
+        }));
+      } else {
+        // 静默保存：只补本章，避免整树重建卡顿
+        const patched = primaryNodes.find((item) => String(item.key || "") === key);
+        if (patched) {
+          extraChapters.value = extraChapters.value.map((ch) =>
+            String(ch?.key || "") === key
+              ? {
+                  ...ch,
+                  points: Array.isArray(patched.points) ? [...patched.points] : ch.points,
+                  point_items: Array.isArray(patched.point_items)
+                    ? patched.point_items.map((row) => ({ ...row }))
+                    : ch.point_items,
+                  element_ids: Array.isArray(patched.element_ids)
+                    ? [...patched.element_ids]
+                    : ch.element_ids,
+                  structure_only: Boolean(patched.structure_only),
+                }
+              : ch
+          );
+        }
+      }
     }
     outlineFullyLoaded.value = true;
-    hydrateConfigDraft();
+    // 静默落盘前本地已 sync，勿再 hydrate 冲掉正在编辑的草稿
+    if (!quiet) hydrateConfigDraft();
     saveHint.value = "已保存";
-    snapshotOutlineCache(outlineSourceTaskId() || primaryTid);
     // 写作 clone 与蓝本都通知父级，保证 retry 取得到 element_ids / 要素体
     for (const tid of targets) {
       emit("config-saved", {
@@ -5558,16 +6714,18 @@ async function saveChapterConfig(opts = {}) {
         // 小窗已 PUT 落盘到文档副本，父级勿再 configure_chapter / 强制重拉以免旧进度盖回
         syncSession: false,
         alreadyPersisted: true,
+        quiet,
       });
     }
-    // 本地 outline + snapshot 已是刚写入真值；勿立刻软刷新（无 fresh 易吃到缓存/旧稿再 hydrate）
+    // 本地 outline 已是刚写入真值；勿立刻再拉目录把未落库的编辑冲掉
     return true;
   } catch (error) {
     saveHint.value = error?.message || "保存失败";
-    ElMessage.error(saveHint.value);
+    if (!quiet) ElMessage.error(saveHint.value);
+    endChapterBindingFlight(key);
     return false;
   } finally {
-    saving.value = false;
+    if (!quiet) saving.value = false;
   }
 }
 
@@ -5588,6 +6746,9 @@ function isConfigDraftDirty() {
   if (String(configDraft.aux_prompt || "").trim() !== String(node.aux_prompt || "").trim()) return true;
   if (String(configDraft.reference_text || "").trim() !== String(node.reference_text || "").trim()) return true;
   if (Boolean(configDraft.fixed_output) !== Boolean(node.fixed_output)) return true;
+  const nodeCompose = normalizeCompose(node.compose, { fixed_output: node.fixed_output, presence: node.presence });
+  if (normalizeCompose(configDraft.compose) !== nodeCompose) return true;
+  if (presenceForCompose(configDraft.compose) !== presenceForCompose(nodeCompose)) return true;
   return false;
 }
 
@@ -5595,16 +6756,48 @@ function isConfigDraftDirty() {
  * 学习本章 / 重写本章前：草稿有改动则先静默保存再开跑（保存与学习合并）。
  * 纯「保存配置」、关联要素不走这里，不会触发学习。
  */
+function currentChapterConfigPayload() {
+  const draftItems = configDraft.structure_only ? [] : draftPointItemsForSave();
+  const local = selectedOutlineNode.value || selectedChapter.value || {};
+  const chapterIds = pickElementIds(
+    selectedElementIds.value,
+    local.element_ids,
+    local.config?.element_ids
+  );
+  return {
+    chapter_key: String(selectedKey.value || "").trim(),
+    sequence: configDraft.sequence,
+    title: configDraft.title,
+    point_items: draftItems,
+    points: pointsFromPointItems(draftItems),
+    describes: configDraft.describes,
+    aux_prompt: configDraft.aux_prompt,
+    reference_text: configDraft.reference_text,
+    compose: normalizeCompose(configDraft.compose),
+    presence: presenceForCompose(configDraft.compose),
+    structure_only: Boolean(configDraft.structure_only),
+    element_ids: [...chapterIds],
+  };
+}
+
 /** 开写/重试前静默落盘；返回 { ok, already_persisted, chapterKey } */
 async function flushConfigBeforeWrite() {
   const key = String(selectedKey.value || "").trim();
   if (!key) return { ok: true, already_persisted: false, chapterKey: "" };
-  if (!isConfigDraftDirty()) {
-    return { ok: true, already_persisted: true, chapterKey: key };
+  // 插槽在要素体上：开写前先落要素，再 PATCH 章节，避免章节保存读到无槽旧稿盖回库。
+  const els = Array.isArray(elementNodes.value) ? elementNodes.value : [];
+  if (els.some((el) => Array.isArray(el?.file_slots) && el.file_slots.some((s) => Number(s?.no) > 0))) {
+    try {
+      await saveElementNodes(els);
+    } catch {
+      ElMessage.warning("要素插槽尚未保存成功，请稍后再试写作");
+      return { ok: false, already_persisted: false, chapterKey: key };
+    }
   }
+  // 文档窗可能叠了蓝本/本地分析要点，写作副本仍空。开写一律落到 clone，不能因「相对本地未改」跳过。
   const result = await saveChapterConfig({ syncSession: false });
   if (result === false) return { ok: false, already_persisted: false, chapterKey: key };
-  if (result == null && isConfigDraftDirty()) {
+  if (result == null) {
     ElMessage.warning("配置尚未保存成功，请稍后再试分析");
     return { ok: false, already_persisted: false, chapterKey: key };
   }
@@ -5654,7 +6847,7 @@ async function saveChapterDraft() {
           status_label: "已写作",
           has_draft: true,
           draft_text: html,
-          draft_preview: html.slice(0, 400),
+          draft_preview: html.slice(0, 1800),
         };
       });
     outlineNodes.value = patch(outlineNodes.value);
@@ -5784,9 +6977,7 @@ async function resolveMaterialsPackIdFromOutline(data, tid, writingTid) {
     packId = String(data?.materials_pack_id || "").trim();
   } else if (writingTid && writingTid !== tid) {
     try {
-      const wData = await request(
-        `/api/writing/tasks/${encodeURIComponent(writingTid)}/doc-outline`
-      );
+      const wData = await requestDocOutline(writingTid, { fresh: true });
       if (wData && Object.prototype.hasOwnProperty.call(wData, "materials_pack_id")) {
         packId = String(wData.materials_pack_id || "").trim();
       }
@@ -5817,24 +7008,20 @@ async function loadFullOutline({ force = false } = {}) {
     outlineInflight = null;
     outlineInflightTid = "";
   }
-  if (force) {
-    outlineCacheByTask.delete(tid);
-    const bp = String(activeDoc.value?.taskId || activeDoc.value?.blueprintId || "").trim();
-    if (bp && bp !== tid) outlineCacheByTask.delete(bp);
-  }
-  // 已有全量且非强制：少重挂拓扑，但仍显示加载遮罩
+  // 已有全量且非强制：后台刷新，不挡目录操作
   const soft = !force && outlineFullyLoaded.value && outlineNodes.value.length > 0;
   const token = ++fetchToken;
-  loadLabel.value = soft ? "正在刷新目录…" : "正在拉取目录…";
-  loading.value = true;
+  if (!soft) {
+    loadLabel.value = "正在拉取目录…";
+    loading.value = true;
+  }
   outlineInflightTid = tid;
   outlineInflight = (async () => {
     try {
-      const qs = "?fresh=1";
-      const data = await request(
-        `/api/writing/tasks/${encodeURIComponent(tid)}/doc-outline${qs}`
-      );
-      // 确认态：force/fresh 可对齐真值；软刷新只允许 false→true，避免缓存把已确认打回
+      // 服务端已直读落库；?fresh=1 仅作语义标记。软刷新仍防抖，避免分析中频繁全量拉 200+ 章
+      const wid = String(activeDoc.value?.writingTaskId || "").trim();
+      const data = await request(docOutlineUrl(tid, { fresh: true, writingTaskId: wid }));
+      // 确认态：force 可对齐真值；软刷新只允许 false→true，避免旧响应把已确认打回
       if (data && Object.prototype.hasOwnProperty.call(data, "outline_confirmed")) {
         const confirmed = Boolean(data.outline_confirmed);
         if (force || confirmed) {
@@ -5877,12 +7064,10 @@ async function loadFullOutline({ force = false } = {}) {
         if (Array.isArray(data?.element_nodes) && data.element_nodes.length) {
           writingElements = data.element_nodes;
         }
-      } else if (writingTid && writingTid !== tid) {
+      } else if (writingTid && writingTid !== tid && !/^w/i.test(tid)) {
         // 兼容：无 writingTaskId 挂在文档上时仍可能只拿到库蓝本 id
         try {
-          const wData = await request(
-            `/api/writing/tasks/${encodeURIComponent(writingTid)}/doc-outline${qs}`
-          );
+          const wData = await requestDocOutline(writingTid, { fresh: true });
           const wByKey = new Map(
             (wData?.chapters || [])
               .filter((ch) => ch?.key)
@@ -5951,29 +7136,45 @@ async function loadFullOutline({ force = false } = {}) {
       const prevKeys = outlineNodes.value.map((ch) => String(ch.key || "")).join("|");
       const prevOutline = outlineNodes.value;
       const prevElements = elementNodes.value;
-      outlineNodes.value = mergeOutlinePreserveElementIds(prevOutline, list);
+      outlineNodes.value = mergeOutlinePreserveElementIds(prevOutline, list, {
+        preferOutlineCompose: true,
+      });
       // 服务端要素与本地合并：写作 clone 优先（检索词/槽位真源）
       const serverElements = writingElements.length
         ? writingElements
         : Array.isArray(data?.element_nodes)
           ? data.element_nodes
           : [];
-      elementNodes.value = mergeElementNodesLocal(prevElements, serverElements);
+      elementNodes.value = mergeElementNodes(prevElements, serverElements);
       projectFolderIdsLocal.value = projectIds.map((x) => String(x || "").trim()).filter(Boolean);
       projectFolderLabel.value = projectLabel || folderLabelFromTree(projectFolderIdsLocal.value);
       await loadMaterialsPack(packId);
-      // 服务端已带回非空关联时，清掉对应 pending
+      // 服务端与 pending 对齐后再清暂存（章级 + 要点行）
       for (const ch of outlineNodes.value) {
         const key = String(ch?.key || "").trim();
-        const serverIds = pickElementIds(
-          list.find((row) => String(row?.key || "") === key)?.element_ids,
-          list.find((row) => String(row?.key || "") === key)?.config?.element_ids
-        );
-        if (key && serverIds.length) pendingChapterElementIds.delete(key);
+        if (!key) continue;
+        const serverRaw = list.find((row) => String(row?.key || "") === key) || ch;
+        const aligned = bindingsAligned(serverRaw, {
+          chapterIds: pendingChapterElementIds.get(key),
+          pointBindings: pendingPointItemBindings.get(key),
+        });
+        if (aligned) {
+          pendingChapterElementIds.delete(key);
+          pendingPointItemBindings.delete(key);
+          endChapterBindingFlight(key);
+        }
       }
-      emit("elements-saved", { taskId: tid, elementNodes: elementNodes.value });
+      emit("elements-saved", {
+        taskId: tid,
+        elementNodes: elementNodes.value,
+        fromOutlineLoad: true,
+      });
       if (writingTid && writingTid !== tid) {
-        emit("elements-saved", { taskId: writingTid, elementNodes: elementNodes.value });
+        emit("elements-saved", {
+          taskId: writingTid,
+          elementNodes: elementNodes.value,
+          fromOutlineLoad: true,
+        });
       }
       extraChapters.value = outlineNodes.value.map((ch) => ({
         key: ch.key,
@@ -6008,9 +7209,8 @@ async function loadFullOutline({ force = false } = {}) {
           topologyRenderKey.value += 1;
         });
       }
-      // 软刷新也要回填配置，否则保存清空后仍显示缓存里的旧补充提示词/参考正文
-      hydrateConfigDraft();
-      snapshotOutlineCache(tid);
+      // 草稿未落盘时不要用目录刷新把写作策略等改回旧值
+      if (!isConfigDraftDirty()) hydrateConfigDraft();
     } catch {
       if (token !== fetchToken) return;
       if (!soft) elementNodes.value = [];
@@ -6596,40 +7796,51 @@ onUnmounted(() => {
   border-radius: 10px;
   background: #fbfdff;
 }
+.doc-win-tree {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.doc-win-tree-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
 .doc-win-detail {
   padding: 10px 12px;
 }
 .doc-outline-tree {
   padding: 2px 4px 8px;
   background: transparent;
-  --el-tree-node-content-height: 28px;
-  --el-tree-node-hover-bg-color: #eef2ff;
+  
+  
 }
-.doc-outline-tree :deep(.el-tree-node__content) {
+.doc-outline-tree :deep(.ant-tree-node-content-wrapper) {
   border-radius: 6px;
   /* 不要写 padding-left：el-tree 用 inline paddingLeft 做父子缩进 */
   padding-right: 4px;
   overflow: hidden;
 }
-.doc-outline-tree :deep(.el-tree-node.is-current > .el-tree-node__content) {
-  background: #eef2ff;
+.doc-outline-tree :deep(.ant-tree-node-selected),
+.doc-outline-tree :deep(.ant-tree-node-content-wrapper.ant-tree-node-selected) {
+  background: #eef2ff !important;
 }
-.doc-outline-tree :deep(.el-tree-node__expand-icon) {
+.doc-outline-tree :deep(.ant-tree-switcher) {
   color: #94a3b8;
   font-size: 12px;
   width: 14px;
   padding: 2px;
   margin-right: 0;
 }
-.doc-outline-tree :deep(.el-tree-node__expand-icon.is-leaf) {
+.doc-outline-tree :deep(.ant-tree-switcher-noop) {
   width: 14px;
   padding: 2px;
 }
-.doc-outline-tree :deep(.el-checkbox) {
+.doc-outline-tree :deep(.ant-checkbox-wrapper) {
   height: 16px;
   margin-right: 4px;
 }
-.doc-outline-tree :deep(.el-checkbox__inner) {
+.doc-outline-tree :deep(.ant-checkbox-inner) {
   width: 14px;
   height: 14px;
 }
@@ -6638,8 +7849,11 @@ onUnmounted(() => {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0;
   padding: 6px 8px 8px;
   border-bottom: 1px solid #e2e8f0;
+  background: #fbfdff;
+  z-index: 2;
 }
 .tree-bulk-all {
   height: auto;
@@ -6648,7 +7862,7 @@ onUnmounted(() => {
   color: #64748b;
   user-select: none;
 }
-.tree-bulk-all :deep(.el-checkbox__label) {
+.tree-bulk-all :deep(.ant-checkbox + span) {
   font-size: 0.85em;
   color: #64748b;
   padding-left: 6px;
@@ -6827,7 +8041,7 @@ onUnmounted(() => {
   grid-column: 1 / -1;
 }
 /* el-checkbox 根节点也是 label，勿继承上面的 column，否则圆点与文字会换行 */
-.cfg-grid .cfg-switch.el-checkbox,
+.cfg-grid .cfg-switch.ant-checkbox-wrapper,
 .cfg-grid label.cfg-switch {
   flex-direction: row;
   align-items: center;
@@ -6836,10 +8050,10 @@ onUnmounted(() => {
   margin-right: 0;
   white-space: nowrap;
 }
-.cfg-switch :deep(.el-checkbox__input) {
+.cfg-switch :deep(.ant-checkbox) {
   flex-shrink: 0;
 }
-.cfg-switch :deep(.el-checkbox__label) {
+.cfg-switch :deep(.ant-checkbox + span) {
   font-size: inherit;
   color: inherit;
   line-height: 1.4;
@@ -6855,6 +8069,20 @@ onUnmounted(() => {
   color: #0f172a;
   background: #fff;
   resize: vertical;
+}
+.cfg-ref-rich {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 650;
+  color: #475569;
+}
+.cfg-ref-rich :deep(.chapter-composer) {
+  font-weight: 400;
+}
+.cfg-ref-editor {
+  width: 100%;
 }
 .cfg-parent-select {
   width: 100%;
@@ -6886,6 +8114,24 @@ onUnmounted(() => {
   font-size: 11px;
   font-weight: 600;
   padding: 4px 10px;
+}
+.write-score-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: #ecfdf5;
+  color: #047857;
+  border: 1px solid #a7f3d0;
+  font-size: 13px;
+  font-weight: 750;
+  line-height: 1.3;
+}
+.write-score-chip.bad {
+  background: #fff7ed;
+  color: #c2410c;
+  border-color: #fed7aa;
 }
 .write-actions {
   display: flex;
@@ -6977,9 +8223,21 @@ onUnmounted(() => {
   width: 96px;
   max-width: 120px;
 }
-.cfg-point-table .col-state {
-  width: 52px;
+.cfg-point-table .col-req {
+  width: 72px;
+  min-width: 72px;
   white-space: nowrap;
+  text-align: center;
+  position: sticky;
+  right: 88px;
+  z-index: 2;
+  background: #fff;
+  box-shadow: -4px 0 6px -4px rgba(15, 23, 42, 0.12);
+}
+.cfg-point-table th.col-req {
+  text-align: center;
+  background: #f8fafc;
+  z-index: 3;
 }
 .cfg-point-table .col-op {
   width: 88px;
@@ -6988,11 +8246,12 @@ onUnmounted(() => {
   white-space: nowrap;
   position: sticky;
   right: 0;
+  z-index: 2;
   background: #fff;
-  box-shadow: -4px 0 6px -4px rgba(15, 23, 42, 0.12);
 }
 .cfg-point-table th.col-op {
   background: #f8fafc;
+  z-index: 3;
 }
 .cfg-point-text,
 .cfg-point-slot {
@@ -7088,6 +8347,20 @@ onUnmounted(() => {
   opacity: 0.45;
   cursor: not-allowed;
 }
+.point-item-el-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.point-item-el-name {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #4338ca;
+  font-weight: 600;
+}
 .cfg-ref-keywords {
   margin: 0;
   padding: 8px 10px;
@@ -7145,6 +8418,13 @@ onUnmounted(() => {
   font-weight: 650;
   color: #475569;
 }
+.cfg-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+}
 .cfg-el-manage {
   border: 1px solid #cbd5e1;
   background: #fff;
@@ -7158,6 +8438,33 @@ onUnmounted(() => {
   opacity: 0.5;
   cursor: not-allowed;
 }
+.cfg-chapter-elements {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cfg-scope-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.5;
+  vertical-align: middle;
+}
+.cfg-scope-badge.chapter {
+  background: #ecfdf5;
+  color: #047857;
+  border: 1px solid #a7f3d0;
+}
+.cfg-scope-badge.point {
+  background: #eef2ff;
+  color: #4338ca;
+  border: 1px solid #c7d2fe;
+}
 .cfg-element-tags {
   display: flex;
   flex-wrap: wrap;
@@ -7168,9 +8475,9 @@ onUnmounted(() => {
   align-items: center;
   gap: 6px;
   max-width: 100%;
-  border: 1px solid #bfdbfe;
-  background: #eff6ff;
-  color: #1e3a5f;
+  border: 1px solid #a7f3d0;
+  background: #ecfdf5;
+  color: #065f46;
   border-radius: 999px;
   padding: 4px 10px;
   font-size: 12px;
@@ -7178,20 +8485,29 @@ onUnmounted(() => {
   cursor: pointer;
   text-align: left;
 }
-.cfg-el-tag:hover:not(:disabled) {
-  border-color: #60a5fa;
-  background: #dbeafe;
+.cfg-el-tag.chapter:hover:not(:disabled) {
+  border-color: #34d399;
+  background: #d1fae5;
 }
 .cfg-el-tag:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+.cfg-el-tag .scope {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #047857;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
 }
 .cfg-el-tag .kind {
   flex: none;
   padding: 0 6px;
   border-radius: 999px;
   background: #fff;
-  color: #1d4ed8;
+  color: #047857;
   font-size: 11px;
 }
 .cfg-el-tag .name {
@@ -7204,6 +8520,10 @@ onUnmounted(() => {
   font-size: 12px;
   color: #94a3b8;
   line-height: 1.45;
+}
+.cfg-point-el-btn .cfg-scope-badge {
+  margin-left: 0;
+  margin-right: 4px;
 }
 .detail-note,
 .detail-block {
@@ -7237,6 +8557,9 @@ onUnmounted(() => {
   line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;
+}
+.progress-pane .progress-card-panel {
+  margin-top: 0;
 }
 .write-collect-panel {
   margin: 0 0 12px;
@@ -7293,6 +8616,17 @@ onUnmounted(() => {
   color: #475569;
   line-height: 1.45;
 }
+.write-collect-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.write-collect-count {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748b;
+}
 .write-collect-evidence {
   list-style: none;
   margin: 0;
@@ -7300,6 +8634,16 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+.write-collect-evidence li {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+}
+.write-collect-evidence li.miss {
+  border-color: #fed7aa;
+  background: #fffbeb;
 }
 .write-collect-evidence .ev-title {
   display: flex;
@@ -7319,16 +8663,39 @@ onUnmounted(() => {
   border-radius: 999px;
   padding: 1px 8px;
 }
+.write-collect-evidence .ev-status {
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+}
+.write-collect-evidence .ev-status.ok {
+  background: #ecfdf5;
+  color: #047857;
+}
+.write-collect-evidence .ev-status.miss {
+  background: #fff7ed;
+  color: #c2410c;
+}
 .write-collect-evidence .ev-query {
   margin: 4px 0 0;
   font-size: 12px;
   color: #475569;
 }
+.write-collect-evidence .ev-query.miss {
+  color: #c2410c;
+}
+.write-collect-evidence .ev-empty {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: #94a3b8;
+}
 .write-collect-evidence .ev-excerpt {
   margin: 6px 0 0;
   padding: 8px 10px;
   border-radius: 6px;
-  background: #fff;
+  background: #f8fafc;
   border: 1px solid #e2e8f0;
   font-size: 12px;
   line-height: 1.45;
@@ -7375,6 +8742,18 @@ onUnmounted(() => {
   color: #64748b;
   line-height: 1.5;
 }
+.restudy-strategy {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f1f5f9;
+  color: #334155;
+  font-size: 13px;
+}
+.restudy-strategy b {
+  font-weight: 650;
+  color: #1e3a8a;
+}
 .restudy-modes {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -7407,24 +8786,7 @@ onUnmounted(() => {
   color: #64748b;
   line-height: 1.45;
 }
-.restudy-rich-paste {
-  min-height: 180px;
-  max-height: 320px;
-  overflow: auto;
-  padding: 12px 14px;
-  border: 1px dashed #cbd5e1;
-  border-radius: 12px;
-  background: #fff;
-  line-height: 1.6;
-  font-size: 13px;
-  outline: none;
-}
-.restudy-rich-paste:empty::before {
-  content: attr(data-placeholder);
-  color: #94a3b8;
-}
-.restudy-rich-paste:focus {
-  border-color: #4e6ef2;
-  box-shadow: 0 0 0 3px rgba(78, 110, 242, 0.12);
+.restudy-rich-editor {
+  width: 100%;
 }
 </style>

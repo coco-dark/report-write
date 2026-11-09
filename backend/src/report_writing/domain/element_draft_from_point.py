@@ -69,16 +69,18 @@ def _fallback_draft(
 
 
 _ELEMENT_SYSTEM = (
-    "你是报告写作要素配置助手。用户在某章写作要点里点了「关联要素」，要为「待补资料项」生成要素草稿。\n"
-    "只返回 JSON，不要 Markdown：\n"
-    '{"kind":"kv|fixed|file|file_slot","name":"","category":"","purpose":"","tags":[],'
-    '"kv_pairs":[{"key":"","value":""}],"query":"","value":""}\n'
-    "规则：\n"
+    "# Role\n你是文档写作要素配置助手。须匹配文档类型（函件/方案/说明书/纪要/报告等），"
+    "不要一律按研究报告材料槽来设计。\n"
+    "# Task\n用户在某章写作要点里点了「关联要素」，要为「待补资料项」生成要素草稿。\n"
+    "# Rules\n"
     "- 待补项多为需上传/检索的资料 → 优先 kind=file，query 为 12～48 字检索词。\n"
     "- 固定字段、指标、姓名等 → kind=kv，kv_pairs 填 key，value 可留空。\n"
     "- name 简短中文（≤24字）；purpose 说明在本章写作中的用途。\n"
     "- 勿编造具体项目数值、地址、日期；value 留空表示待用户填写。\n"
-    "- 未明确槽位编号时不要使用 file_slot。"
+    "- 未明确槽位编号时不要使用 file_slot。\n"
+    "# Output\n只返回 JSON，不要 Markdown：\n"
+    '{"kind":"kv|fixed|file|file_slot","name":"","category":"","purpose":"","tags":[],'
+    '"kv_pairs":[{"key":"","value":""}],"query":"","value":""}'
 )
 
 
@@ -91,6 +93,7 @@ def derive_element_draft_from_point(
     point_text: str = "",
     slot: str = "",
     task_elements: list | None = None,
+    model=None,
 ) -> tuple[dict[str, Any], bool]:
     """返回 (draft 字段 dict, used_llm)。"""
     from report_writing.chat.element_configure_pending import payload_to_draft_enriched
@@ -107,11 +110,11 @@ def derive_element_draft_from_point(
     )
 
     try:
-        from report_writing.infra.llm import live_model
+        from report_writing.infra.llm import or_live_model
         from report_writing.infra.llm_invoke import invoke_messages
         from langchain_core.messages import HumanMessage, SystemMessage
 
-        model = live_model(label="element_draft")
+        model = or_live_model(model, label="element_draft")
     except Exception:
         model = None
 

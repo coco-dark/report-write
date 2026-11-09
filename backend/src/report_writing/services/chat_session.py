@@ -371,6 +371,20 @@ def apply_chat_ui_state(session: ChatSession, body) -> ChatSession:
         rebind_session_to_focus_document(session, home=None)
 
     patch = getattr(body, "freeform_patch", None) or {}
+    cfg_incoming = 0
+    if isinstance(patch, dict):
+        try:
+            cfg_incoming = int(patch.get("config_revision") or 0)
+        except (TypeError, ValueError):
+            cfg_incoming = 0
+    if cfg_incoming > 0:
+        from report_writing.chat.session_config_revision import session_config_revision
+
+        cur = session_config_revision(session)
+        if cfg_incoming > cur:
+            ff = dict(session.freeform or {})
+            ff["config_revision"] = cfg_incoming
+            session.freeform = ff
     if isinstance(patch, dict) and patch:
         from report_writing.chat.wizard_state import is_freeform_sample_wizard_mode
 
@@ -490,7 +504,20 @@ def apply_chat_ui_state(session: ChatSession, body) -> ChatSession:
                 list(getattr(msg, "cards", None) or []),
                 list(item.get("cards") or []),
             )
-            msg.cards = cards
+            from report_writing.chat.cards import slim_progress_card_payload
+            from report_writing.domain.models import ChatCard
+
+            slimmed_cards = []
+            for card in cards:
+                if getattr(card, "type", "") == "progress":
+                    payload = slim_progress_card_payload(dict(getattr(card, "payload", None) or {}))
+                    if isinstance(card, ChatCard):
+                        slimmed_cards.append(card.model_copy(update={"payload": payload}))
+                    else:
+                        slimmed_cards.append(card)
+                else:
+                    slimmed_cards.append(card)
+            msg.cards = slimmed_cards
         messages[index] = msg
         session.messages = messages
     from report_writing.chat.dialogue import drop_assistant_echo_user_messages

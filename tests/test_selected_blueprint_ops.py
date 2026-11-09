@@ -5,7 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from report_writing.chat.actions import _action_select_blueprint
-from report_writing.chat.intent_router import WRITING_PATH_BLUEPRINT, active_blueprint_wizard, get_writing_path
+from report_writing.chat.session_state import (
+    WRITING_PATH_BLUEPRINT,
+    active_blueprint_wizard,
+    get_writing_path,
+)
 from report_writing.chat.resource_actions import execute_wizard_command
 from report_writing.chat.wizard_state import (
     WIZARD_MODE_SELECTED,
@@ -71,6 +75,23 @@ def test_selected_mode_blocks_reextract(tmp_path: Path):
         assert False, "expected ValueError"
     except ValueError as err:
         assert "选用" in str(err) or "创建向导" in str(err)
+
+
+def test_selected_mode_wizard_action_does_not_crash(tmp_path: Path):
+    """文档窗误点「重新提取」时返回说明，不要把整轮对话打崩。"""
+    from report_writing.chat.resource_actions import _action_blueprint_wizard
+
+    bid = "bp_sel_ui"
+    _ready_blueprint(tmp_path, bid)
+    session = ChatSession(id="s_sel_ui", blueprint_id=bid, freeform={})
+    seed_selected_blueprint_wizard(tmp_path, session, bid)
+    reply, cards = _action_blueprint_wizard(
+        tmp_path,
+        session,
+        {"wizard_command": "re_extract_outline", "step": "outline"},
+    )
+    assert "选用" in (reply or "") or "创建向导" in (reply or "")
+    assert cards == []
 
 
 def test_selected_done_still_active_for_dialogue(tmp_path: Path):

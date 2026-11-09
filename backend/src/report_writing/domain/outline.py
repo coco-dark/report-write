@@ -220,7 +220,7 @@ def _outline_tree_viable(tree: OutlineTree | None) -> bool:
         return True
     if n >= 6 and ratio >= 0.8:
         return True
-    return n >= 4 and ratio >= 0.95
+    return n >= 3 and ratio >= 0.95
 
 
 def _toc_entry_count(tree: OutlineTree | None) -> int:
@@ -265,7 +265,21 @@ def choose_best_outline(*candidates: tuple[str, OutlineTree | None]) -> tuple[st
             )
         )
     if not viable:
-        return None
+        leftovers: list[tuple[str, OutlineTree, float]] = []
+        for label, tree in candidates:
+            if tree is None or not tree.chapters:
+                continue
+            leftovers.append((label, tree, outline_tree_quality(tree)))
+        if not leftovers:
+            return None
+        leftovers.sort(key=lambda item: (len(item[1].chapters), item[2]), reverse=True)
+        label, tree, _score = leftovers[0]
+        _log.info(
+            "目录无达标候选，回退 source=%s chapters=%s",
+            label,
+            len(tree.chapters),
+        )
+        return (label, tree)
     best_count = max(item[3] for item in viable)
     # 明显更完整的编号目录优先，避免 40 章「干净树」压过 200+ 章正式目录
     complete = [item for item in viable if item[3] >= max(8, int(best_count * 0.82))]
@@ -489,7 +503,7 @@ def _dense_heading_prefix(text: str, *, max_chars: int | None = None) -> str:
     return (text or "")[: min(end, limit)]
 
 
-def outline_from_payload(chapters: list[dict]) -> OutlineTree:
+def outline_from_payload(chapters: list[dict], *, model=None) -> OutlineTree:
     if not chapters:
         raise ValueError("目录不能为空")
     nodes = []
@@ -557,11 +571,14 @@ def outline_from_payload(chapters: list[dict]) -> OutlineTree:
                 elements=elements,
                 structure_only=bool(item.get("structure_only")),
                 fixed_output=bool(item.get("fixed_output")),
+                presence=str(item.get("presence") or "always"),
+                compose=str(item.get("compose") or "hybrid"),
+                extracts=list(item.get("extracts") or []),
                 search_terms_separate=bool(item.get("search_terms_separate")),
             )
         )
     if not all(str(n.key or "").strip() for n in nodes):
-        nodes = assign_placeholder_keys(nodes)
+        nodes = assign_placeholder_keys(nodes, model=model)
     return finalize_outline(nodes, preserve_parents=True)
 
 
@@ -587,6 +604,12 @@ def outline_from_brief_chapters(chapters: list) -> OutlineTree:
             "element_ids": list(getattr(item, "element_ids", None) or []),
             "structure_only": bool(getattr(item, "structure_only", False)),
             "fixed_output": bool(getattr(item, "fixed_output", False)),
+            "presence": str(getattr(item, "presence", "") or "always"),
+            "compose": str(getattr(item, "compose", "") or "hybrid"),
+            "extracts": [
+                x.to_dict() if hasattr(x, "to_dict") else x
+                for x in (getattr(item, "extracts", None) or [])
+            ],
             "search_terms_separate": bool(getattr(item, "search_terms_separate", False)),
             "elements": [
                 element.to_dict() if hasattr(element, "to_dict") else element
@@ -629,7 +652,7 @@ def slug_from_title(title: str, existing_keys: set[str] | None = None, *, transl
     return candidate
 
 
-def translate_titles_to_slugs(titles: list[str]) -> list[str]:
+def translate_titles_to_slugs(titles: list[str], *, model=None) -> list[str]:
     """一次模型调用把多个中文标题译成英文蛇形；失败则空串列表。"""
     cleaned = [str(item or "").strip() for item in titles]
     if not cleaned:
@@ -637,9 +660,9 @@ def translate_titles_to_slugs(titles: list[str]) -> list[str]:
     if not any(_HAS_CJK.search(item) for item in cleaned):
         return [normalize_slug(item) for item in cleaned]
     try:
-        from report_writing.infra.llm import live_model
+        from report_writing.infra.llm import or_live_model
 
-        model = live_model()
+        model = or_live_model(model)
     except Exception:
         model = None
     if model is None:
@@ -667,14 +690,16 @@ def translate_titles_to_slugs(titles: list[str]) -> list[str]:
         return [""] * len(cleaned)
 
 
-def assign_placeholder_keys(nodes: list[OutlineNode]) -> list[OutlineNode]:
+def assign_placeholder_keys(nodes: list[OutlineNode], *, model=None) -> list[OutlineNode]:
     """为空或自动 ch-* key 的节点按标题生成英文占位符，并重写 parent 引用。"""
     if not nodes:
         return []
     need_indexes = [index for index, node in enumerate(nodes) if is_auto_key(node.key)]
     translations = [""] * len(nodes)
     if need_indexes:
-        batch = translate_titles_to_slugs([nodes[index].title for index in need_indexes])
+        batch = translate_titles_to_slugs(
+            [nodes[index].title for index in need_indexes], model=model
+        )
         for offset, index in enumerate(need_indexes):
             translations[index] = batch[offset] if offset < len(batch) else ""
     used: set[str] = set()
@@ -718,6 +743,9 @@ def assign_placeholder_keys(nodes: list[OutlineNode]) -> list[OutlineNode]:
                 elements=list(node.elements or []),
                 structure_only=bool(getattr(node, "structure_only", False)),
                 fixed_output=bool(getattr(node, "fixed_output", False)),
+                presence=str(getattr(node, "presence", "") or "always"),
+                compose=str(getattr(node, "compose", "") or "hybrid"),
+                extracts=list(getattr(node, "extracts", None) or []),
                 search_terms_separate=bool(getattr(node, "search_terms_separate", False)),
             )
         )
@@ -728,13 +756,18 @@ def finalize_outline(
     nodes: list[OutlineNode],
     *,
     preserve_parents: bool = False,
+    model=None,
 ) -> OutlineTree:
     """整理目录树。
 
     preserve_parents=True：学要点落盘用——不改 key、不因 level 栈重算父子，
     已有合法 parent 原样保留，避免确认后的目录在分析时嵌套漂移。
     """
-    keyed = list(nodes) if preserve_parents else assign_placeholder_keys(list(nodes))
+    keyed = (
+        list(nodes)
+        if preserve_parents
+        else assign_placeholder_keys(list(nodes), model=model)
+    )
     ordered = []
     stack: list[tuple[int, str, str]] = []
     by_sequence: dict[str, str] = {}
@@ -809,6 +842,9 @@ def finalize_outline(
             elements=list(node.elements or []),
             structure_only=bool(getattr(node, "structure_only", False)),
             fixed_output=bool(getattr(node, "fixed_output", False)),
+            presence=str(getattr(node, "presence", "") or "always"),
+            compose=str(getattr(node, "compose", "") or "hybrid"),
+            extracts=list(getattr(node, "extracts", None) or []),
             search_terms_separate=bool(getattr(node, "search_terms_separate", False)),
         )
         ordered.append(item)

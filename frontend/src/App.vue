@@ -1,4 +1,5 @@
 <template>
+  <a-config-provider :locale="zhCN" :theme="antdTheme">
   <AuthPage
     v-if="!loggedIn"
     :initial-tab="authTab"
@@ -73,13 +74,14 @@
       />
     </div>
   </div>
+  </a-config-provider>
 </template>
 
 <script setup>
 import { computed, onMounted, onUnmounted, provide, ref } from "vue";
+import zhCN from "ant-design-vue/es/locale/zh_CN";
 
-import { ElMessage } from "element-plus";
-
+import { ElMessage, antdTheme } from "./ui.js";
 import { clearAuth, getAuth, isLoggedIn, request } from "./api";
 import { BRAND_NAME } from "./brand";
 import BlueprintPage from "./pages/BlueprintPage.vue";

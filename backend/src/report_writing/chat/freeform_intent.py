@@ -1,4 +1,4 @@
-"""无蓝本阶段口语 → 意图模型；短语表仅离线兜底。"""
+"""无蓝本阶段结构短语。口语选目录/要点/开写 Tool 归总控，不再整句 LLM 动作分类。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ from report_writing.domain.models import ChatSession
 
 InvokeFn = Callable[[str, str], str]
 
-# 离线兜底短语（有 invoke 时不抢判决，由 classify_freeform_action_llm + 上下文判定）
 _OUTLINE_GEN_HINTS = (
     "生成目录",
     "起草目录",
@@ -39,6 +38,11 @@ _POINTS_GEN_HINTS = (
 )
 
 
+def utterance_mentions_generate_outline(message: str) -> bool:
+    """本句带生成目录短语（结构校验，不调分类模型）。"""
+    return lexical_freeform_intent(message) == "generate_outline"
+
+
 def lexical_freeform_intent(message: str) -> str:
     """离线短语参考；空串表示无把握。有模型时不要用本函数做主判决。"""
     t = (message or "").strip()
@@ -49,33 +53,55 @@ def lexical_freeform_intent(message: str) -> str:
         return "generate_outline"
     if any(h in t for h in _POINTS_GEN_HINTS):
         return "generate_points"
-    if any(x in t for x in ("确认目录", "确认大纲", "目录没问题", "就这个目录")) and "生成" not in t:
+    if any(
+        x in t
+        for x in (
+            "确认目录",
+            "确认大纲",
+            "目录没问题",
+            "就这个目录",
+            "大纲可以了",
+            "目录可以了",
+        )
+    ) and "生成" not in t:
         return "confirm_outline"
+    if any(x in t for x in ("跳过要点", "先不配要点", "不要要点", "跳过要点直接开写")):
+        return "skip_points"
+    if any(x in t for x in ("开始写作", "开写", "开始写", "写正文")):
+        return "start_writing"
     return ""
 
 
-def _classify_hit(
+def resolve_outline_mode_flags(
     message: str,
     *,
-    phase: str = "",
-    task_id: str = "",
+    confirm: bool = False,
+    regenerate: bool = False,
     session: ChatSession | None = None,
-    invoke: InvokeFn | None,
-) -> dict:
-    from report_writing.chat.intent_context import pack_classifier_context
-    from report_writing.chat.intent_llm import classify_freeform_action_llm
+    invoke: InvokeFn | None = None,
+) -> tuple[bool, bool]:
+    """补齐 submit_outline 的 confirm / regenerate。显式标志优先；收集器不再猜口语。"""
+    if confirm:
+        return True, False
+    if regenerate:
+        return False, True
+    text = (message or "").strip()
+    if not text:
+        return False, False
+    _ = invoke
+    lexical = lexical_freeform_intent(text)
+    if lexical == "confirm_outline":
+        return True, False
+    if lexical == "generate_outline":
+        return False, True
+    ff = dict(getattr(session, "freeform", None) or {}) if session is not None else {}
+    pending = bool(ff.get("outline_pending_edit") or ff.get("outline_text"))
+    if pending:
+        from report_writing.chat.helpers import is_vague_freeform_meta
 
-    ctx = pack_classifier_context(session) if session is not None else {}
-    return classify_freeform_action_llm(
-        message,
-        phase=phase or str(ctx.get("phase") or ""),
-        task_id=task_id or str(ctx.get("task_id") or ""),
-        dialogue_tail=list(ctx.get("dialogue_tail") or []) or None,
-        focus_document_brief=str(ctx.get("focus_document_brief") or ""),
-        session_documents_brief=str(ctx.get("session_documents_brief") or ""),
-        session_goal_brief=str(ctx.get("session_goal_brief") or ""),
-        invoke=invoke,
-    )
+        if is_vague_freeform_meta(text):
+            return True, False
+    return False, False
 
 
 def classify_freeform_actions(
@@ -86,38 +112,23 @@ def classify_freeform_actions(
     task_id: str = "",
     session: ChatSession | None = None,
 ) -> list[str]:
-    # 有模型：上下文分类；短语表仅离线
-    if invoke is None:
-        lexical = lexical_freeform_intent(message)
-        if lexical:
-            return [lexical]
-        return []
-    hit = _classify_hit(
-        message, phase=phase, task_id=task_id, session=session, invoke=invoke
-    )
-    multi = hit.get("intents")
-    if isinstance(multi, list) and len(multi) > 1:
-        intents = [str(i).strip() for i in multi if str(i).strip()]
-        # 同轮若同时出现确认与生成，只保留确认
-        if "confirm_outline" in intents:
-            return ["confirm_outline"]
-        return intents
-    single = str(hit.get("intent") or "").strip()
-    return [single] if single else []
+    _ = (invoke, phase, task_id, session)
+    lexical = lexical_freeform_intent(message)
+    return [lexical] if lexical else []
 
 
-def _classify(
+def _alias_has(
     message: str,
-    *,
+    *wanted: str,
+    invoke: InvokeFn | None = None,
     phase: str = "",
     task_id: str = "",
     session: ChatSession | None = None,
-    invoke: InvokeFn | None,
-) -> str:
+) -> bool:
     actions = classify_freeform_actions(
-        message, phase=phase, task_id=task_id, session=session, invoke=invoke
+        message, invoke=invoke, phase=phase, task_id=task_id, session=session
     )
-    return actions[0] if actions else ""
+    return any(item in wanted for item in actions)
 
 
 def wants_generate_outline(
@@ -127,7 +138,8 @@ def wants_generate_outline(
     phase: str = "",
     session: ChatSession | None = None,
 ) -> bool:
-    return _classify(message, phase=phase, session=session, invoke=invoke) == "generate_outline"
+    """测试别名：`classify_freeform_actions` 是否含 generate_outline。生产路径勿用来改道。"""
+    return _alias_has(message, "generate_outline", invoke=invoke, phase=phase, session=session)
 
 
 def wants_outline_confirm(
@@ -137,7 +149,8 @@ def wants_outline_confirm(
     phase: str = "",
     session: ChatSession | None = None,
 ) -> bool:
-    return _classify(message, phase=phase, session=session, invoke=invoke) == "confirm_outline"
+    """测试别名：是否含 confirm_outline。生产路径勿用。"""
+    return _alias_has(message, "confirm_outline", invoke=invoke, phase=phase, session=session)
 
 
 def wants_generate_points(
@@ -148,10 +161,16 @@ def wants_generate_points(
     task_id: str = "",
     session: ChatSession | None = None,
 ) -> bool:
-    intent = _classify(
-        message, phase=phase, task_id=task_id, session=session, invoke=invoke
+    """测试别名：是否含 generate_points / help_draft。生产路径勿用。"""
+    return _alias_has(
+        message,
+        "generate_points",
+        "help_draft",
+        invoke=invoke,
+        phase=phase,
+        task_id=task_id,
+        session=session,
     )
-    return intent in {"generate_points", "help_draft"}
 
 
 def wants_skip_points(
@@ -162,9 +181,9 @@ def wants_skip_points(
     task_id: str = "",
     session: ChatSession | None = None,
 ) -> bool:
-    return (
-        _classify(message, phase=phase, task_id=task_id, session=session, invoke=invoke)
-        == "skip_points"
+    """测试别名：是否含 skip_points。生产路径勿用。"""
+    return _alias_has(
+        message, "skip_points", invoke=invoke, phase=phase, task_id=task_id, session=session
     )
 
 
@@ -176,9 +195,9 @@ def wants_start_writing(
     task_id: str = "",
     session: ChatSession | None = None,
 ) -> bool:
-    return (
-        _classify(message, phase=phase, task_id=task_id, session=session, invoke=invoke)
-        == "start_writing"
+    """测试别名：是否含 start_writing。生产路径勿用。"""
+    return _alias_has(
+        message, "start_writing", invoke=invoke, phase=phase, task_id=task_id, session=session
     )
 
 
@@ -189,4 +208,26 @@ def wants_freeform_help_draft(
     phase: str = "",
     session: ChatSession | None = None,
 ) -> bool:
-    return _classify(message, phase=phase, session=session, invoke=invoke) == "help_draft"
+    """测试别名：是否含 help_draft。生产路径勿用。"""
+    return _alias_has(message, "help_draft", invoke=invoke, phase=phase, session=session)
+
+
+def suggest_tool_instead_of_submit_points_freeform(
+    message: str,
+    *,
+    session: ChatSession | None = None,
+    invoke: InvokeFn | None = None,
+) -> dict | None:
+    """仅粘贴目录结构时提示改调 submit_outline；其它误调由总控改选 Tool。"""
+    _ = (session, invoke)
+    text = (message or "").strip()
+    if not text:
+        return None
+    from report_writing.chat.freeform_outline import looks_like_outline_directory
+
+    if looks_like_outline_directory(text):
+        return {
+            "tool": "submit_outline",
+            "args": {"outline_text": text},
+        }
+    return None

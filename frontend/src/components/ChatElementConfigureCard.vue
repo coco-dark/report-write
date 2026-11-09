@@ -4,23 +4,21 @@
     <p class="card-hint">{{ card.payload?.hint }}</p>
     <p v-if="current?.agent_hint" class="agent-hint">助手理解：{{ current.agent_hint }}</p>
     <div v-if="draftPreview" class="draft-preview">
-      <el-tag size="small">{{ elementKindLabel(draftPreview.kind) }}</el-tag>
+      <a-tag size="small">{{ elementKindLabel(draftPreview.kind) }}</a-tag>
       <strong>{{ draftPreview.name || "未命名" }}</strong>
       <span class="muted">{{ draftPreview.purpose || draftPreview.category || "" }}</span>
     </div>
-    <el-button type="primary" round @click="openDialog">确认要素配置</el-button>
+    <a-button type="primary" @click="openDialog" shape="round">确认要素配置</a-button>
 
-    <el-dialog
-      v-model="dialogVisible"
-      :title="dialogTitle"
-      width="760px"
-      destroy-on-close
-      align-center
-      class="element-configure-dialog"
-      @closed="onDialogClosed"
-    >
+    <a-modal
+ v-model:open="dialogVisible"
+ :title="dialogTitle"
+ width="760px"
+ class="element-configure-dialog"
+ @afterClose="onDialogClosed"
+ destroy-on-close centered>
       <p v-if="current?.chapter_title" class="dlg-chapter">关联章节：{{ current.chapter_title }}</p>
-      <el-form v-if="draft" label-position="top">
+      <a-form v-if="draft" layout="vertical">
         <ElementConfigFields
           v-model="draft"
           show-library-meta
@@ -31,18 +29,18 @@
           :task-id="configureTaskId"
           :element-id="draft?.id"
         />
-      </el-form>
+      </a-form>
       <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="busy" @click="saveDraft">确认并关联本章</el-button>
+        <a-button @click="dialogVisible = false">取消</a-button>
+        <a-button type="primary" :loading="busy" @click="saveDraft">确认并关联本章</a-button>
       </template>
-    </el-dialog>
+    </a-modal>
   </div>
 </template>
 
 <script setup>
 import { computed, onMounted, ref, watch } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage } from "../ui.js";
 
 import { authHeaders, request } from "../api";
 import ElementConfigFields from "./ElementConfigFields.vue";
@@ -277,7 +275,7 @@ async function saveDraft() {
 .element-configure-card .card-hint,
 .agent-hint {
   font-size: 13px;
-  color: var(--el-text-color-secondary);
+  color: var(--ay-muted);
   line-height: 1.5;
   margin: 8px 0 12px;
 }
@@ -289,7 +287,7 @@ async function saveDraft() {
 .dlg-chapter {
   margin: 0 0 12px;
   font-size: 13px;
-  color: var(--el-text-color-secondary);
+  color: var(--ay-muted);
 }
 .draft-preview {
   display: flex;
@@ -303,6 +301,6 @@ async function saveDraft() {
   font-size: 13px;
 }
 .draft-preview .muted {
-  color: var(--el-text-color-secondary);
+  color: var(--ay-muted);
 }
 </style>

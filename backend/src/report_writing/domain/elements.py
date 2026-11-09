@@ -42,8 +42,79 @@ def ensure_element_ids(elements: list[ElementNode]) -> list[ElementNode]:
     return cleaned
 
 
+def union_element_ids(*seqs) -> list[str]:
+    """保序去重合并章节/要点上的要素 id。"""
+    out: list[str] = []
+    seen: set[str] = set()
+    for seq in seqs:
+        for raw in list(seq or []):
+            eid = str(raw or "").strip()
+            if not eid or eid in seen:
+                continue
+            seen.add(eid)
+            out.append(eid)
+    return out
+
+
+def referenced_element_ids(task: WritingTask) -> set[str]:
+    """大纲章关联 + 要点行关联，仍在用的要素 id。"""
+    found: set[str] = set()
+    outline = getattr(task, "outline", None)
+    for node in list(getattr(outline, "chapters", None) or []):
+        for raw in list(getattr(node, "element_ids", None) or []):
+            eid = str(raw or "").strip()
+            if eid:
+                found.add(eid)
+        for row in list(getattr(node, "point_items", None) or []):
+            if not isinstance(row, dict):
+                continue
+            eid = str(row.get("element_id") or "").strip()
+            if eid:
+                found.add(eid)
+    return found
+
+
 def save_elements(task: WritingTask, elements: list[ElementNode]) -> WritingTask:
-    task.element_nodes = ensure_element_ids(elements)
+    incoming = ensure_element_ids(elements)
+    existing = [
+        item
+        for item in list(getattr(task, "element_nodes", None) or [])
+        if str(getattr(item, "id", "") or "").strip()
+    ]
+    # 空列表不覆盖：切会话/未 hydrate 时前端曾把整表清空
+    if not incoming:
+        if existing:
+            return task
+        task.element_nodes = []
+        _sync_elements_table(task.id, task.element_nodes)
+        return task
+    merged: dict[str, ElementNode] = {
+        str(item.id).strip(): item for item in existing if str(item.id or "").strip()
+    }
+    for item in incoming:
+        eid = str(getattr(item, "id", "") or "").strip()
+        if not eid:
+            continue
+        merged[eid] = item
+    # 勿按「未引用」删掉库中已有要素：文档窗常逐条保存，刚配好尚未挂章的草稿也会被误删。
+    # 保序：已有 → 新来
+    ordered: list[ElementNode] = []
+    seen: set[str] = set()
+    for item in existing:
+        eid = str(item.id or "").strip()
+        node = merged.get(eid)
+        if node is None or eid in seen:
+            continue
+        seen.add(eid)
+        ordered.append(node)
+    for item in incoming:
+        eid = str(getattr(item, "id", "") or "").strip()
+        node = merged.get(eid)
+        if node is None or eid in seen:
+            continue
+        seen.add(eid)
+        ordered.append(node)
+    task.element_nodes = ordered
     _sync_elements_table(task.id, task.element_nodes)
     return task
 
@@ -99,13 +170,21 @@ def sync_brief_from_outline(task: WritingTask) -> None:
         write_points = points_for_writing_from_node(node)
         chapter.points = write_points
         chapter.generate = "\n".join(write_points)
-        chapter.describes = describes_for_writing_from_node(node)
+        chapter.point_items = [
+            dict(row)
+            for row in list(getattr(node, "point_items", None) or [])
+            if isinstance(row, dict) and str(row.get("text") or row.get("label") or "").strip()
+        ]
+        chapter.describes = describes_for_writing_from_node(node) or str(getattr(node, "describes", "") or "").strip()
         chapter.aux_prompt = aux_prompt_for_writing_from_node(node)
         chapter.keywords = []
         chapter.reference_text = (getattr(node, "reference_text", None) or "").strip()
         chapter.structure_only = bool(getattr(node, "structure_only", False))
         chapter.fixed_output = bool(getattr(node, "fixed_output", False))
         chapter.search_terms_separate = bool(getattr(node, "search_terms_separate", False))
+        from report_writing.domain.chapter_compose import copy_compose_fields
+
+        copy_compose_fields(chapter, node)
         if chapter.fixed_output:
             chapter.keywords = []
         node_blocks = list(getattr(node, "content_blocks", None) or [])
@@ -131,19 +210,30 @@ def resolve_elements_for_chapter(
     home: Path | None = None,
     task_id: str = "",
     biz_type: str = "002",
+    model=None,
 ) -> ChapterRequirement:
     by_id = {item.id: item for item in elements if item.id}
     results = []
     element_ids = [str(item).strip() for item in (requirement.element_ids or []) if str(item).strip()]
-    # brief 上的关联可能落后于大纲：合并章 element_ids 与 point_items 关联
+    # brief 上的关联可能落后于大纲：合并章/要点关联；无显式关联时按要点文案推断 file_slot
     if outline is not None:
         from report_writing.domain.point_items_sync import element_ids_for_chapter_node
 
         node = next((item for item in outline.chapters if item.key == requirement.key), None)
         if node is not None:
-            for extra_id in element_ids_for_chapter_node(node, elements_by_id=by_id):
+            for extra_id in element_ids_for_chapter_node(
+                node, elements_by_id=by_id, infer_unlinked=True
+            ):
                 if extra_id not in element_ids:
                     element_ids.append(extra_id)
+    elif not element_ids:
+        from report_writing.domain.point_items_sync import element_ids_for_chapter_node
+
+        for extra_id in element_ids_for_chapter_node(
+            requirement, elements_by_id=by_id, infer_unlinked=True
+        ):
+            if extra_id not in element_ids:
+                element_ids.append(extra_id)
     for element_id in element_ids:
         node = by_id.get(element_id)
         if node is None:
@@ -161,6 +251,7 @@ def resolve_elements_for_chapter(
             home=home,
             task_id=task_id,
             biz_type=biz_type,
+            model=model,
         )
         node.result = value
         kind = (node.kind or "").strip()
@@ -347,6 +438,7 @@ def _resolve_one(
     home: Path | None = None,
     task_id: str = "",
     biz_type: str = "002",
+    model=None,
 ) -> str:
     kind = (node.kind or "fixed").strip()
     if kind == "kv":
@@ -398,9 +490,9 @@ def _resolve_one(
         if not prompt:
             return ""
         try:
-            from report_writing.infra.llm import live_model
+            from report_writing.infra.llm import or_live_model
 
-            model = live_model()
+            model = or_live_model(model)
             if model is None:
                 return prompt
             message = model.invoke(f"请根据提示生成简短要素内容，不要解释：\n{prompt}")
@@ -432,6 +524,7 @@ def _resolve_one(
             home=home,
             task_id=task_id,
             biz_type=biz_type,
+            model=model,
         )
     return (node.value or "").strip()
 
@@ -450,6 +543,7 @@ def _resolve_ref(
     home: Path | None = None,
     task_id: str = "",
     biz_type: str = "002",
+    model=None,
 ) -> str:
     ref_key = (node.ref_key or "").strip()
     if not ref_key or ref_key in seen:
@@ -478,6 +572,7 @@ def _resolve_ref(
             home=home,
             task_id=task_id,
             biz_type=biz_type,
+            model=model,
         )
     if outline is None:
         return ""

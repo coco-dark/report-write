@@ -7,7 +7,7 @@ from typing import Any
 
 from report_writing.agents.supervisor import run_supervisor
 from report_writing.services.corpus import load_task_corpus, load_template, normalize_biz_type, open_corpus
-from report_writing.infra.llm import live_model
+from report_writing.infra.llm import or_live_model
 from report_writing.infra.postgres import attach_materials
 from report_writing.domain.models import (
     ChapterState,
@@ -28,6 +28,7 @@ def run_task(
     biz_type: str,
     force_study: bool = False,
     on_event=None,
+    model=None,
 ) -> WritingTask:
     template = load_template(template_path)
     material_type = normalize_biz_type(biz_type)
@@ -36,7 +37,7 @@ def run_task(
         template=template,
         corpus=attach_materials(dataset_dir, open_corpus(dataset_dir, material_type)),
         cache=BriefCache(cache_dir),
-        model=live_model(),
+        model=or_live_model(model),
         force_study=force_study,
         on_event=on_event,
     )
@@ -72,7 +73,13 @@ def update_points(task_dir: Path, cache_dir: Path, chapter_key: str, points: lis
     return task
 
 
-def rerun_chapter(task_dir: Path, template_path: Path, dataset_dir: Path | None = None, on_event=None) -> WritingTask:
+def rerun_chapter(
+    task_dir: Path,
+    template_path: Path,
+    dataset_dir: Path | None = None,
+    on_event=None,
+    model=None,
+) -> WritingTask:
     store = TaskStore(task_dir)
     task = store.load()
     if task.brief is None:
@@ -84,7 +91,7 @@ def rerun_chapter(task_dir: Path, template_path: Path, dataset_dir: Path | None 
         template=template,
         corpus=corpus,
         cache=BriefCache(task_dir / "unused-cache"),
-        model=live_model(),
+        model=or_live_model(model),
         brief=task.brief,
         chapters=task.chapters,
         on_event=on_event,
@@ -105,9 +112,12 @@ def run_chapters(
     robot_id: str = "",
     on_event=None,
     search_only: bool = False,
+    model=None,
+    force_rerun: bool = False,
 ) -> WritingTask:
     """运行指定章节；父节点默认带子树。"""
     from report_writing.domain.elements import chapter_subtree_keys, resolve_elements_for_chapter, sync_brief_from_outline
+    from report_writing.domain.write_materials import bind_content_basis
     from report_writing.services.robots import get_robot
 
     store = TaskStore(task_dir)
@@ -149,14 +159,21 @@ def run_chapters(
     selected.sort(key=lambda item: keys.index(item.key) if item.key in keys else 0)
 
     # 重跑前清掉旧草稿/证据/检查，避免写作员沿用上一稿导致「改配置后仍一模一样」
-    from report_writing.domain.models import ChapterStatus
+    from report_writing.agents.check import revision_feedback_from_checks
+    from report_writing.domain.models import ChapterStatus, CheckAction
 
     for chapter in selected:
-        if chapter.status == ChapterStatus.CONFIRMED:
+        if chapter.status == ChapterStatus.CONFIRMED and not force_rerun:
             continue
+        kept_defects = revision_feedback_from_checks(chapter.checks)
         chapter.draft = None
         chapter.evidence = []
-        chapter.checks = []
+        # 重试前保留最近一次未通过检查，写下一稿时仍能改正缺陷
+        chapter.checks = (
+            [c for c in (chapter.checks or []) if c.action != CheckAction.ACCEPT][-1:]
+            if kept_defects
+            else []
+        )
         chapter.revision_count = 0
         chapter.official_text = ""
         chapter.human_note = ""
@@ -179,13 +196,15 @@ def run_chapters(
                 home=home,
                 task_id=task.id,
                 biz_type=normalize_biz_type(task.biz_type or "002"),
+                model=model,
             )
+            bind_content_basis(requirement, getattr(task, "writing_content_basis", None))
 
     if search_only:
         from report_writing.agents.supervisor import execute_chapter_search
         from report_writing.domain.models import StepEvent
 
-        model = live_model()
+        model = or_live_model(model)
         new_steps: list[StepEvent] = []
 
         def on_step(step: str, status: str, chapter: str = "", title: str = "", payload: dict | None = None) -> None:
@@ -211,6 +230,8 @@ def run_chapters(
                 robot,
                 on_step,
                 search_only=True,
+                chapters=task.chapters,
+                brief=task.brief,
             )
         task.steps = list(task.steps) + new_steps
         task.refresh_status()
@@ -223,7 +244,7 @@ def run_chapters(
         template=template,
         corpus=corpus,
         cache=BriefCache(task_dir / "unused-cache"),
-        model=live_model(),
+        model=or_live_model(model),
         brief=task.brief,
         chapters=selected,
         on_event=on_event,
@@ -353,6 +374,7 @@ def confirm_chapter(
     decision: HumanDecision,
     text: str = "",
     comment: str = "",
+    model=None,
 ) -> WritingTask:
     store = TaskStore(task_dir)
     task = store.load()
@@ -386,7 +408,7 @@ def confirm_chapter(
             _return_comment(chapter, comment or "请按人工意见修改本章")
         )
         chapter.status = ChapterStatus.WRITING
-        _rewrite(task, chapter, template_path, dataset_dir)
+        _rewrite(task, chapter, template_path, dataset_dir, model=model)
     task.refresh_status()
     store.save(task)
     if decision in {HumanDecision.APPROVE, HumanDecision.EDIT}:
@@ -406,14 +428,21 @@ def export_confirmed(task: WritingTask) -> dict[str, Any]:
     return {"template_id": task.template_id, "template_version": task.template_version, "chapters": chapters}
 
 
-def _rewrite(task: WritingTask, chapter: ChapterState, template_path: Path, dataset_dir: Path) -> None:
+def _rewrite(
+    task: WritingTask,
+    chapter: ChapterState,
+    template_path: Path,
+    dataset_dir: Path,
+    *,
+    model=None,
+) -> None:
     template = load_template(template_path)
     managed = run_supervisor(
         phase="revise",
         template=template,
         corpus=attach_materials(dataset_dir, open_corpus(dataset_dir, normalize_biz_type(task.biz_type))),
         cache=BriefCache(Path(template_path).parent / ".unused"),
-        model=live_model(),
+        model=or_live_model(model),
         brief=task.brief,
         chapters=[chapter],
     )
@@ -432,22 +461,26 @@ def _return_comment(chapter: ChapterState, comment: str):
     return CheckResult(action=CheckAction.REVISE, comments=comments, reason=comment)
 
 
-def _draft_text(chapter: ChapterState) -> str:
-    """合并章节草稿为完整 HTML 正文。"""
-    official = (getattr(chapter, "official_text", None) or "").strip()
-    if official:
-        return official
+def _paragraphs_html(chapter: ChapterState) -> str:
     if chapter.draft is None:
         return ""
     from report_writing.domain.content_blocks import ensure_html_fragment
 
     parts = [ensure_html_fragment(paragraph.text) for paragraph in chapter.draft.paragraphs if paragraph.text]
-    return "\n".join(parts)
+    return "\n".join(parts).strip()
+
+
+def _draft_text(chapter: ChapterState) -> str:
+    """确认/导出：已保存正文优先；没有再拼本轮草稿。"""
+    official = (getattr(chapter, "official_text", None) or "").strip()
+    if official:
+        return official
+    return _paragraphs_html(chapter)
 
 
 def seal_written_chapter(chapter: ChapterState, *, note: str = "写完自动保存") -> bool:
-    """有正文则直接落库为已确认，不再进入待确认/待人工。"""
-    text = _draft_text(chapter).strip()
+    """有正文则直接落库为已确认。重写后以本轮草稿覆盖旧 official_text。"""
+    text = (_paragraphs_html(chapter) or _draft_text(chapter)).strip()
     if not text:
         return False
     chapter.official_text = text

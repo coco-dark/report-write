@@ -211,6 +211,104 @@ def latest_writing_task_id_for_blueprint(blueprint_id: str) -> str:
         return ""
 
 
+def resolve_writing_task_id_for_blueprint_view(
+    blueprint_id: str,
+    writing_task_id: str = "",
+) -> str:
+    """bp* 请求附带的 w* 校验通过后优先；否则 sole 唯一副本策略。"""
+    bid = str(blueprint_id or "").strip()
+    if not bid:
+        return ""
+    wid = str(writing_task_id or "").strip()
+    if wid:
+        try:
+            from report_writing.api.deps import load_task
+
+            cand = load_task(wid)
+            src = str(getattr(cand, "source_blueprint_id", "") or "").strip()
+            if src and src != bid:
+                wid = ""
+            elif not src and wid != bid:
+                wid = ""
+        except Exception:
+            wid = ""
+    if not wid:
+        wid = sole_writing_task_id_for_blueprint(bid)
+    return wid
+
+
+def sole_writing_task_id_for_blueprint(blueprint_id: str) -> str:
+    """无显式 w* 时：仅当该蓝本有且仅有一个写作副本才返回 id，避免多文档串稿。"""
+    bid = str(blueprint_id or "").strip()
+    if not bid:
+        return ""
+    ids = _writing_task_ids_for_blueprint_catalog(bid, limit=2)
+    if len(ids) == 1:
+        return ids[0]
+    if len(ids) > 1:
+        return ""
+    return _sole_writing_task_id_on_disk(bid)
+
+
+def _writing_task_ids_for_blueprint_catalog(blueprint_id: str, *, limit: int = 2) -> list[str]:
+    bid = str(blueprint_id or "").strip()
+    if not bid or not catalog_available():
+        return []
+    from report_writing.infra.postgres import _connect, load_database_settings
+
+    settings = load_database_settings()
+    if settings is None:
+        return []
+    cap = max(1, min(int(limit), 20))
+    try:
+        with _connect(settings) as connection:
+            _ensure_schema(connection)
+            rows = connection.execute(
+                f"""
+                SELECT id FROM {_PARENT}
+                WHERE blueprint_id = %s
+                ORDER BY updated_at DESC
+                LIMIT {cap}
+                """,
+                (bid,),
+            ).fetchall()
+        return [str(row[0] or "").strip() for row in rows if row and str(row[0] or "").strip()]
+    except Exception as error:
+        _log.debug("_writing_task_ids_for_blueprint_catalog %s: %s", bid, error)
+        return []
+
+
+def _sole_writing_task_id_on_disk(blueprint_id: str) -> str:
+    bid = str(blueprint_id or "").strip()
+    if not bid:
+        return ""
+    try:
+        from report_writing.api.deps import task_root
+        from report_writing.services.store import TaskNotFoundError, TaskStore
+
+        root = task_root() / "tasks"
+        if not root.is_dir():
+            return ""
+        matched: list[str] = []
+        for child in root.iterdir():
+            name = str(child.name or "").strip()
+            if not name.startswith("w") or not child.is_dir():
+                continue
+            try:
+                task = TaskStore(child).load()
+            except TaskNotFoundError:
+                continue
+            except Exception:
+                continue
+            if str(getattr(task, "source_blueprint_id", "") or "").strip() == bid:
+                matched.append(name)
+        if len(matched) == 1:
+            return matched[0]
+    except Exception as error:
+        _log.debug("_sole_writing_task_id_on_disk %s: %s", bid, error)
+    return ""
+
+
 def load_writing_task_document(task_id: str) -> dict | None:
     """返回 writing_task_document 原始 JSON（含 _saved_at），供 TaskStore 与磁盘比新旧。"""
     tid = (task_id or "").strip()

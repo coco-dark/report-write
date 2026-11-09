@@ -1,9 +1,14 @@
 import { createApp } from "vue";
-import ElementPlus from "element-plus";
-import zhCn from "element-plus/es/locale/lang/zh-cn";
-import "element-plus/dist/index.css";
+import Antd from "ant-design-vue";
+import "ant-design-vue/dist/reset.css";
 
 import "./theme.css";
 import App from "./App.vue";
+import UiAutoComplete from "./components/UiAutoComplete.vue";
+import UiTree from "./components/UiTree.vue";
 
-createApp(App).use(ElementPlus, { locale: zhCn }).mount("#app");
+const app = createApp(App);
+app.use(Antd);
+app.component("UiTree", UiTree);
+app.component("UiAutoComplete", UiAutoComplete);
+app.mount("#app");

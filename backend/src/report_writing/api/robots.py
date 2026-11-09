@@ -124,16 +124,15 @@ def remove_robot(robot_id: str) -> dict:
 @router.post("/api/writing/robots/generate-prompts", response_model=GenerateRobotPromptsResponse)
 def post_generate_robot_prompts(body: GenerateRobotPromptsRequest) -> GenerateRobotPromptsResponse:
     from report_writing.infra.llm import live_model
+    from report_writing.infra.llm_invoke import invoke_prompt
     from report_writing.services.robots import generate_prompts
 
+    model = live_model()
+
     def invoke(system: str, user: str) -> str:
-        model = live_model()
         if model is None:
             raise HTTPException(status_code=503, detail="未配置大模型，无法生成提示词")
-        from langchain_core.messages import HumanMessage, SystemMessage
-
-        message = model.invoke([SystemMessage(content=system), HumanMessage(content=user)])
-        return str(getattr(message, "content", None) or message)
+        return invoke_prompt(model, system, user)
 
     try:
         return generate_prompts(body, invoke=invoke)

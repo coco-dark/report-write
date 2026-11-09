@@ -41,19 +41,24 @@ def resolve_path(raw: str) -> Path:
     return (_PROJECT / path).resolve()
 
 
-def chat_invoke(system: str, user: str) -> str:
+def writing_model():
+    """HTTP/CLI 入口取写作模型；下层用参数接收，不再各自 live_model。"""
     from report_writing.infra.llm import live_model
 
-    model = live_model()
-    if model is None:
+    return live_model()
+
+
+def chat_invoke(system: str, user: str, *, model=None) -> str:
+    from report_writing.infra.llm import or_live_model
+    from report_writing.infra.llm_invoke import invoke_prompt
+
+    chosen = or_live_model(model)
+    if chosen is None:
         return (
             "当前未配置大模型。已收到消息；接入模型后将按机器人对话提示词回复。"
             f"\n（系统提示摘要：{(system or '')[:120]}）"
         )
-    from langchain_core.messages import HumanMessage, SystemMessage
-    from report_writing.infra.llm_invoke import invoke_messages
-
-    return invoke_messages(model, [SystemMessage(content=system), HumanMessage(content=user)])
+    return invoke_prompt(chosen, system, user)
 
 
 def data_home() -> Path:
@@ -196,7 +201,11 @@ def _iter_sse(worker, *, user_id: str | None = None):
         item = events.get()
         if item is None:
             break
-        yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
+        try:
+            payload = json.dumps(item, ensure_ascii=False, default=str)
+        except TypeError:
+            payload = json.dumps({"type": "process", "message": str(item)}, ensure_ascii=False)
+        yield f"data: {payload}\n\n"
 
 
 def sse_response(worker) -> StreamingResponse:
@@ -205,6 +214,11 @@ def sse_response(worker) -> StreamingResponse:
     return StreamingResponse(
         _iter_sse(worker, user_id=current_user_id()),
         media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
     )
 
 

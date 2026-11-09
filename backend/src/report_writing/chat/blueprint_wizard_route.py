@@ -8,7 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
-from report_writing.domain.models import ChatSession
+from report_writing.domain.models import ChatActionPayload, ChatPayload, ChatSession
 
 EmitFn = Callable[[dict[str, Any]], None]
 InvokeFn = Callable[[str, str], str]
@@ -60,10 +60,11 @@ _PROCESS_LABELS: dict[str, str] = {
 def _merge_wizard_action_payload(
     session: ChatSession,
     wizard: dict[str, Any],
-    payload: dict[str, Any],
+    payload: ChatPayload,
 ) -> dict[str, Any]:
     """合并向导 payload；空 blueprint_id 不得冲掉会话/进行中的蓝本。"""
-    merged = {**wizard, **payload}
+    payload = ChatActionPayload.parse(payload)
+    merged = {**wizard, **payload.as_dict()}
     pid = str(payload.get("blueprint_id") or "").strip()
     wid = str(wizard.get("blueprint_id") or "").strip()
     sid = str(session.blueprint_id or "").strip()
@@ -87,12 +88,12 @@ def apply_wizard_action(
     invoke: InvokeFn | None = None,
 ) -> tuple[str, list[Any], list[dict[str, Any]]]:
     from report_writing.chat.helpers import _emit_process
-    from report_writing.chat.intent_router import active_blueprint_wizard
+    from report_writing.chat.session_state import active_blueprint_wizard
     from report_writing.chat.resource_actions import _action_blueprint_wizard, execute_wizard_command
 
     kind = str(action.get("type") or "").strip()
     if kind == "chain":
-        from report_writing.chat.intent_action_chain import execute_action_chain
+        from report_writing.chat.classifier_action_chain import execute_action_chain
 
         subs = list(action.get("actions") or [])
         if any(

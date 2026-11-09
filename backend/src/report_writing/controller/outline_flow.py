@@ -10,7 +10,7 @@ from pathlib import Path
 
 from report_writing.agents.supervisor import run_supervisor
 from report_writing.services.corpus import load_template, normalize_biz_type
-from report_writing.infra.llm import live_model
+from report_writing.infra.llm import or_live_model
 from report_writing.domain.models import (
     ChapterRequirement,
     ChapterState,
@@ -62,8 +62,10 @@ def _prefer_toc_rules_tree(
     toc_meta: dict,
 ) -> OutlineTree | None:
     """Word 样式目录常比 RAG 扁平，但正式「目录页」规则结果更贴近报告章节表。"""
-    if rule_tree is None or not rule_tree.chapters or tree is None:
+    if rule_tree is None or not rule_tree.chapters:
         return tree
+    if tree is None:
+        return rule_tree
     strategy = str((toc_meta or {}).get("strategy") or "")
     if strategy not in {"hyperlink_toc", "toc_heading", "dense_prefix"}:
         return tree
@@ -88,6 +90,7 @@ def generate_outline(
     use_llm: bool = False,
     text: str | None = None,
     on_event=None,
+    model=None,
 ) -> WritingTask:
     """上传文件 → RAG/本地解析全文 → 抽取目录树（可选用模型整理），等待人工确认。"""
     material_type = normalize_biz_type(biz_type)
@@ -177,7 +180,7 @@ def generate_outline(
         llm_source = (toc_slice or (text or "")[:llm_cap])[:llm_cap]
         _log.info("目录分块模型整理 chars=%s", len(llm_source))
         try:
-            llm_tree = _outline_with_llm_chunks(llm_source)
+            llm_tree = _outline_with_llm_chunks(llm_source, model=model)
             if llm_tree and llm_tree.chapters:
                 if tree is None:
                     tree = llm_tree
@@ -189,7 +192,9 @@ def generate_outline(
             _log.warning("分块模型整理目录失败：%s", error)
     if run_llm and tree is not None and (toc_slice or text):
         try:
-            polished = _outline_polish_with_llm(tree, toc_slice or (text or "")[:60000])
+            polished = _outline_polish_with_llm(
+                tree, toc_slice or (text or "")[:60000], model=model
+            )
             if polished and polished.chapters and outline_tree_quality(polished) >= outline_tree_quality(tree) * 0.95:
                 tree = polished
         except Exception as error:
@@ -214,6 +219,7 @@ def generate_outline(
             use_llm=bool(use_llm),
             max_chars_per_chapter=outline_chapter_scan_max_chars(),
             on_event=on_event,
+            model=model,
         )
     if tree is None:
         raise rule_error or ValueError("无法从文档提取目录")
@@ -285,6 +291,107 @@ def _merge_outline_keep_existing(
             merged.append(node)
             seen.add(key)
     return merged
+
+
+def _preserve_chapter_element_bindings(
+    existing: list[OutlineNode],
+    incoming: list[OutlineNode],
+) -> list[OutlineNode]:
+    """整树 PUT / 短列表合并时：空 element_ids 不得冲掉已落盘关联。
+
+    切会话、进度卡、关联后回写目录都可能带上空数组；取消关联走专用接口。
+    """
+    old_by = {
+        str(node.key or "").strip(): node
+        for node in existing
+        if str(getattr(node, "key", "") or "").strip()
+    }
+
+    def _point_element_ids(node: OutlineNode) -> set[str]:
+        out: set[str] = set()
+        for row in list(getattr(node, "point_items", None) or []):
+            if not isinstance(row, dict):
+                continue
+            eid = str(row.get("element_id") or "").strip()
+            if eid:
+                out.add(eid)
+        return out
+
+    def _restore_point_links(old_node: OutlineNode, new_node: OutlineNode) -> None:
+        old_items = list(getattr(old_node, "point_items", None) or [])
+        new_items = list(getattr(new_node, "point_items", None) or [])
+        if not old_items or not new_items:
+            return
+        by_id: dict[str, tuple[str, str]] = {}
+        by_text: dict[str, tuple[str, str]] = {}
+        for row in old_items:
+            if not isinstance(row, dict):
+                continue
+            eid = str(row.get("element_id") or "").strip()
+            if not eid:
+                continue
+            ename = str(row.get("element_name") or "").strip()
+            rid = str(row.get("id") or "").strip()
+            if rid:
+                by_id[rid] = (eid, ename)
+            text = str(row.get("text") or "").strip()
+            if text:
+                by_text[text] = (eid, ename)
+        restored = False
+        next_items = []
+        for row in new_items:
+            if not isinstance(row, dict):
+                next_items.append(row)
+                continue
+            nxt = dict(row)
+            if not str(nxt.get("element_id") or "").strip():
+                # 用户已取消要点关联（needs_supplement）时勿从旧稿补回 element_id
+                if nxt.get("needs_supplement") is True:
+                    next_items.append(nxt)
+                    continue
+                hit = by_id.get(str(nxt.get("id") or "").strip()) or by_text.get(
+                    str(nxt.get("text") or "").strip()
+                )
+                if hit:
+                    nxt["element_id"] = hit[0]
+                    if hit[1] and not str(nxt.get("element_name") or "").strip():
+                        nxt["element_name"] = hit[1]
+                    restored = True
+            next_items.append(nxt)
+        if restored:
+            new_node.point_items = next_items
+
+    for node in incoming:
+        key = str(getattr(node, "key", "") or "").strip()
+        old = old_by.get(key)
+        if old is None:
+            continue
+        new_ids = [str(x).strip() for x in (node.element_ids or []) if str(x).strip()]
+        old_ids = [str(x).strip() for x in (old.element_ids or []) if str(x).strip()]
+        if not new_ids and old_ids:
+            incoming_points = list(getattr(node, "point_items", None) or [])
+            if incoming_points:
+                new_pts = _point_element_ids(node)
+                old_pts = _point_element_ids(old)
+                if set(old_ids).issubset(new_pts):
+                    node.element_ids = []
+                elif new_pts != old_pts:
+                    node.element_ids = []
+                elif set(old_ids) - new_pts:
+                    node.element_ids = []
+                else:
+                    node.element_ids = list(old_ids)
+            else:
+                node.element_ids = list(old_ids)
+        elif new_ids and old_ids:
+            old_set = set(old_ids)
+            # 只提交新关联时不要冲掉已有；纯删减（incoming ⊆ old）仍按提交列表落盘
+            if any(eid not in old_set for eid in new_ids):
+                from report_writing.domain.elements import union_element_ids
+
+                node.element_ids = union_element_ids(old_ids, new_ids)
+        _restore_point_links(old, node)
+    return incoming
 
 
 def maybe_restore_outline_from_source_blueprint(task_dir: Path, task: WritingTask) -> WritingTask:
@@ -369,6 +476,7 @@ def save_outline(
                 len(incoming_keys),
             )
             incoming = _merge_outline_keep_existing(existing, incoming)
+    incoming = _preserve_chapter_element_bindings(existing, incoming)
     tree = outline_from_payload([item.to_dict() for item in incoming])
     task.outline = tree
     from report_writing.domain.point_items_sync import normalize_chapter_point_items_on_node
@@ -377,6 +485,10 @@ def save_outline(
         normalize_chapter_point_items_on_node(task, node)
     if task.outline_confirmed:
         _ensure_brief_ready(task)
+        if task.brief is not None:
+            from report_writing.domain.elements import sync_brief_from_outline
+
+            sync_brief_from_outline(task)
     else:
         task.brief = None
         task.brief_confirmed = False
@@ -405,6 +517,10 @@ def save_element_nodes(task_dir: Path, elements: list) -> WritingTask:
     save_elements(task, nodes)
     if task.brief is not None and task.outline is not None:
         _lock_brief_to_outline(task.brief, task.outline)
+        if bool(getattr(task, "outline_confirmed", False)):
+            from report_writing.domain.elements import sync_brief_from_outline
+
+            sync_brief_from_outline(task)
     store.save(task)
     # task_dir = <task_root>/tasks/<id>；要素库 API 以 task_root 为 home
     home = task_dir.parent.parent
@@ -510,6 +626,7 @@ def outline_from_pasted_text(
     *,
     use_llm: bool = False,
     biz_type: str = "",
+    model=None,
 ) -> WritingTask:
     from report_writing.controller.write_flow import ensure_task
 
@@ -519,9 +636,9 @@ def outline_from_pasted_text(
     if not cleaned:
         raise RuntimeError("请粘贴目录文本")
     if use_llm:
-        tree = _outline_with_llm(cleaned)
+        tree = _outline_with_llm(cleaned, model=model)
     else:
-        tree = _outline_from_plain_lines(cleaned)
+        tree = _outline_from_plain_lines(cleaned, model=model)
     if biz_type.strip():
         task.biz_type = normalize_biz_type(biz_type)
     task.outline = tree
@@ -578,6 +695,7 @@ def generate_outline_from_sample(
     *,
     use_llm: bool = False,
     on_event=None,
+    model=None,
 ) -> WritingTask:
     """用蓝本已解析样本生成目录大纲。"""
     from report_writing.controller.blueprint import resolve_sample_path, resolve_sample_text
@@ -597,6 +715,7 @@ def generate_outline_from_sample(
         use_llm=use_llm,
         text=text,
         on_event=on_event,
+        model=model,
     )
 
 
@@ -606,6 +725,7 @@ def study_from_outline(
     *,
     force_study: bool = False,
     on_event=None,
+    model=None,
 ) -> WritingTask:
     """目录确认后，按树回原文切章并学习。"""
     from report_writing.controller.study_flow import _lock_brief_to_outline
@@ -652,7 +772,7 @@ def study_from_outline(
         phase="study",
         template=template,
         cache=BriefCache(cache_dir),
-        model=live_model(),
+        model=or_live_model(model),
         force_study=force_study,
         on_event=on_event,
     )
@@ -679,7 +799,7 @@ def chapters_match_report(tree: OutlineTree, text: str) -> list[dict]:
     return chapters_from_outline(tree, text)
 
 
-def _outline_from_plain_lines(text: str) -> OutlineTree:
+def _outline_from_plain_lines(text: str, *, model=None) -> OutlineTree:
     nodes = []
     for line in text.splitlines():
         raw = line.rstrip()
@@ -699,7 +819,7 @@ def _outline_from_plain_lines(text: str) -> OutlineTree:
             )
         else:
             nodes.append(OutlineNode(sequence="", title=body, level=level))
-    return finalize_outline(nodes)
+    return finalize_outline(nodes, model=model)
 
 
 def _merge_outline_prefer_primary(primary: OutlineTree, secondary: OutlineTree) -> OutlineTree:
@@ -722,9 +842,9 @@ def _merge_outline_prefer_primary(primary: OutlineTree, secondary: OutlineTree) 
     return finalize_outline(list(by_seq.values()))
 
 
-def _outline_polish_with_llm(tree: OutlineTree, toc_slice: str) -> OutlineTree | None:
+def _outline_polish_with_llm(tree: OutlineTree, toc_slice: str, *, model=None) -> OutlineTree | None:
     """用目录区原文校对规则/合并结果，删掉误抽条目。"""
-    model = live_model()
+    model = or_live_model(model)
     if model is None or not tree.chapters:
         return None
     if len(tree.chapters) > 200:
@@ -742,10 +862,13 @@ def _outline_polish_with_llm(tree: OutlineTree, toc_slice: str) -> OutlineTree |
         sent = entries[:180]
         payload = json.dumps(sent, ensure_ascii=False)
     prompt = (
-        "你是报告目录校对助手。根据【目录区原文】修正【待校对列表】："
-        "删除明显不是目录的句子；修正错乱序号与标题；保留全部真实章节与子节；"
-        "不要合并章节、不要编造。只返回 JSON 数组，字段 sequence、title、level。\n\n"
-        f"【目录区原文】\n{excerpt}\n\n【待校对列表】\n{payload}"
+        "# Role\n你是报告目录校对助手。\n"
+        "# Task\n根据目录区原文修正待校对列表：删除明显不是目录的句子；修正错乱序号与标题；"
+        "保留全部真实章节与子节；不要合并章节、不要编造。\n"
+        "# Inputs\n"
+        f"<toc_source>\n{excerpt}\n</toc_source>\n"
+        f"<draft_outline>\n{payload}\n</draft_outline>\n"
+        "# Output\n只返回 JSON 数组，字段 sequence、title、level。"
     )
     try:
         message = model.invoke(prompt)
@@ -758,7 +881,7 @@ def _outline_polish_with_llm(tree: OutlineTree, toc_slice: str) -> OutlineTree |
             return None
         if len(parsed) > int(len(sent) * 1.2) + 5:
             return None
-        polished = outline_from_payload(parsed)
+        polished = outline_from_payload(parsed, model=model)
         if outline_tree_quality(polished) >= outline_tree_quality(tree) * 0.95:
             return polished
         return None
@@ -767,7 +890,7 @@ def _outline_polish_with_llm(tree: OutlineTree, toc_slice: str) -> OutlineTree |
         return None
 
 
-def _outline_with_llm_chunks(text: str, *, max_chunk: int = 9000) -> OutlineTree | None:
+def _outline_with_llm_chunks(text: str, *, max_chunk: int = 9000, model=None) -> OutlineTree | None:
     """长目录分块送模型，按序号合并（避免单次 12k 截断漏章）。"""
     raw = (text or "").strip()
     if not raw:
@@ -789,7 +912,7 @@ def _outline_with_llm_chunks(text: str, *, max_chunk: int = 9000) -> OutlineTree
         return None
     merged: OutlineTree | None = None
     for index, chunk in enumerate(chunks):
-        part = _outline_with_llm(chunk)
+        part = _outline_with_llm(chunk, model=model)
         if not part.chapters:
             continue
         merged = part if merged is None else _merge_outline_prefer_primary(merged, part)
@@ -797,10 +920,10 @@ def _outline_with_llm_chunks(text: str, *, max_chunk: int = 9000) -> OutlineTree
     return merged
 
 
-def _outline_with_llm(text: str) -> OutlineTree:
-    model = live_model()
+def _outline_with_llm(text: str, *, model=None) -> OutlineTree:
+    model = or_live_model(model)
     if model is None:
-        return _outline_from_plain_lines(text)
+        return _outline_from_plain_lines(text, model=model)
     # 已是目录切片时仍限长，防止异常切片过大
     clipped = (text or "")[:24000]
     prompt = (
@@ -817,12 +940,12 @@ def _outline_with_llm(text: str) -> OutlineTree:
         payload = json.loads(match.group(0) if match else content)
         if not isinstance(payload, list):
             raise ValueError("模型没有返回数组")
-        return outline_from_payload(payload)
+        return outline_from_payload(payload, model=model)
     except Exception as error:
         _log.warning("模型整理目录失败，改用规则解析：%s", error)
         try:
             return outline_from_text(text)
         except Exception:
-            return _outline_from_plain_lines(text)
+            return _outline_from_plain_lines(text, model=model)
 
 

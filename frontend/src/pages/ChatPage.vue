@@ -53,30 +53,18 @@
     <div class="chat-main">
     <div ref="chatStageEl" class="chat-stage">
       <div v-if="messages.length" class="thread">
-        <div v-for="(item, index) in messages" :key="index" class="bubble" :class="item.role">
-          <div class="avatar">{{ item.role === "user" ? "我" : "AI" }}</div>
-          <div class="body-col">
-            <div v-if="messageDocTag(item)" class="bubble-doc-tag">{{ messageDocTag(item) }}</div>
-            <div class="body rich">
-              <span v-html="toDisplayHtml(friendlyMessageText(item))" />
-              <span v-if="item.streaming" class="cursor">▍</span>
-            </div>
-            <ul
-              v-if="visibleProcessSteps(item).length"
-              class="process-log"
-              :class="{ done: !item.streaming }"
-            >
-              <li v-for="(step, si) in visibleProcessSteps(item)" :key="si" :class="step.kind">
-                <span class="dot" />
-                <span>{{ friendlyProcessText(step.message, { done: !item.streaming }) }}</span>
-                <pre
-                  v-if="isDev && step.kind === 'chain' && step.detail && Object.keys(step.detail).length"
-                  class="chain-debug-detail"
-                  >{{ formatChainDebugDetail(step) }}</pre
-                >
-              </li>
-            </ul>
-            <div v-if="item.cards?.length" class="cards">
+        <ChatMessageBubble
+          v-for="(item, index) in messages"
+          :key="index"
+          class="bubble"
+          :role="item.role"
+          :header="messageDocTag(item)"
+          :html="toDisplayHtml(friendlyMessageText(item))"
+          :streaming="!!item.streaming"
+          :process-steps="bubbleProcessSteps(item)"
+        >
+          <template v-if="item.cards?.length" #footer>
+            <div class="cards">
               <template v-for="(card, ci) in item.cards" :key="ci">
                 <div v-if="card.type === 'blueprint_list'" class="card bp-list" :class="{ used: isCardUsed(index, ci) }">
                   <div class="card-title">{{ card.title || "请选择蓝本" }}</div>
@@ -106,15 +94,14 @@
                           <td>{{ bp.category || "—" }}</td>
                           <td>{{ bp.chapter_count || 0 }}</td>
                           <td>
-                            <el-button
-                              class="chat-action-btn chat-action-btn--compact"
-                              type="primary"
-                              round
-                              :disabled="sending || isCardUsed(index, ci)"
-                              @click="pickBlueprint(bp, index, ci)"
-                            >
+                            <a-button
+ class="chat-action-btn chat-action-btn--compact"
+ type="primary"
+ :disabled="sending || isCardUsed(index, ci)"
+ @click="pickBlueprint(bp, index, ci)"
+ shape="round">
                               选用
-                            </el-button>
+                            </a-button>
                           </td>
                         </tr>
                       </tbody>
@@ -159,24 +146,21 @@
                   <div class="card-title">{{ card.title }}</div>
                   <p class="card-hint">{{ card.payload?.message }}</p>
                   <div class="confirm-actions gate-actions">
-                    <el-button
-                      class="chat-action-btn"
-                      type="primary"
-                      round
-                      :disabled="sending || isCardUsed(index, ci)"
-                      @click="pickResourceChoice(card, true, index, ci)"
-                    >
+                    <a-button
+ class="chat-action-btn"
+ type="primary"
+ :disabled="sending || isCardUsed(index, ci)"
+ @click="pickResourceChoice(card, true, index, ci)"
+ shape="round">
                       {{ card.payload?.yes_label || "是" }}
-                    </el-button>
-                    <el-button
-                      class="chat-action-btn"
-                      round
-                      plain
-                      :disabled="sending || isCardUsed(index, ci)"
-                      @click="pickResourceChoice(card, false, index, ci)"
-                    >
+                    </a-button>
+                    <a-button
+ class="chat-action-btn"
+ :disabled="sending || isCardUsed(index, ci)"
+ @click="pickResourceChoice(card, false, index, ci)"
+ shape="round">
                       {{ card.payload?.no_label || "否" }}
-                    </el-button>
+                    </a-button>
                   </div>
                 </div>
 
@@ -257,18 +241,16 @@
                 >
                   <p class="hint">{{ card.payload?.question || card.title || "请帮我确认一下" }}</p>
                   <div class="blueprint-path-actions">
-                    <el-button
-                      v-for="opt in card.payload?.options || []"
-                      :key="opt.id || opt.label"
-                      class="chat-action-btn"
-                      type="primary"
-                      round
-                      plain
-                      :disabled="sending || isCardUsed(index, ci)"
-                      @click="resolveIntentClarify(card, opt, index, ci)"
-                    >
+                    <a-button
+ v-for="opt in card.payload?.options || []"
+ :key="opt.id || opt.label"
+ class="chat-action-btn"
+ type="primary"
+ :disabled="sending || isCardUsed(index, ci)"
+ @click="resolveIntentClarify(card, opt, index, ci)"
+ shape="round">
                       {{ opt.label }}
-                    </el-button>
+                    </a-button>
                   </div>
                 </div>
 
@@ -281,24 +263,24 @@
                   <p class="hint">
                     请把「{{ card.payload?.chapter_label || "本章" }}」的原文粘贴到下方，再开始分析。
                   </p>
-                  <div
-                    class="study-source-rich-paste"
-                    contenteditable="true"
-                    data-placeholder="在此粘贴本章原文（从 Word / 网页复制即可）…"
-                    :data-card-key="`${index}-${ci}`"
-                    @input="onStudySourcePasteInput(`${index}-${ci}`, $event)"
-                    @paste="onStudySourceRichPaste(`${index}-${ci}`, $event)"
+                  <ChapterHtmlEditor
+                    class="study-source-rich-editor"
+                    :model-value="studySourcePasteDrafts[`${index}-${ci}`] || ''"
+                    placeholder="在此粘贴本章原文（从 Word / 网页复制即可）…"
+                    :min-height="140"
+                    :max-height="280"
+                    :readonly="isCardUsed(index, ci)"
+                    @update:model-value="(v) => onStudySourcePasteHtml(`${index}-${ci}`, v)"
                   />
                   <div class="blueprint-path-actions">
-                    <el-button
-                      class="chat-action-btn"
-                      type="primary"
-                      round
-                      :disabled="sending || isCardUsed(index, ci) || !studySourcePasteText(`${index}-${ci}`)"
-                      @click="submitStudySourcePaste(card, index, ci)"
-                    >
+                    <a-button
+ class="chat-action-btn"
+ type="primary"
+ :disabled="sending || isCardUsed(index, ci) || !studySourcePasteText(`${index}-${ci}`)"
+ @click="submitStudySourcePaste(card, index, ci)"
+ shape="round">
                       开始分析
-                    </el-button>
+                    </a-button>
                   </div>
                 </div>
 
@@ -308,24 +290,21 @@
                   :class="{ used: isCardUsed(index, ci) }"
                 >
                   <div class="blueprint-path-actions">
-                    <el-button
-                      class="chat-action-btn"
-                      type="primary"
-                      round
-                      plain
-                      :disabled="sending || isCardUsed(index, ci)"
-                      @click="pickCreateBlueprint(index, ci)"
-                    >
+                    <a-button
+ class="chat-action-btn"
+ type="primary"
+ :disabled="sending || isCardUsed(index, ci)"
+ @click="pickCreateBlueprint(index, ci)"
+ shape="round">
                       依据模版编写
-                    </el-button>
-                    <el-button
-                      class="chat-action-btn"
-                      round
-                      :disabled="sending || isCardUsed(index, ci)"
-                      @click="pickSkip(index, ci)"
-                    >
+                    </a-button>
+                    <a-button
+ class="chat-action-btn"
+ :disabled="sending || isCardUsed(index, ci)"
+ @click="pickSkip(index, ci)"
+ shape="round">
                       无蓝本 · 自动大纲
-                    </el-button>
+                    </a-button>
                   </div>
                 </div>
 
@@ -383,7 +362,7 @@
                   >
                     仅展示前 24 条，共 {{ card.payload.total }} 条；打开完整页可查看全部。
                   </p>
-                  <el-button class="chat-action-btn" type="primary" round @click="goNavAction(card)">
+                  <a-button class="chat-action-btn" type="primary" @click="goNavAction(card)" shape="round">
                     {{
                       card.payload?.target === "materials" || card.payload?.target === "knowledge"
                         ? "打开资料库"
@@ -391,7 +370,7 @@
                           ? "打开蓝本库"
                           : "打开要素库"
                     }}
-                  </el-button>
+                  </a-button>
                 </div>
 
                 <div
@@ -406,15 +385,13 @@
                   <p v-if="card.payload?.auto_open" class="gate-hint">
                     {{ isCardUsed(index, ci) ? "已打开关联面板" : "正在打开关联面板…" }}
                   </p>
-                  <el-button
-                    class="chat-action-btn"
-                    :type="card.payload?.auto_open ? 'default' : 'primary'"
-                    round
-                    plain
-                    @click="onAssociateElementsCard(card, index, ci)"
-                  >
+                  <a-button
+ class="chat-action-btn"
+ :type="card.payload?.auto_open ? 'default' : 'primary'"
+ @click="onAssociateElementsCard(card, index, ci)"
+ shape="round">
                     {{ card.payload?.auto_open ? "再次打开" : "关联要素" }}
-                  </el-button>
+                  </a-button>
                 </div>
 
                 <template v-else-if="card.type === 'associate_element_knowledge'" />
@@ -435,27 +412,25 @@
                 >
                   <div class="card-title">{{ card.title || "在文档窗口继续" }}</div>
                   <p v-if="card.payload?.hint" class="gate-hint">{{ card.payload.hint }}</p>
-                  <el-button
-                    class="chat-action-btn"
-                    type="primary"
-                    round
-                    @click="onDocWindowHintCard(card, index, ci)"
-                  >
+                  <a-button
+ class="chat-action-btn"
+ type="primary"
+ @click="onDocWindowHintCard(card, index, ci)"
+ shape="round">
                     打开文档窗口
-                  </el-button>
+                  </a-button>
                 </div>
 
                 <div v-else-if="card.type === 'write_analyzed_only'" class="card">
-                  <el-button
-                    class="chat-action-btn"
-                    type="primary"
-                    round
-                    :loading="sending"
-                    :disabled="isCardUsed(index, ci)"
-                    @click="confirmWriteAnalyzedOnly(card, index, ci)"
-                  >
+                  <a-button
+ class="chat-action-btn"
+ type="primary"
+ :loading="sending"
+ :disabled="isCardUsed(index, ci)"
+ @click="confirmWriteAnalyzedOnly(card, index, ci)"
+ shape="round">
                     {{ card.title || "选择已分析章节" }}
-                  </el-button>
+                  </a-button>
                 </div>
 
                 <div v-else-if="card.type === 'freeform_points_help'" class="card freeform-points-help-card">
@@ -464,34 +439,27 @@
                     {{ card.payload?.hint || "可以让我按目录自动起草各章写法要点，也可以自己补充或先跳过。" }}
                   </p>
                   <div class="confirm-actions gate-actions">
-                    <el-button
-                      class="chat-action-btn"
-                      type="primary"
-                      round
-                      :loading="sending"
-                      :disabled="isCardUsed(index, ci)"
-                      @click="
-                        sendAction('generate_freeform_points', {
-                          task_id: card.payload?.task_id,
-                        })
-                      "
-                    >
+                    <a-button
+ class="chat-action-btn"
+ type="primary"
+ :loading="sending"
+ :disabled="isCardUsed(index, ci)"
+ @click="
+ sendAction('generate_freeform_points', card.payload || {})
+ "
+ shape="round">
                       帮我生成写作要点
-                    </el-button>
-                    <el-button
-                      class="chat-action-btn"
-                      round
-                      plain
-                      :loading="sending"
-                      :disabled="isCardUsed(index, ci)"
-                      @click="
-                        sendAction('skip_freeform_points', {
-                          task_id: card.payload?.task_id,
-                        })
-                      "
-                    >
+                    </a-button>
+                    <a-button
+ class="chat-action-btn"
+ :loading="sending"
+ :disabled="isCardUsed(index, ci)"
+ @click="
+ sendAction('skip_freeform_points', card.payload || {})
+ "
+ shape="round">
                       先跳过，直接开写
-                    </el-button>
+                    </a-button>
                   </div>
                   <p class="gate-hint soft">
                     熟悉的话也可以在输入框粘贴各章写法说明，我会记入对应章节。
@@ -538,89 +506,85 @@
                     }}
                   </p>
                   <div class="materials-pack-actions">
-                    <el-button
-                      class="chat-action-btn"
-                      round
-                      :loading="sending"
-                      @click="
-                        sendAction('materials_pack_skip', {
-                          task_id: card.payload?.task_id,
-                          blueprint_id: card.payload?.blueprint_id,
-                        })
-                      "
-                    >
+                    <a-button
+ class="chat-action-btn"
+ :loading="sending"
+ @click="
+ sendAction('materials_pack_skip', {
+ task_id: card.payload?.task_id,
+ blueprint_id: card.payload?.blueprint_id,
+ })
+ "
+ shape="round">
                       不用资料包
-                    </el-button>
-                    <el-button
-                      class="chat-action-btn"
-                      round
-                      type="primary"
-                      plain
-                      :loading="sending"
-                      :disabled="!(card.payload?.library_packs || []).length"
-                      @click="
-                        sendAction('materials_pack_use', {
-                          task_id: card.payload?.task_id,
-                          blueprint_id: card.payload?.blueprint_id,
-                        })
-                      "
-                    >
+                    </a-button>
+                    <a-button
+ class="chat-action-btn"
+ type="primary"
+ :loading="sending"
+ :disabled="!(card.payload?.library_packs || []).length"
+ @click="
+ sendAction('materials_pack_use', {
+ task_id: card.payload?.task_id,
+ blueprint_id: card.payload?.blueprint_id,
+ })
+ "
+ shape="round">
                       使用已有
-                    </el-button>
-                    <el-button
-                      class="chat-action-btn"
-                      round
-                      type="primary"
-                      :loading="sending"
-                      @click="createMaterialsPackFromCard(card)"
-                    >
+                    </a-button>
+                    <a-button
+ class="chat-action-btn"
+ type="primary"
+ :loading="sending"
+ @click="createMaterialsPackFromCard(card)"
+ shape="round">
                       新建资料包
-                    </el-button>
+                    </a-button>
                   </div>
                   <div
                     v-if="(card.payload?.pending_packs || []).length"
                     class="materials-pack-pending"
                   >
                     <p class="card-hint">待入库：</p>
-                    <el-button
-                      v-for="p in card.payload.pending_packs"
-                      :key="p.id"
-                      size="small"
-                      round
-                      plain
-                      :loading="sending"
-                      @click="
-                        sendAction('materials_pack_confirm_library', {
-                          pack_id: p.id,
-                          task_id: card.payload?.task_id,
-                        })
-                      "
-                    >
+                    <a-button
+ v-for="p in card.payload.pending_packs"
+ :key="p.id"
+ size="small"
+ :loading="sending"
+ @click="
+ sendAction('materials_pack_confirm_library', {
+ pack_id: p.id,
+ name: p.name,
+ pack_name: p.name,
+ task_id: card.payload?.task_id,
+ })
+ "
+ shape="round">
                       入库「{{ p.name }}」
-                    </el-button>
+                    </a-button>
                   </div>
                 </div>
 
                 <div v-else-if="card.type === 'materials_pack_pick'" class="card materials-pack-card">
                   <div class="card-title">{{ card.title || "选用资料包" }}</div>
                   <div class="materials-pack-actions">
-                    <el-button
-                      v-for="p in card.payload?.packs || []"
-                      :key="p.id"
-                      class="chat-action-btn"
-                      round
-                      type="primary"
-                      plain
-                      :loading="sending"
-                      @click="
-                        sendAction('materials_pack_use', {
-                          task_id: card.payload?.task_id,
-                          pack_id: p.id,
-                        })
-                      "
-                    >
+                    <a-button
+ v-for="p in card.payload?.packs || []"
+ :key="p.id"
+ class="chat-action-btn"
+ type="primary"
+ :loading="sending"
+ @click="
+ sendAction('materials_pack_use', {
+ task_id: card.payload?.task_id,
+ pack_id: p.id,
+ name: p.name,
+ pack_name: p.name,
+ })
+ "
+ shape="round">
                       {{ p.name || p.id }}
-                    </el-button>
+                    </a-button>
                   </div>
                 </div>
 
@@ -630,43 +594,40 @@
                     当前文档已绑定：{{ card.payload.bound_pack_id }}
                   </p>
                   <div class="materials-pack-actions">
-                    <el-button
-                      v-for="p in [...(card.payload?.library_packs || []), ...(card.payload?.pending_packs || [])]"
-                      :key="p.id"
-                      class="chat-action-btn"
-                      round
-                      :type="p.id === card.payload?.bound_pack_id ? 'primary' : 'default'"
-                      plain
-                      :loading="sending"
-                      @click="
-                        sendAction('materials_pack_use', {
-                          task_id: card.payload?.task_id,
-                          pack_id: p.id,
-                        })
-                      "
-                    >
+                    <a-button
+ v-for="p in [...(card.payload?.library_packs || []), ...(card.payload?.pending_packs || [])]"
+ :key="p.id"
+ class="chat-action-btn"
+ :type="p.id === card.payload?.bound_pack_id ? 'primary' : 'default'"
+ :loading="sending"
+ @click="
+ sendAction('materials_pack_use', {
+ task_id: card.payload?.task_id,
+ pack_id: p.id,
+ name: p.name,
+ pack_name: p.name,
+ })
+ "
+ shape="round">
                       {{ p.name || p.id }}{{ p.in_library === false ? "（待入库）" : "" }}
                       · {{ p.slot_count || 0 }} 槽
-                    </el-button>
+                    </a-button>
                   </div>
                   <div class="materials-pack-actions" style="margin-top: 8px">
-                    <el-button
-                      class="chat-action-btn"
-                      round
-                      :loading="sending"
-                      @click="createMaterialsPackFromCard(card)"
-                    >
+                    <a-button
+ class="chat-action-btn"
+ :loading="sending"
+ @click="createMaterialsPackFromCard(card)"
+ shape="round">
                       新建资料包
-                    </el-button>
-                    <el-button
-                      class="chat-action-btn"
-                      round
-                      plain
-                      :loading="sending"
-                      @click="sendAction('materials_pack_view', { task_id: card.payload?.task_id })"
-                    >
+                    </a-button>
+                    <a-button
+ class="chat-action-btn"
+ :loading="sending"
+ @click="sendAction('materials_pack_view', { task_id: card.payload?.task_id })"
+ shape="round">
                       查看当前配置
-                    </el-button>
+                    </a-button>
                   </div>
                 </div>
 
@@ -703,64 +664,56 @@
                     </li>
                   </ul>
                   <div class="materials-pack-actions">
-                    <el-button
-                      class="chat-action-btn"
-                      round
-                      plain
-                      :loading="sending"
-                      @click="
-                        sendAction('materials_pack_add_slot', {
-                          task_id: card.payload?.task_id,
-                          pack_id: card.payload?.pack_id,
-                        })
-                      "
-                    >
+                    <a-button
+ class="chat-action-btn"
+ :loading="sending"
+ @click="
+ sendAction('materials_pack_add_slot', {
+ task_id: card.payload?.task_id,
+ pack_id: card.payload?.pack_id,
+ })
+ "
+ shape="round">
                       添加槽位
-                    </el-button>
-                    <el-button
-                      class="chat-action-btn"
-                      round
-                      plain
-                      :loading="sending"
-                      @click="
-                        sendAction('materials_pack_list', { task_id: card.payload?.task_id })
-                      "
-                    >
+                    </a-button>
+                    <a-button
+ class="chat-action-btn"
+ :loading="sending"
+ @click="
+ sendAction('materials_pack_list', { task_id: card.payload?.task_id })
+ "
+ shape="round">
                       全部资料包
-                    </el-button>
-                    <el-button
-                      class="chat-action-btn"
-                      round
-                      plain
-                      :loading="sending"
-                      @click="
-                        sendAction('materials_pack_use', { task_id: card.payload?.task_id })
-                      "
-                    >
+                    </a-button>
+                    <a-button
+ class="chat-action-btn"
+ :loading="sending"
+ @click="
+ sendAction('materials_pack_use', { task_id: card.payload?.task_id })
+ "
+ shape="round">
                       换绑
-                    </el-button>
-                    <el-button
-                      class="chat-action-btn"
-                      type="primary"
-                      round
-                      :loading="sending"
-                      @click="sendAction('start_writing', { task_id: card.payload?.task_id })"
-                    >
+                    </a-button>
+                    <a-button
+ class="chat-action-btn"
+ type="primary"
+ :loading="sending"
+                      @click="sendAction('start_writing', card.payload || {})"
+ shape="round">
                       继续写作
-                    </el-button>
+                    </a-button>
                   </div>
                 </div>
 
                 <div v-else-if="card.type === 'start_writing'" class="card">
-                  <el-button
-                    class="chat-action-btn"
-                    type="primary"
-                    round
-                    :loading="sending"
-                    @click="sendAction('start_writing', card.payload || {})"
-                  >
+                  <a-button
+ class="chat-action-btn"
+ type="primary"
+ :loading="sending"
+ @click="sendAction('start_writing', card.payload || {})"
+ shape="round">
                     {{ card.title || "开始写作" }}
-                  </el-button>
+                  </a-button>
                 </div>
 
                 <div
@@ -795,58 +748,50 @@
                         item.chapter_label
                       }}</span>
                       <div v-if="!card.payload?.readonly" class="supplement-gap-actions">
-                        <el-button
-                          size="small"
-                          type="primary"
-                          plain
-                          round
-                          :disabled="sending || isCardUsed(index, ci)"
-                          @click.stop="openWritingSupplementItem(card, item)"
-                        >
+                        <a-button
+ size="small"
+ type="primary"
+ :disabled="sending || isCardUsed(index, ci)"
+ @click.stop="openWritingSupplementItem(card, item)"
+ shape="round">
                           去配置
-                        </el-button>
-                        <el-button
-                          size="small"
-                          round
-                          :disabled="sending || isCardUsed(index, ci)"
-                          @click="dismissWritingSupplement(card, item, index, ci)"
-                        >
+                        </a-button>
+                        <a-button
+ size="small"
+ :disabled="sending || isCardUsed(index, ci)"
+ @click="dismissWritingSupplement(card, item, index, ci)"
+ shape="round">
                           忽略
-                        </el-button>
+                        </a-button>
                       </div>
-                      <el-button
-                        v-else
-                        size="small"
-                        type="primary"
-                        plain
-                        round
-                        :disabled="sending"
-                        @click="openWritingSupplementItem(card, item)"
-                      >
+                      <a-button
+ v-else
+ size="small"
+ type="primary"
+ :disabled="sending"
+ @click="openWritingSupplementItem(card, item)"
+ shape="round">
                         去配置
-                      </el-button>
+                      </a-button>
                     </li>
                   </ul>
                   <div v-if="!card.payload?.readonly" class="blueprint-path-actions">
-                    <el-button
-                      class="chat-action-btn"
-                      type="primary"
-                      round
-                      :loading="sending"
-                      :disabled="isCardUsed(index, ci)"
-                      @click="skipWritingSupplementCheck(card, index, ci)"
-                    >
+                    <a-button
+ class="chat-action-btn"
+ type="primary"
+ :loading="sending"
+ :disabled="isCardUsed(index, ci)"
+ @click="skipWritingSupplementCheck(card, index, ci)"
+ shape="round">
                       先这样开写
-                    </el-button>
-                    <el-button
-                      class="chat-action-btn"
-                      round
-                      plain
-                      :disabled="sending || isCardUsed(index, ci)"
-                      @click="recheckWritingSupplements(card)"
-                    >
+                    </a-button>
+                    <a-button
+ class="chat-action-btn"
+ :disabled="sending || isCardUsed(index, ci)"
+ @click="recheckWritingSupplements(card)"
+ shape="round">
                       重新检查
-                    </el-button>
+                    </a-button>
                   </div>
                 </div>
 
@@ -868,15 +813,15 @@
                   @rename="renameFreeformDocument(card)"
                 />
 
-                <!-- 写作进度由文档窗承接；progress 卡仍留 messages 供状态合并 -->
+                <!-- 写作进度改进行气泡 process-log（虚线框），进度卡仅作数据载体 -->
                 <template v-else-if="card.type === 'progress'" />
 
                 <!-- 对话内「渲染并下载 Word」卡不再展示；导出走输入区上方 -->
                 <template v-else-if="card.type === 'export'" />
               </template>
             </div>
-          </div>
-        </div>
+          </template>
+        </ChatMessageBubble>
       </div>
       <div v-if="showOpeningSuggests" class="opening-suggests">
         <p class="opening-suggests-hint">不知道从哪开始？点一句试试：</p>
@@ -913,94 +858,82 @@
       <div v-if="taskId" class="composer-export" aria-label="导出">
         <div class="composer-export-main">
           <span class="composer-export-label">导出</span>
-          <el-select
-            v-model="exportTemplateId"
-            clearable
-            filterable
-            placeholder="渲染模版（可选）"
-            size="small"
-            style="width: 160px"
-          >
-            <el-option
+          <a-select
+ v-model:value="exportTemplateId"
+ allow-clear
+ placeholder="渲染模版（可选）"
+ size="small"
+ style="width: 160px"
+ show-search>
+            <a-select-option
               v-for="item in exportRenderTemplates"
               :key="item.id"
-              :label="item.name || item.id"
-              :value="item.id"
-            />
-          </el-select>
-          <el-select
-            v-model="exportWordStyleId"
-            filterable
-            placeholder="Word 样式"
-            size="small"
-            style="width: 160px"
-          >
-            <el-option
+              :value="item.id">{{ item.name || item.id }}</a-select-option>
+          </a-select>
+          <a-select
+ v-model:value="exportWordStyleId"
+ placeholder="Word 样式"
+ size="small"
+ style="width: 160px"
+ show-search>
+            <a-select-option
               v-for="item in exportWordStyles"
               :key="item.id"
-              :label="item.name || item.id"
-              :value="item.id"
-            />
-          </el-select>
+              :value="item.id">{{ item.name || item.id }}</a-select-option>
+          </a-select>
           <label class="export-draft-toggle composer-export-only">
-            <el-switch v-model="exportConfirmedOnly" size="small" />
+            <a-switch v-model:checked="exportConfirmedOnly" size="small"  />
             <span>仅已确认</span>
           </label>
-          <el-button
-            v-if="taskId"
-            class="chat-action-btn"
-            type="primary"
-            round
-            size="small"
-            :loading="exportBusy"
-            @click="doExportWord()"
-          >
+          <a-button
+ v-if="taskId"
+ class="chat-action-btn"
+ type="primary"
+ size="small"
+ :loading="exportBusy"
+ @click="doExportWord()"
+ shape="round">
             下载 Word
-          </el-button>
-          <el-button
-            v-if="taskId"
-            class="chat-action-btn"
-            round
-            size="small"
-            :loading="exportPdfBusy"
-            @click="doExportPdf()"
-          >
+          </a-button>
+          <a-button
+ v-if="taskId"
+ class="chat-action-btn"
+ size="small"
+ :loading="exportPdfBusy"
+ @click="doExportPdf()"
+ shape="round">
             下载 PDF
-          </el-button>
+          </a-button>
         </div>
       </div>
       <div class="composer">
         <div class="composer-top">
           <div class="composer-tools">
-            <el-select
-              v-model="robotId"
-              clearable
-              filterable
-              placeholder="选择机器人（可选）"
-              style="width: 220px"
-              @change="onRobotChange"
-            >
-              <el-option v-for="item in robots" :key="item.id" :label="item.name" :value="item.id" />
-            </el-select>
-            <el-button
-              size="small"
-              round
-              :loading="sending"
-              @click="openBlueprintLibraryFromComposer"
-            >
+            <a-select
+ v-model:value="robotId"
+ allow-clear
+ placeholder="选择机器人（可选）"
+ style="width: 220px"
+ @change="onRobotChange"
+ show-search>
+              <a-select-option v-for="item in robots" :key="item.id" :value="item.id">{{ item.name }}</a-select-option>
+            </a-select>
+            <a-button
+ size="small"
+ :loading="sending"
+ @click="openBlueprintLibraryFromComposer"
+ shape="round">
               查看蓝本
-            </el-button>
-            <el-button
-              size="small"
-              round
-              type="primary"
-              plain
-              :class="{ 'is-doc-win-on': docWindowOpen }"
-              :disabled="docWindowClosing || docWindowBusy"
-              @click="toggleDocWindow"
-            >
+            </a-button>
+            <a-button
+ size="small"
+ type="primary"
+ :class="{ 'is-doc-win-on': docWindowOpen }"
+ :disabled="docWindowClosing || docWindowBusy"
+ @click="toggleDocWindow"
+ shape="round">
               文档窗口
-            </el-button>
+            </a-button>
           </div>
           <div class="fmt-bar">
             <button type="button" class="fmt" title="加粗" @mousedown.prevent="fmt('bold')"><b>B</b></button>
@@ -1037,32 +970,29 @@
             <span class="hint">{{ statusHint }}</span>
             <span v-if="chainDebugDev" class="intent-audit-dev">{{ chainDebugDev }}</span>
           </div>
-          <el-button
-            type="primary"
-            round
-            :loading="sending"
-            :disabled="composerLocked || !draftPlain.trim()"
-            @click="send"
-          >
+          <a-button
+ type="primary"
+ :loading="sending"
+ :disabled="composerLocked || !draftPlain.trim()"
+ @click="send"
+ shape="round">
             发送
-          </el-button>
+          </a-button>
         </div>
       </div>
     </div>
     </div>
 
-    <el-dialog
-      v-model="searchBranchDialog.visible"
-      class="search-branch-dialog"
-      width="min(420px, 92vw)"
-      :modal="false"
-      :lock-scroll="false"
-      :close-on-click-modal="false"
-      draggable
-      :title="searchBranchDialog.title ? `试检检索 · ${searchBranchDialog.title}` : '试检检索'"
-      destroy-on-close
-      @closed="resetSearchBranchDialog"
-    >
+    <a-modal
+ v-model:open="searchBranchDialog.visible"
+ class="search-branch-dialog"
+ width="min(420px, 92vw)"
+ :mask="false"
+ 
+ :mask-closable="false"
+ :title="searchBranchDialog.title ? `试检检索 · ${searchBranchDialog.title}` : '试检检索'"
+ @afterClose="resetSearchBranchDialog"
+ destroy-on-close centered>
       <div class="search-branch-body">
         <div v-if="searchBranchDialog.loading" class="search-branch-loading">
           <span class="search-branch-spinner" aria-hidden="true" />
@@ -1077,8 +1007,8 @@
           <ul v-else class="search-branch-list">
             <li v-for="(ev, ei) in searchBranchDialog.cards" :key="ei" :class="{ adopted: ev.adopted }">
               <div class="search-branch-meta">
-                <el-tag v-if="ev.adopted" type="success" size="small">采纳</el-tag>
-                <el-tag v-else size="small">未采纳</el-tag>
+                <a-tag v-if="ev.adopted" size="small" color="success">采纳</a-tag>
+                <a-tag v-else size="small">未采纳</a-tag>
                 <span v-if="ev.point" class="search-branch-point">{{ ev.point }}</span>
                 <span v-if="ev.source_file" class="search-branch-src">{{ ev.source_file }}</span>
               </div>
@@ -1092,21 +1022,25 @@
         </ul>
       </div>
       <template #footer>
-        <el-button round @click="searchBranchDialog.visible = false">关闭</el-button>
+        <a-button @click="searchBranchDialog.visible = false" shape="round">关闭</a-button>
       </template>
-    </el-dialog>
+    </a-modal>
 
     <ChapterElementAssociateDialog
       v-model="chapterElementAssociate.visible"
       :chapter-label="chapterElementAssociate.label"
       :associate-scope="chapterElementAssociate.associateScope"
-      :all-elements="elementsForTask(chapterElementAssociate.taskId)"
+      :all-elements="
+        chapterElementAssociate.visible
+          ? elementsForAssociate(chapterElementAssociate.taskId)
+          : []
+      "
       :linked-ids="chapterElementAssociate.linkedIds"
       :task-id="chapterElementAssociate.taskId"
       :robot-id="robotId"
       :pack-slot-options="associatePackSlots"
-      :seed-create-draft="chapterElementAssociate.seedCreateDraft"
-      configure-hint="待补项关联时会自动生成要素草稿，确认保存后即写入本章；要改已有要素可在要素库编辑。"
+      :point-seed="chapterElementAssociate.pointSeed"
+      configure-hint="要点关联可勾选已有要素，或点「根据要点信息生成要素」再建；章节关联直接勾选或手动新建即可。"
       @confirm="onChapterElementAssociateConfirm"
     />
     <CollectBlueprintDialog
@@ -1140,6 +1074,7 @@
         :force-closing="docWindowClosing"
         :outline-reload-token="docOutlineReloadToken"
         :outline-force-reload-token="docOutlineForceReloadToken"
+        :preview-reload-token="docPreviewReloadToken"
         :draft-text="docWindowDraftText"
         :locate="docWindowLocate"
         :writing-pace="latestWritingPace"
@@ -1165,15 +1100,12 @@
         @materials-pack-pending="onDocWindowMaterialsPackPending"
       />
     </aside>
-    <el-dialog
-      v-model="supplementGapDialogVisible"
-      title="补充配置要素"
-      width="460px"
-      append-to-body
-      align-center
-      destroy-on-close
-      class="supplement-gap-dialog"
-    >
+    <a-modal
+ v-model:open="supplementGapDialogVisible"
+ title="补充配置要素"
+ width="460px"
+ class="supplement-gap-dialog"
+ destroy-on-close centered>
       <p v-if="supplementGapPick?.item" class="supplement-gap-dialog-line">
         {{
           supplementGapDisplayLine(supplementGapPick.item, supplementGapPick.card?.payload?.task_id) ||
@@ -1186,20 +1118,28 @@
       </p>
       <p class="supplement-gap-dialog-hint">可关联已有要素，或为待补项新建；也可到文档窗「写作准备」里改要点。</p>
       <template #footer>
-        <el-button @click="supplementGapDialogVisible = false">取消</el-button>
-        <el-button plain @click="supplementOpenDocContent">到文档窗</el-button>
-        <el-button type="primary" plain @click="supplementAssociateFromGap">关联已有要素</el-button>
-        <el-button type="primary" @click="supplementCreateElementFromGap">新建要素</el-button>
+        <a-button @click="supplementGapDialogVisible = false">取消</a-button>
+        <a-button @click="supplementOpenDocContent">到文档窗</a-button>
+        <a-button type="primary" @click="supplementAssociateFromGap">关联已有要素</a-button>
+        <a-button type="primary" @click="supplementCreateElementFromGap">新建要素</a-button>
       </template>
-    </el-dialog>
+    </a-modal>
   </div>
 </template>
 
 <script setup>
 import { computed, inject, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessage, ElMessageBox } from "../ui.js";
 
-import { authHeaders, getUserId, isAbortError, readStream, request } from "../api";
+import {
+  authHeaders,
+  docOutlineUrl,
+  getUserId,
+  isAbortError,
+  isTransientNetworkError,
+  readStream,
+  request,
+} from "../api";
 import {
   mergeWizardPayload,
   normalizeWizardStep,
@@ -1225,8 +1165,8 @@ import {
   sanitizeLibraryBlueprintId,
 } from "../utils/documentBlueprintIdentity";
 import { ASSISTANT_NAME, BRAND_NAME } from "../brand";
-import { recoverClipboardPlain } from "../chatHtml";
-
+import { actionInstruction, chapterBracket } from "../buttonInstruction";
+import { normalizeCompose, presenceForCompose } from "../composeStrategy";
 const isDev = import.meta.env.DEV;
 const brandInitial = BRAND_NAME.charAt(0);
 const composerPlaceholder = `发给${ASSISTANT_NAME}…（Enter 换行，Ctrl+Enter 发送；可粘贴 Word / 富文本）`;
@@ -1234,13 +1174,20 @@ import ChatBlueprintWizardCard from "../components/ChatBlueprintWizardCard.vue";
 import ChatDocumentWindow from "../components/ChatDocumentWindow.vue";
 import ChatElementConfigureCard from "../components/ChatElementConfigureCard.vue";
 import ChatFreeformOutlineCard from "../components/ChatFreeformOutlineCard.vue";
+import ChatMessageBubble from "../components/ChatMessageBubble.vue";
 import ChatTemplateWizardCard from "../components/ChatTemplateWizardCard.vue";
 import ChapterElementAssociateDialog from "../components/ChapterElementAssociateDialog.vue";
 import ChapterHtmlEditor from "../components/ChapterHtmlEditor.vue";
 import ChapterPickerTree from "../components/ChapterPickerTree.vue";
 import CollectBlueprintDialog from "../components/CollectBlueprintDialog.vue";
-import { elementKindLabel, elementSummary, elementNeedsSupplement } from "../elementUi";
 import {
+  elementKindLabel,
+  elementSummary,
+  elementNeedsSupplement,
+  mergeElementNodes,
+} from "../elementUi";
+import {
+  chapterElementIdsForPersist,
   pointsTextFromChapter,
   syncPointItemsFromPoints,
   linkPointItemsToElements,
@@ -1352,10 +1299,33 @@ const suppressElementConfigureAutoOpen = ref(false);
 const docOutlineReloadToken = ref(0);
 /** 配置/分析/写作操作完成后强制 fresh 重拉 */
 const docOutlineForceReloadToken = ref(0);
+/** 写完一章后强制重拉全文预览，避免仍显示上一稿 */
+const docPreviewReloadToken = ref(0);
+/** 文档窗 PUT 落盘后递增，经 ui-state 同步以失效服务端 turn_context */
+const clientConfigRevision = ref(0);
+
+function bumpClientConfigRevision() {
+  clientConfigRevision.value += 1;
+  schedulePersistUiState(true);
+}
 
 function bumpDocOutlineReload({ force = false } = {}) {
   if (force) docOutlineForceReloadToken.value += 1;
   else docOutlineReloadToken.value += 1;
+}
+
+function writingTaskIdForTask(taskId) {
+  const tid = String(taskId || "").trim();
+  if (!tid) return "";
+  const docs = conversationDocuments.value || [];
+  const hit =
+    docs.find((d) => String(d.writingTaskId || "") === tid) ||
+    docs.find((d) => String(d.taskId || "") === tid);
+  return String(hit?.writingTaskId || "").trim();
+}
+
+function bumpDraftPreviewReload() {
+  docPreviewReloadToken.value += 1;
 }
 /** 文档窗定位驱动：token 变化时窗口 watch 并选中章节/切 Tab */
 const docWindowLocate = ref({
@@ -1396,10 +1366,16 @@ function driveDocWindow(
     elementIds = null,
     newElementIds = null,
     pointItems = null,
+    point_items = null,
     pointItemLink = null,
+    associateScope = "",
     points = null,
     keywords = null,
     describes = "",
+    structure_only = undefined,
+    clear_element_bindings = undefined,
+    draftHtml = "",
+    draftTitle = "",
     sessionEpoch: driveEpoch = null,
     sessionId: driveSessionId = "",
   } = {}
@@ -1434,13 +1410,14 @@ function driveDocWindow(
       why === "write_running" ||
       why === "write_batch_advance"
     ) {
+      // 写作进度在会话卡展示；文档窗定位到写作准备 / 全文预览即可
       nextTab = "content";
       if (!nextMainView) nextMainView = "preview";
     } else if (why === "analyze") nextTab = key ? "config" : "topology";
     else if (why === "select_write" || why === "open_doc_window") nextTab = key ? "config" : "topology";
     else nextTab = "config";
   }
-  if (nextTab === "draft" || nextTab === "preview") {
+  if (nextTab === "draft" || nextTab === "preview" || nextTab === "process" || nextTab === "text" || nextTab === "progress") {
     if (nextTab === "preview" && !nextMainView) nextMainView = "preview";
     nextTab = "content";
     if (!nextMainView) nextMainView = "preview";
@@ -1468,6 +1445,33 @@ function driveDocWindow(
   const curId = String(docWindowActiveId.value || "").trim();
   const curDoc = curId ? docs.find((d) => d.id === curId) : null;
   const curWid = String(curDoc?.writingTaskId || curDoc?.taskId || "").trim();
+  const locateSameDocOnly = [
+    "analyze",
+    "write_running",
+    "write_chapter_done",
+    "write_batch_advance",
+    "write_awaiting_confirm",
+  ].includes(why);
+  if (locateSameDocOnly && curId) {
+    const pinned = normalizeDocumentRegistryKey(streamFocusPinnedKey);
+    const showing =
+      (curWid && curWid === tid) ||
+      curId === hit.id ||
+      curId === `task:${tid}` ||
+      curId === `bp:${tid}`;
+    const pinOk =
+      !pinned ||
+      pinned === hit.id ||
+      pinned === `task:${tid}` ||
+      pinned === `bp:${tid}`;
+    // 已切到另一份文档：后台分析/写作不得把小窗抢回来
+    if (!showing || !pinOk) {
+      if (showing && (why === "write_chapter_done" || why === "write_awaiting_confirm")) {
+        bumpDraftPreviewReload();
+      }
+      return;
+    }
+  }
   if (!(curId && curWid && curWid === tid && curDoc)) {
     docWindowActiveId.value = hit.id;
   }
@@ -1501,10 +1505,23 @@ function driveDocWindow(
     ...(Array.isArray(elementIds) ? { elementIds } : {}),
     ...(Array.isArray(newElementIds) ? { newElementIds } : {}),
     ...(Array.isArray(pointItems) ? { pointItems } : {}),
+    ...(Array.isArray(point_items) ? { point_items } : {}),
+    ...(Array.isArray(point_items) && !Array.isArray(pointItems)
+      ? { pointItems: point_items }
+      : {}),
     ...(pointItemLink && typeof pointItemLink === "object" ? { pointItemLink } : {}),
+    ...(String(associateScope || "").trim()
+      ? { associateScope: String(associateScope).trim() }
+      : {}),
     ...(Array.isArray(points) ? { points } : {}),
     ...(Array.isArray(keywords) ? { keywords } : {}),
     ...(describes ? { describes: String(describes) } : {}),
+    ...(structure_only !== undefined ? { structure_only } : {}),
+    ...(clear_element_bindings !== undefined
+      ? { clear_element_bindings: Boolean(clear_element_bindings) }
+      : {}),
+    ...(String(draftHtml || "").trim() ? { draftHtml: String(draftHtml) } : {}),
+    ...(String(draftTitle || "").trim() ? { draftTitle: String(draftTitle) } : {}),
   };
 }
 
@@ -1559,10 +1576,14 @@ function alignSessionFocusFromDoc(doc) {
 
 /** 本轮流式已切过焦点（focus_document）；softSync 勿用旧 activeBefore / 脏 serverFocus 打回 */
 let streamFocusPinnedKey = "";
+/** 正在跑页面级分析的写作任务 id；切到其它文档时勿把分析锁带到新窗口 */
+let pageStudyOwnerTaskId = "";
 /** 程序切焦点（流式/ syncDocWindow）时勿再 POST announce */
 let programmaticFocusSyncDepth = 0;
 /** 本轮写作流水线已开跑且尚未 run_done；避免 done/finally 过早解锁小窗 */
 let writingStreamActive = false;
+/** 本章刚写出的完整 HTML，写完立刻铺进全文预览 */
+const liveWriteHtmlByChapter = new Map();
 
 function wizardDocKeyFromPayload(payload, fallback = "") {
   const p = payload && typeof payload === "object" ? payload : {};
@@ -1687,12 +1708,15 @@ function syncDocWindowToFocusKey(focusKey, { stashCurrent = true } = {}) {
       driveDocWindow("write_running", {
         taskId: runTid,
         chapterKey: runKey,
-        mainView: "preview",
+        mainView: "chapter",
+        tab: "content",
       });
     }
+    syncStudyLockToActiveDoc();
     return;
   }
   bumpDocOutlineReload({ force: true });
+  syncStudyLockToActiveDoc();
 }
 
 /** 文档下拉切换：先改 activeId（下拉名称立刻变），后台落盘；目录由小窗 identity watch 拉取，勿再 force 双拉 */
@@ -1702,8 +1726,8 @@ async function onDocWindowActiveId(nextId) {
     if (id) docWindowActiveId.value = id;
     return;
   }
-  // 分析/写作/配置进行中：禁止手动切换其它文档
-  if (docWindowOpsLocked.value || docWindowBusy.value) {
+  // 写作/保存进行中禁止切走；分析中允许切到另一份（分析在后台继续）
+  if (isDocWindowWriteLockActive() || docWindowBusy.value) {
     ElMessage.warning(
       docWindowOpsLockLabel.value
         ? `${docWindowOpsLockLabel.value}，请稍后再切换文档`
@@ -1734,6 +1758,7 @@ async function onDocWindowActiveId(nextId) {
   if (!fromProgram) {
     scrollChatToFocusThread();
   }
+  syncStudyLockToActiveDoc();
 }
 
 /** 切文档 tab 时勿沿用上一份的蓝本向导 live 状态 */
@@ -1800,6 +1825,13 @@ async function toggleDocWindow() {
 async function persistUiStateForced() {
   if (!sessionId.value) return;
   const payload = buildUiStatePayload();
+  // 焦点只走 /focus-document；这里带上会把进行中的「切换到另一份」打回旧文档
+  delete payload.focus_document_key;
+  delete payload.focus_task_id;
+  delete payload.focus_blueprint_id;
+  if (payload.freeform_patch && typeof payload.freeform_patch === "object") {
+    delete payload.freeform_patch.focus_document_key;
+  }
   await request(`/api/writing/chat/sessions/${encodeURIComponent(sessionId.value)}/ui-state`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
@@ -1849,6 +1881,7 @@ function armStudyLockWatchdog() {
 /** 清掉分析残留锁：study_stream_active / trigger / opsLock / 卡住的 sending */
 function releaseStudyOpsLock({ notify = false, reason = "" } = {}) {
   pageStudyInflight = false;
+  pageStudyKickArmed = false;
   pageStudyToken = "";
   pointsDraftInflight.value = false;
   clearStudyLockWatchdog();
@@ -1862,6 +1895,7 @@ function releaseStudyOpsLock({ notify = false, reason = "" } = {}) {
     liveBlueprintWizard.value = next;
   }
   setDocWindowOpsLock(false);
+  pageStudyOwnerTaskId = "";
   if (sending.value) {
     try {
       streamAbortController?.abort();
@@ -1903,11 +1937,50 @@ function isDocWindowWriteLockActive() {
   );
 }
 
+function windowIsShowingTask(tid) {
+  const want = String(tid || "").trim();
+  if (!want) return false;
+  const pinned = normalizeDocumentRegistryKey(streamFocusPinnedKey);
+  const curId = normalizeDocumentRegistryKey(String(docWindowActiveId.value || "").trim());
+  const focusId = pinned || curId;
+  if (!focusId) return false;
+  if (focusId === `task:${want}` || focusId === `bp:${want}` || focusId === want) return true;
+  const hit = (conversationDocuments.value || []).find((d) => d.id === focusId);
+  const hid = String(hit?.writingTaskId || hit?.taskId || "").trim();
+  return Boolean(hid && hid === want);
+}
+
+function syncStudyLockToActiveDoc() {
+  if (isDocWindowWriteLockActive()) return;
+  if (!pageStudyInflight) return;
+  const owner = String(pageStudyOwnerTaskId || "").trim();
+  if (owner && windowIsShowingTask(owner)) {
+    noteStudyProgressHeartbeat();
+    setDocWindowOpsLock(true, docWindowOpsLockLabel.value || "正在分析章节…");
+    return;
+  }
+  setDocWindowOpsLock(false);
+}
+
+function isDocWindowStudyLockLabel(label = "") {
+  return /分析|学习|要点|原文|解析/.test(String(label || ""));
+}
+
 function setDocWindowStudyBusy(on, label = "") {
-  // 写作锁优先：分析收尾不得清掉「正在写作…」
-  if (!on && isDocWindowWriteLockActive()) return;
+  if (!on) {
+    const cur = String(docWindowOpsLockLabel.value || "");
+    // 仅当当前确实是写作锁时才跳过；分析锁必须能收掉（勿被残留 writingStreamActive 永久挡住）
+    if (/写作|书写/.test(cur) && !isDocWindowStudyLockLabel(cur)) return;
+    setDocWindowOpsLock(false);
+    return;
+  }
+  const owner = String(pageStudyOwnerTaskId || "").trim();
+  // 正在看另一份文档：分析继续跑，但不要锁死当前窗口
+  if (owner && String(docWindowActiveId.value || "").trim() && !windowIsShowingTask(owner)) {
+    return;
+  }
   // 心跳只在真实进度事件里刷新，这里上锁不重置超时
-  setDocWindowOpsLock(on, label || "正在依据样本分析章节…");
+  setDocWindowOpsLock(true, label || "正在依据样本分析章节…");
 }
 
 function setDocWindowWriteBusy(on, label = "") {
@@ -1915,12 +1988,14 @@ function setDocWindowWriteBusy(on, label = "") {
 }
 
 function onWizardStudySynced(payload = {}) {
-  // 范围学习中途：软刷新即可看到「已分析」；整轮结束仍可 force
+  // 中途：driveDocWindow(analyze) 已补本章要点，勿全量拉目录
   const midStream = Boolean(payload?.chapter_key);
-  if (midStream) noteStudyProgressHeartbeat();
-  bumpDocOutlineReload({ force: !midStream });
-  const live = liveBlueprintWizard.value || {};
-  if (!live.study_stream_active && !midStream && !pageStudyInflight && !pointsDraftInflight.value) {
+  if (midStream) {
+    noteStudyProgressHeartbeat();
+    return;
+  }
+  bumpDocOutlineReload({ force: true });
+  if (!pageStudyInflight && !pointsDraftInflight.value) {
     setDocWindowStudyBusy(false);
   }
 }
@@ -1969,7 +2044,7 @@ const STATUS_LABELS = {
   confirmed: "已写作",
   needs_human: "已写作",
   skipped: "已跳过",
-  studying: "分析中",
+  studying: "待开写",
   running: "进行中",
   completed: "已完成",
   done: "完成",
@@ -2005,7 +2080,7 @@ const ACTION_DISPLAY_LABELS = {
   confirm_all_chapters: "统一确认章节",
   configure_chapter: "保存章节配置",
   add_chapter_element: "添加章节要素",
-  associate_elements: "关联要素",
+  associate_elements: "关联章节要素",
   open_element_library: "查看要素",
   retry_chapter: "保存并开始写作",
   retry_search_chapter: "仅重试检索",
@@ -2018,6 +2093,7 @@ const ACTION_DISPLAY_LABELS = {
   save_freeform_as_blueprint: "收录到蓝本库",
   sync_document_to_blueprint_library: "同步到蓝本库",
   generate_freeform_points: "帮我生成写作要点",
+  generate_chapter_boilerplate: "帮我生成套话正文",
   skip_freeform_points: "先不配要点，直接开写",
   resolve_intent_clarify: "确认意图选项",
   materials_pack_skip: "不用资料包",
@@ -2058,10 +2134,14 @@ function blueprintWizardActionLabel(payload = {}) {
   const command = String(payload.wizard_command || "").trim();
   if (command === "re_study_chapters") {
     const method = String(payload.study_method || "").trim();
-    if (method === "source") return "根据原文分析本章";
-    if (method === "auto") return "自动分析本章";
-    if (method === "sample") return "依据样本分析本章";
-    return "重新分析本章";
+    const keys = payload.chapter_keys || [];
+    const n = Array.isArray(keys) ? keys.filter(Boolean).length : 0;
+    const tag = chapterBracket(payload);
+    const scope = n > 1 ? `（${n}章）` : tag;
+    if (method === "source") return scope ? `根据原文分析章节${scope}` : "根据原文分析本章";
+    if (method === "auto") return scope ? `自动分析章节${scope}` : "自动分析本章";
+    if (method === "sample") return scope ? `依据样本分析章节${scope}` : "依据样本分析本章";
+    return scope ? `分析章节${scope}` : "重新分析本章";
   }
   if (command && WIZARD_COMMAND_USER_LABELS[command]) {
     return WIZARD_COMMAND_USER_LABELS[command];
@@ -2269,28 +2349,63 @@ function isInternalChapterSlug(text, chapterKey = "") {
   return /^[A-Za-z][A-Za-z0-9_-]*$/.test(t);
 }
 
+function isPlaceholderChapterName(value) {
+  const t = String(value || "").trim();
+  return !t || t === "本章" || t === "当前章节";
+}
+
 /** 会话里展示用章名：序号 + 中文标题；找不到时用「本章」，绝不直接露 chapter_key */
 function chapterUserLabel(taskId, chapterKey, hints = {}) {
-  const key = String(chapterKey || "").trim();
-  if (!key) return "本章";
+  let key = String(chapterKey || hints.chapter_key || hints.focus_chapter_key || "").trim();
   let seq = String(hints.sequence || "").trim();
-  let title = String(hints.title || hints.chapter_title || "").trim();
-  if (isInternalChapterSlug(title, key)) title = "";
+  let title = String(hints.title || "").trim();
+  if (isPlaceholderChapterName(title) || isPlaceholderChapterName(hints.chapter_title)) {
+    if (isPlaceholderChapterName(title)) title = "";
+  } else if (!title) {
+    title = String(hints.chapter_title || "").trim();
+  }
+  if (isPlaceholderChapterName(title) || isInternalChapterSlug(title, key)) title = "";
 
   const absorb = (ch) => {
-    if (!ch || String(ch?.key || "").trim() !== key) return;
+    if (!ch || (key && String(ch?.key || "").trim() !== key)) return;
     if (!seq) seq = String(ch.sequence || ch.config?.sequence || "").trim();
     const t = String(ch.title || ch.config?.title || "").trim();
-    if (t && !isInternalChapterSlug(t, key)) title = title || t;
+    if (t && !isPlaceholderChapterName(t) && !isInternalChapterSlug(t, key)) {
+      title = title || t;
+    }
+    const lab = String(ch.chapter_label || ch.label || "").trim();
+    if ((!seq || !title) && lab && !isPlaceholderChapterName(lab)) {
+      const m = lab.match(/^(\d+(?:\.\d+)*)\s+(.+)$/);
+      if (m) {
+        seq = seq || m[1];
+        title = title || m[2];
+      } else if (!title && !isInternalChapterSlug(lab, key)) {
+        title = lab;
+      }
+    }
   };
 
   const tid = String(taskId || hints.task_id || "").trim();
-  if (tid) {
+  if (!key) {
+    const prog = latestProgressCards().find((c) => c?.type === "progress");
+    const chapters = prog?.payload?.chapters || [];
+    const focus =
+      chapters.find((c) => c?.is_running || c?.is_next) ||
+      chapters.find((c) => String(c?.key || "").trim()) ||
+      null;
+    key = String(
+      hints.focus_chapter_key || prog?.payload?.focus_chapter_key || focus?.key || ""
+    ).trim();
+    if (focus) absorb(focus);
+  }
+  if (tid && key) {
     const edit = chapterEdits.value[chapterEditKey(tid, key)];
     if (edit) {
       if (!seq) seq = String(edit.sequence || "").trim();
       const et = String(edit.title || "").trim();
-      if (et && !isInternalChapterSlug(et, key)) title = title || et;
+      if (et && !isPlaceholderChapterName(et) && !isInternalChapterSlug(et, key)) {
+        title = title || et;
+      }
     }
   }
   for (const card of latestProgressCards()) {
@@ -2305,53 +2420,141 @@ function chapterUserLabel(taskId, chapterKey, hints = {}) {
     }
     for (const ch of doc.chapters || []) absorb(ch);
   }
+  if ((!seq || !title) && !tid) {
+    for (const doc of conversationDocuments.value || []) {
+      for (const ch of doc.chapters || []) absorb(ch);
+    }
+  }
   const label = [seq, title].filter(Boolean).join(" ").trim();
   return label || "本章";
 }
 
 function polishUserChatText(text) {
   const raw = String(text || "");
-  const m = raw.match(/^(保存并重写|保存并开始写作)「([^」]+)」$/);
+  const m = raw.match(/^(保存并重写|保存并开始写作|重写章节|开始写作章节)[「\[]([^」\]]+)[」\]]$/);
   if (!m) return raw;
   const [, prefix, quoted] = m;
-  if (!isInternalChapterSlug(quoted, quoted)) return raw;
   const prog = latestProgressCards().find((c) => c?.type === "progress");
-  const tid = String(prog?.payload?.task_id || "").trim();
-  const label = chapterUserLabel(tid, quoted, { task_id: tid });
-  return `${prefix}「${label}」`;
+  const tid = String(prog?.payload?.task_id || taskId.value || "").trim();
+  const quotedKey = isPlaceholderChapterName(quoted) ? "" : quoted;
+  const needResolve = isPlaceholderChapterName(quoted) || isInternalChapterSlug(quoted, quoted);
+  const label = needResolve
+    ? chapterUserLabel(tid, quotedKey, { task_id: tid, chapter_key: quotedKey })
+    : quoted;
+  const shown = isPlaceholderChapterName(label) ? quoted : label;
+  if (isPlaceholderChapterName(shown) && !needResolve) return raw;
+  if (prefix === "保存并重写" || prefix === "重写章节") return `重写章节[${shown}]`;
+  if (prefix === "保存并开始写作" || prefix === "开始写作章节") return `开始写作章节[${shown}]`;
+  return `${prefix}[${shown}]`;
 }
 
 function actionDisplayLabel(action, payload = {}) {
   const key = String(action || "").trim();
-  const base = ACTION_DISPLAY_LABELS[key] || "继续";
   if (key === "blueprint_wizard") {
     return blueprintWizardActionLabel(payload);
   }
-  if (key === "select_write_chapters") {
-    const keys = payload.chapter_keys || payload.write_chapter_keys || [];
-    const n = Array.isArray(keys) ? keys.length : 0;
-    return n ? `确认要写的章节（${n} 章）` : base;
+  const chap = chapterUserLabel(
+    payload.task_id,
+    payload.chapter_key || payload.focus_chapter_key,
+    payload
+  );
+  const instruction = actionInstruction(
+    key,
+    payload,
+    isPlaceholderChapterName(chap) ? "" : chap
+  );
+  if (instruction) return instruction;
+  return ACTION_DISPLAY_LABELS[key] || "继续";
+}
+
+const CHAPTER_SCOPED_ACTIONS = new Set([
+  "retry_chapter",
+  "retry_search_chapter",
+  "confirm_chapter",
+  "configure_chapter",
+  "get_chapter_info",
+  "generate_chapter_describes",
+  "generate_chapter_boilerplate",
+  "associate_elements",
+  "add_chapter_element",
+  "start_writing",
+  "generate_freeform_points",
+  "skip_writing_supplement_check",
+  "check_writing_supplements",
+  "dismiss_writing_supplement",
+  "write_analyzed_only",
+  "select_write_chapters",
+  "confirm_all_chapters",
+  "blueprint_wizard",
+]);
+
+function enrichActionPayload(action, raw = {}) {
+  const payload = { ...(raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {}) };
+  const tid = String(payload.task_id || payload.taskId || taskId.value || "").trim();
+  if (tid) payload.task_id = tid;
+  const nested = payload.chapter && typeof payload.chapter === "object" ? payload.chapter : null;
+  if (nested) {
+    if (!String(payload.chapter_key || "").trim()) {
+      payload.chapter_key = String(nested.key || "").trim();
+    }
+    if (!String(payload.sequence || "").trim()) {
+      payload.sequence = String(nested.sequence || "").trim();
+    }
+    if (isPlaceholderChapterName(payload.title) && nested.title) {
+      payload.title = String(nested.title || "").trim();
+    }
   }
-  if (key === "start_writing") {
-    const pace = String(payload.writing_pace || "").trim().toLowerCase();
-    if (["batch", "all", "full"].includes(pace)) return "全部写完再确认";
-    if (["step", "chapter", "one"].includes(pace)) return "写一章确认一章";
+  const keys = (payload.chapter_keys || payload.write_chapter_keys || payload.chapterKeys || [])
+    .map((k) => String(k || "").trim())
+    .filter(Boolean);
+  if (keys.length) payload.chapter_keys = keys;
+  let chapterKey = String(
+    payload.chapter_key ||
+      payload.chapterKey ||
+      payload.focus_chapter_key ||
+      payload.locate_chapter_key ||
+      ""
+  ).trim();
+  if (!chapterKey && keys.length === 1) chapterKey = keys[0];
+  if (chapterKey) payload.chapter_key = chapterKey;
+  if (CHAPTER_SCOPED_ACTIONS.has(String(action || "").trim())) {
+    const resolved = chapterUserLabel(tid, chapterKey, payload);
+    const seqNow = String(payload.sequence || "").trim();
+    let titleNow = String(payload.title || "").trim();
+    if (isPlaceholderChapterName(titleNow) || isInternalChapterSlug(titleNow, chapterKey)) {
+      titleNow = "";
+    }
+    if (!isPlaceholderChapterName(resolved)) {
+      const m = String(resolved).match(/^(\d+(?:\.\d+)*)\s+(.+)$/);
+      if (!seqNow && m) payload.sequence = m[1];
+      if (!titleNow) {
+        payload.title = m ? m[2] : resolved;
+      } else {
+        payload.title = titleNow;
+      }
+      payload.chapter_title = payload.title;
+    }
+    const lab = String(payload.chapter_label || payload.study_message || "").trim();
+    if (lab && (!payload.sequence || isPlaceholderChapterName(payload.title))) {
+      const m = lab.match(/^(\d+(?:\.\d+)*)\s+(.+)$/);
+      if (m) {
+        if (!payload.sequence) payload.sequence = m[1];
+        if (isPlaceholderChapterName(payload.title)) {
+          payload.title = m[2];
+          payload.chapter_title = m[2];
+        }
+      }
+    }
+    const seqs = payload.chapter_sequences;
+    if (Array.isArray(seqs) && seqs[0] && !String(payload.sequence || "").trim()) {
+      payload.sequence = String(seqs[0]).trim();
+    }
   }
-  if (key === "retry_chapter") {
-    const chap = chapterUserLabel(payload.task_id, payload.chapter_key, payload);
-    const mode = String(payload._write_mode || "").trim();
-    if (mode === "rewrite") return `保存并重写「${chap}」`;
-    return `保存并开始写作「${chap}」`;
+  const packName = String(payload.pack_name || payload.name || "").trim();
+  if (packName && String(action || "").startsWith("materials_pack_")) {
+    payload.pack_name = packName;
   }
-  if (key === "select_blueprint") {
-    const title = String(payload.title || payload.blueprint_title || "").trim();
-    return title ? `选用「${title}」` : base;
-  }
-  if (key === "resolve_intent_clarify") {
-    const label = String(payload.option_label || payload.option_id || "").trim();
-    return label || base;
-  }
-  return base;
+  return payload;
 }
 
 function friendlyMessageText(item) {
@@ -2401,6 +2604,24 @@ function processMessageAsDone(message) {
   const raw = String(message || "").trim();
   if (!raw) return raw;
   const ellip = /(?:…|\.{2,})$/;
+  // 分析进度条以 ▶ 开头，须单独收束，否则会一直显示「正在分析」
+  const studyRunning = raw.match(
+    /^▶\s*(?:\((\d+)\/(\d+)\)\s*)?正在分析[「"]([^」"]+)[」"]/
+  );
+  if (studyRunning) {
+    const idx = studyRunning[1];
+    const total = studyRunning[2];
+    const label = String(studyRunning[3] || "").trim() || "章节";
+    if (idx && total) return `✓ (${idx}/${total}) 「${label}」已分析`;
+    return `✓ 「${label}」已分析`;
+  }
+  const studyProg = raw.match(/^▶\s*分析进度\s+(\d+)\/(\d+)\s*·\s*(.+)$/);
+  if (studyProg) {
+    return `✓ 分析进度 ${studyProg[1]}/${studyProg[2]} · ${String(studyProg[3] || "").trim()}`;
+  }
+  if (/^▶\s*正在分析/.test(raw)) {
+    return raw.replace(/^▶\s*/, "✓ ").replace(/正在分析/, "已分析").replace(ellip, "");
+  }
   const mapped = [
     [/^正在起草各章写作要点(?:…|\.{2,})?$/, "各章写作要点已起草"],
     [/^正在生成写作要点(?:…|\.{2,})?$/, "写作要点已生成"],
@@ -2440,12 +2661,45 @@ function processMessageAsDone(message) {
   return raw;
 }
 
+function isStudyRunningProcessMessage(message) {
+  const msg = String(message || "").trim();
+  return /^▶/.test(msg) && /正在分析|分析进度/.test(msg);
+}
+
+/** 清掉/收束分析中的 ▶ 过程行，避免完成后仍显示「正在分析」 */
+function settleStudyRunningSteps(msgRef, { label = "", all = false } = {}) {
+  if (!msgRef?.steps?.length) return;
+  const needle = String(label || "").trim();
+  const next = [];
+  for (const row of msgRef.steps) {
+    const msg = String(row?.message || "");
+    if (!isStudyRunningProcessMessage(msg)) {
+      next.push(row);
+      continue;
+    }
+    if (all || !needle || msg.includes(needle)) {
+      // 有明确完成行时直接丢掉进行中行；否则收成 ✓
+      if (all || needle) continue;
+      next.push({ ...row, message: processMessageAsDone(msg) });
+      continue;
+    }
+    next.push(row);
+  }
+  msgRef.steps = next;
+}
+
 function finalizeAssistantProcessSteps(msgRef) {
   if (!msgRef?.steps?.length) return;
   const mapped = msgRef.steps.map((row) => {
     const msg = String(row?.message || "");
     if (!msg) return row;
-    if (!/^正在/.test(msg) && !/正在自动生成/.test(msg)) return row;
+    if (
+      !/^正在/.test(msg) &&
+      !/正在自动生成/.test(msg) &&
+      !isStudyRunningProcessMessage(msg)
+    ) {
+      return row;
+    }
     return { ...row, message: processMessageAsDone(msg) };
   });
   // 后端完成态 + 前端收束可能各写一条相同文案，合并连续重复
@@ -2562,6 +2816,83 @@ function evidenceBlockTitle(ch) {
   return elementLike ? `要素资料 · ${n}` : `证据 · ${n}`;
 }
 
+/** 进度卡：本章获取到的要素（会话窗口统一展示） */
+function chapterObtainedElements(ch) {
+  const rows = [];
+  const seen = new Set();
+  const push = (raw, scope = "chapter") => {
+    if (!raw || typeof raw !== "object") return;
+    let eid = String(raw.id || "").trim();
+    if (eid.startsWith("el-el-")) eid = eid.slice(3);
+    const name = String(raw.name || raw.point || eid || "要素").trim() || "要素";
+    const key = eid || `name:${name}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    const excerpt = String(raw.value || raw.excerpt || raw.result || "").trim();
+    rows.push({
+      id: eid || key,
+      name,
+      kind: String(raw.kind || raw.location || "").trim(),
+      query: String(raw.query || "").trim(),
+      excerpt: excerpt.slice(0, 480),
+      ok: Boolean(raw.ok ?? excerpt),
+      scope: scope === "point" ? "point" : "chapter",
+    });
+  };
+  for (const row of ch?.element_results || []) push(row, "chapter");
+  for (const ev of ch?.evidence || []) {
+    push(
+      {
+        id: String(ev?.id || "").replace(/^el-/, "") || ev?.id,
+        name: ev?.point || ev?.name,
+        kind: ev?.location || ev?.kind,
+        query: ev?.query,
+        value: ev?.excerpt || ev?.value,
+        ok: Boolean(String(ev?.excerpt || ev?.value || "").trim()),
+      },
+      "chapter"
+    );
+  }
+  return rows.slice(0, 12);
+}
+
+function chapterObtainedOkCount(ch) {
+  return chapterObtainedElements(ch).filter((row) => row.ok).length;
+}
+
+function chapterObtainedSummary(ch) {
+  const list = chapterObtainedElements(ch);
+  if (!list.length) return "";
+  const ok = list.filter((row) => row.ok).length;
+  return `获取要素 ${ok}/${list.length}`;
+}
+
+function chapterCheckActionLabel(action) {
+  const key = String(action || "").trim();
+  return (
+    {
+      accept: "通过",
+      revise: "退回重写",
+      needs_human: "转人工",
+    }[key] || ""
+  );
+}
+
+/** 折叠行短提示：重写 / 评分 / 要素 */
+function chapterFoldHint(ch) {
+  if (!ch || ch.structure_only) return "";
+  const parts = [];
+  const rev = Number(ch.revision_count || 0);
+  const maxRev = Number(ch.max_revisions || 5);
+  if (rev > 0) parts.push(`重写 ${rev}/${maxRev}`);
+  const score = Number(ch.check_score || 0);
+  const pass = Number(ch.write_score_pass || 70);
+  if (score > 0) parts.push(`评分 ${score}/${pass}`);
+  const els = chapterObtainedSummary(ch);
+  if (els) parts.push(els);
+  return parts.join(" · ");
+}
+
 function chapterRunPoints(ch) {
   const cfg = ch?.config || {};
   const raw = Array.isArray(cfg.points) ? cfg.points : Array.isArray(ch?.points) ? ch.points : [];
@@ -2574,6 +2905,121 @@ function chapterRunDescribes(ch) {
 
 function chapterRunAux(ch) {
   return String(ch?.config?.aux_prompt || ch?.aux_prompt || "").trim();
+}
+
+/** 进度卡顶部：重试次数（加大）+ 评分 */
+function chapterScoreBanner(ch) {
+  if (!ch || ch.structure_only) return null;
+  const rev = Number(ch.revision_count || 0);
+  const maxRev = Number(ch.max_revisions || 5);
+  const score = Number(ch.check_score || 0);
+  const pass = Number(ch.write_score_pass || 70);
+  const act = chapterCheckActionLabel(ch.check_action);
+  const hasCheck = score > 0 || act || (ch.checks || []).length;
+  if (!rev && !hasCheck) return null;
+  const retry =
+    rev > 0
+      ? `重试 ${rev}/${maxRev}`
+      : hasCheck
+        ? `重试 0/${maxRev}`
+        : "";
+  const scoreText = score > 0
+    ? `评分 ${score} / 阈值 ${pass}${score < pass ? " · 未达" : " · 达线"}`
+    : "";
+  return { retry, score: scoreText };
+}
+
+/** 进度展开：图2 风格要点列表（写作要点 / 重写 / 评分 / 过程） */
+function chapterProgressLog(ch) {
+  if (!ch || ch.structure_only) return [];
+  const rows = [];
+  const title = String(ch.title || ch.key || "本章").trim();
+  const st = String(ch.status_label || ch.status || "").trim();
+  const points = chapterRunPoints(ch);
+  const describes = chapterRunDescribes(ch);
+  const aux = chapterRunAux(ch);
+  const rev = Number(ch.revision_count || 0);
+  const maxRev = Number(ch.max_revisions || 5);
+  const score = Number(ch.check_score || 0);
+  const pass = Number(ch.write_score_pass || 70);
+  const act = chapterCheckActionLabel(ch.check_action);
+  const els = chapterObtainedElements(ch);
+
+  const headBits = ["写作"];
+  if (st) headBits.push(st);
+  if (points.length) headBits.push(`${title} 按 ${points.length} 条写作要点撰写`);
+  else headBits.push(title);
+  rows.push({ text: headBits.join(" · ") });
+
+  if (points.length) {
+    rows.push({
+      kind: "points",
+      text: `写作要点 · ${points.length} 条`,
+      items: points.map((p, i) => `${i + 1}. ${p}`),
+    });
+  }
+  if (describes) {
+    rows.push({
+      text: `章节说明：${describes.length > 220 ? `${describes.slice(0, 220)}…` : describes}`,
+      mute: true,
+    });
+  }
+  if (aux) {
+    rows.push({
+      text: `补充提示：${aux.length > 160 ? `${aux.slice(0, 160)}…` : aux}`,
+      mute: true,
+    });
+  }
+
+  if (els.length) {
+    const ok = els.filter((e) => e.ok).length;
+    rows.push({ text: `获取要素 ${ok}/${els.length}` });
+    for (const ev of els.slice(0, 6)) {
+      const name = String(ev.name || "要素").trim();
+      const bit = ev.ok
+        ? String(ev.excerpt || ev.value || "已取到").trim().slice(0, 100)
+        : "未取到";
+      rows.push({ text: `${name}：${bit}`, nest: true, mute: true });
+    }
+  }
+
+  if (rev > 0 || score > 0 || act || (ch.checks || []).length) {
+    const bits = [];
+    if (rev > 0) bits.push(`已重试 ${rev}/${maxRev} 次`);
+    else bits.push(`未自动重试（上限 ${maxRev}）`);
+    if (score > 0) bits.push(`评分 ${score}（阈值 ${pass}${score < pass ? " · 未达" : " · 达线"}）`);
+    if (act) bits.push(`检查${act}`);
+    rows.push({ text: bits.join(" · "), emph: true });
+    const reason = String(ch.check_reason || "").trim();
+    if (reason) rows.push({ text: reason, nest: true, mute: true });
+  }
+
+  for (const step of ch.steps || []) {
+    const label = String(step.step_label || step.step || "步骤").trim();
+    const sst = String(step.status_label || step.status || "").trim();
+    const note = String(step.note || "").trim();
+    rows.push({
+      text: [label, sst, note].filter(Boolean).join(" · "),
+      mute: true,
+    });
+  }
+
+  const draftBody = String(ch.draft_preview || ch.draft_text || "").trim();
+  if (draftBody) {
+    rows.push({
+      kind: "draft",
+      text: `写作结果 · 「${title}」`,
+      html: toDisplayHtml(draftBody) || draftBody,
+    });
+  }
+
+  if (!ch.is_running && (ch.has_draft || st.includes("已") || score > 0 || rev > 0)) {
+    rows.push({
+      text: `「${title}」写作完成`,
+      emph: true,
+    });
+  }
+  return rows;
 }
 
 /** 重试/开写后用服务端新草稿覆盖本地编辑区（用户未手工改过时） */
@@ -2660,7 +3106,11 @@ function focusEditableChapter(card) {
 }
 
 const REDUNDANT_PROCESS_RE =
-  /(本章写完了|确认后我再写下章|整理确认面板|进度在这儿|各章都跑过一轮|总控\s*Agent|对话总控)/i;
+  /(本章写完了|确认后我再写下章|整理确认面板|进度在这儿|各章都跑过一轮|总控\s*Agent|对话总控|安排具体步骤|重试本章写作|决定调用哪些步骤|先理解你的需求|联系写作助手|步骤已安排)/i;
+
+function isControlChromeProcess(message) {
+  return REDUNDANT_PROCESS_RE.test(String(message || ""));
+}
 
 function formatChainDebugDetail(step) {
   try {
@@ -2674,19 +3124,217 @@ function formatChainDebugDetail(step) {
 function visibleProcessSteps(item) {
   const steps = item?.steps || [];
   if (!steps.length) return [];
-  // 写作过程改由小窗承接；会话只留非写作过程/错误等
-  // 分析进度也常以 ▶/✓ 开头，须保留（WRITE_PROCESS_CHAT_RE 会误伤）
   return steps.filter((s) => {
+    if (s?._writeProgress) return true;
     const msg = String(s?.message || "");
     if (TECH_PROCESS_RE.test(msg)) return false;
     const isOutlineProgress = isOutlineExtractProgressMessage(msg);
     const isStudyProgress = isStudyProgressMessage(msg);
-    if (WRITE_PROCESS_CHAT_RE.test(msg) && !isStudyProgress && !isOutlineProgress) return false;
+    // 写作过程行（全角缩进 / ▶✓ / 检索·写作·检查）进虚线框
+    if (
+      WRITE_PROCESS_CHAT_RE.test(msg) ||
+      /^[　]/.test(msg) ||
+      /写作要点|章节说明|补充提示|重写完成|写作完成|写作结果/.test(msg)
+    ) {
+      return !TECH_PROCESS_RE.test(msg);
+    }
     if ((s?.kind === "step" || s?.kind === "chapter") && !isStudyProgress && !isOutlineProgress) {
       return false;
     }
     if (s?.kind === "chain") return import.meta.env.DEV;
+    if (isControlChromeProcess(msg)) return false;
     return !REDUNDANT_PROCESS_RE.test(msg);
+  });
+}
+
+/** 写作过程追加进气泡虚线框（边跑边出，不整段重刷） */
+function appendWriteProgress(msgRef, message, kind = "process", extra = null) {
+  if (!msgRef || !message) return;
+  pushProcess(msgRef, String(message).trim(), kind, {
+    _writeProgress: true,
+    ...(extra && typeof extra === "object" ? extra : {}),
+  });
+  // 替换数组，确保气泡过程条立刻重绘
+  msgRef.steps = [...(msgRef.steps || [])];
+}
+
+function findProgressChapterRow(msgRef, chapterKey) {
+  const key = String(chapterKey || "").trim();
+  if (!key || !msgRef) return null;
+  const progress = (msgRef.cards || []).find((c) => c?.type === "progress");
+  const chapters = progress ? progressChaptersWithLive(progress) : [];
+  return chapters.find((c) => String(c?.key || "") === key) || null;
+}
+
+/** 本章开写时输出一次要点/说明（同一章不重复） */
+function pushChapterWriteContext(msgRef, ch, { title = "" } = {}) {
+  if (!msgRef || !ch) return;
+  const key = String(ch.key || "").trim();
+  if (!key) return;
+  if (!msgRef._writeCtxKeys) msgRef._writeCtxKeys = new Set();
+  if (msgRef._writeCtxKeys.has(key)) return;
+  msgRef._writeCtxKeys.add(key);
+  const name = String(title || ch.title || ch.key || "本章").trim();
+  const points = chapterRunPoints(ch);
+  const head = points.length
+    ? `写作 · 进行中 · ${name} 按 ${points.length} 条写作要点撰写`
+    : `写作 · 进行中 · ${name}`;
+  appendWriteProgress(msgRef, head);
+  if (points.length) {
+    appendWriteProgress(msgRef, `写作要点 · ${points.length} 条`);
+    points.forEach((p, i) => appendWriteProgress(msgRef, `${i + 1}. ${p}`));
+  }
+  const describes = chapterRunDescribes(ch);
+  if (describes) {
+    appendWriteProgress(
+      msgRef,
+      `章节说明：${describes.length > 220 ? `${describes.slice(0, 220)}…` : describes}`
+    );
+  }
+  const aux = chapterRunAux(ch);
+  if (aux) {
+    appendWriteProgress(
+      msgRef,
+      `补充提示：${aux.length > 160 ? `${aux.slice(0, 160)}…` : aux}`
+    );
+  }
+}
+
+function resolveChapterDraftHtml(tid, chapterKey, { preview = "", ch = null, event = null } = {}) {
+  const key = String(chapterKey || "").trim();
+  const cache = tid && key ? liveWriteHtmlByChapter.get(`${tid}::${key}`) : "";
+  return String(
+    preview ||
+      event?.draft_html ||
+      cache ||
+      ch?.draft_preview ||
+      ch?.draft_text ||
+      ""
+  ).trim();
+}
+
+function bubbleHasChapterDraft(msgRef, chapterLabel) {
+  const tag = String(chapterLabel || "").trim();
+  if (!tag) return false;
+  return (msgRef?.steps || []).some((s) => {
+    if (!s?._writeProgress || String(s?.kind || "") !== "draft") return false;
+    const msg = String(s?.message || "");
+    const html = String(s?.html || "").trim();
+    return (msg && msg.includes(tag)) || html.length > 40;
+  });
+}
+
+/** 会话气泡过程条：补上本章正文预览（写作 step 完成时即出，不必等 chapter_done） */
+function appendChapterDraftToBubble(msgRef, { tid, chapterKey, title, html } = {}) {
+  const raw = String(html || "").trim();
+  if (!msgRef || !raw) return;
+  const name = String(title || chapterKey || "本章").trim();
+  if (bubbleHasChapterDraft(msgRef, name)) return;
+  appendWriteProgress(msgRef, `写作结果 · 「${name}」`, "draft", {
+    html: toDisplayHtml(raw) || raw,
+  });
+}
+
+function pushChapterWriteDone(
+  msgRef,
+  ch,
+  { title = "", statusLabel = "", rewrite = false, preview = "", taskId = "", chapterKey = "" } = {}
+) {
+  if (!msgRef) return;
+  const name = String(title || ch?.title || ch?.key || "本章").trim();
+  const ck = String(chapterKey || ch?.key || "").trim();
+  const banner = ch ? chapterScoreBanner(ch) : null;
+  if (banner?.retry) {
+    appendWriteProgress(
+      msgRef,
+      banner.score ? `${banner.retry} · ${banner.score}` : banner.retry
+    );
+  } else if (banner?.score) {
+    appendWriteProgress(msgRef, banner.score);
+  }
+  const raw = resolveChapterDraftHtml(String(taskId || "").trim(), ck, { preview, ch });
+  appendChapterDraftToBubble(msgRef, { tid: taskId, chapterKey: ck, title: name, html: raw });
+  const done = statusLabel ? `「${name}」写作完成 · ${statusLabel}` : `「${name}」写作完成`;
+  appendWriteProgress(msgRef, done);
+}
+
+/** 仅会话回放：把历史进度卡压成过程行（实时写作勿用，会整段蹦出） */
+function syncWritingProgressToBubble(msgRef) {
+  if (!msgRef) return;
+  const progress = (msgRef.cards || []).find((c) => c?.type === "progress");
+  const chapters = progress ? progressChaptersWithLive(progress) : [];
+  const kept = (msgRef.steps || []).filter((s) => !s?._writeProgress);
+  if (!chapters.length) {
+    msgRef.steps = kept;
+    return;
+  }
+  // 已有增量写作过程则不覆盖
+  if ((msgRef.steps || []).some((s) => s?._writeProgress)) return;
+  const lines = [];
+  for (const ch of chapters) {
+    const title = String(ch.title || ch.key || "本章").trim();
+    const points = chapterRunPoints(ch);
+    lines.push(
+      points.length
+        ? `写作 · 已写作 · ${title} 按 ${points.length} 条写作要点撰写`
+        : `写作 · 已写作 · ${title}`
+    );
+    if (points.length) {
+      lines.push(`写作要点 · ${points.length} 条`);
+      points.forEach((p, i) => lines.push(`${i + 1}. ${p}`));
+    }
+    const banner = chapterScoreBanner(ch);
+    if (banner?.retry) {
+      lines.push(banner.score ? `${banner.retry} · ${banner.score}` : banner.retry);
+    }
+    const preview = String(ch.draft_preview || ch.draft_text || "").trim();
+    if (preview) {
+      lines.push({
+        message: `写作结果 · 「${title}」`,
+        kind: "draft",
+        html: toDisplayHtml(preview) || preview,
+      });
+    }
+    lines.push(`「${title}」写作完成`);
+  }
+  msgRef.steps = [
+    ...kept,
+    ...lines.map((row) =>
+      typeof row === "string"
+        ? { message: row, kind: "process", _writeProgress: true }
+        : { kind: "process", _writeProgress: true, ...row }
+    ),
+  ];
+}
+
+function bubbleProcessSteps(item) {
+  const streaming = !!item?.streaming;
+  if ((item?.cards || []).some((c) => c?.type === "writing_supplement_check")) {
+    return [];
+  }
+  if (/待补充|还空着|还差一处|跳过检查|配置要素还是空/.test(String(item?.text || ""))) {
+    return [];
+  }
+  const steps = visibleProcessSteps(item);
+  const studySettled = steps.some((s) =>
+    /章节分析已完成|写作要点分析完成|分析失败/.test(String(s?.message || ""))
+  );
+  return steps.map((step) => {
+    const msg = String(step?.message || "");
+    const runningStudy = isStudyRunningProcessMessage(msg);
+    // 分析 ▶ 行：进行中保持原样；整轮已有完成标记或回合结束再收束
+    const applyDone = runningStudy
+      ? studySettled
+      : !streaming;
+    return {
+      kind: step.kind,
+      text: friendlyProcessText(msg, { done: applyDone }),
+      html: step.kind === "draft" ? String(step.html || "") : "",
+      debug:
+        isDev && step.kind === "chain" && step.detail && Object.keys(step.detail).length
+          ? formatChainDebugDetail(step)
+          : "",
+    };
   });
 }
 
@@ -2915,20 +3563,135 @@ function upsertLiveWritingStep(taskId, chapterKey, event) {
       source_file: String(c.source_file || "要素"),
       location: String(c.location || ""),
       query: String(c.query || ""),
-      excerpt: String(c.excerpt || "").slice(0, 800),
+      excerpt: String(c.excerpt || "").slice(0, 180),
       adopted: c.adopted !== false,
     }))
     .filter((c) => c.excerpt || c.point);
+  const rawResults = Array.isArray(event?.result?.element_results)
+    ? event.result.element_results
+    : [];
+  const elementResults = rawResults
+    .filter((row) => row && typeof row === "object")
+    .map((row, i) => ({
+      id: String(row.id || `el-${i}`),
+      name: String(row.name || row.id || "要素").trim() || "要素",
+      kind: String(row.kind || ""),
+      query: String(row.query || "").trim().slice(0, 120),
+      value: String(row.value || "").trim().slice(0, 240),
+      ok: Boolean(row.ok ?? String(row.value || "").trim()),
+      slot_missing: Array.isArray(row.slot_missing) ? row.slot_missing.slice(0, 4) : [],
+    }));
+  const result = event?.result && typeof event.result === "object" ? event.result : {};
+  const checkPatch = {};
+  if (step === "check" && (status === "done" || status === "skipped")) {
+    const score = Number(result.score || 0);
+    const revRaw = Number(result.revision_count || 0);
+    const action = String(result.action || "").trim();
+    // 服务端已在 emit 前完成 revise +1，此处直接用 revision_count
+    const revision_count = revRaw;
+    checkPatch.revision_count = revision_count;
+    checkPatch.max_revisions = Number(result.max_revisions || prev.max_revisions || 5);
+    checkPatch.write_score_pass = Number(result.write_score_pass || prev.write_score_pass || 70);
+    checkPatch.check_action = action;
+    checkPatch.check_score = score;
+    checkPatch.check_below_threshold = Boolean(
+      result.below_threshold ?? (score > 0 && score < checkPatch.write_score_pass)
+    );
+    checkPatch.check_reason = String(result.reason || "").trim().slice(0, 160);
+    checkPatch.rewritten = revision_count > 0;
+    if (score > 0 || action) {
+      const checks = Array.isArray(prev.checks) ? [...prev.checks] : [];
+      checks.push({
+        action,
+        reason: checkPatch.check_reason,
+        score,
+        below_threshold: checkPatch.check_below_threshold,
+      });
+      checkPatch.checks = checks.slice(-3);
+    }
+  }
   taskMap[key] = {
     ...prev,
     steps,
     status: chStatus,
     status_label: statusLabel(chStatus) || chStatus,
     is_running: ["searching", "writing", "checking", "running"].includes(chStatus),
+    ...checkPatch,
     ...(evidenceFromCards.length ? { evidence: evidenceFromCards } : {}),
+    ...(elementResults.length ? { element_results: elementResults } : {}),
   };
   next[tid] = taskMap;
   liveWritingOverlay.value = next;
+}
+
+/** 仅「正在写 / 已写过」的章进进度展示（有要点未写也不出） */
+function chapterWasWrittenOrWriting(ch) {
+  if (!ch || ch.structure_only) return false;
+  if (ch.is_running) return true;
+  const st = String(ch.status || "").trim();
+  if (["searching", "writing", "checking", "running"].includes(st)) return true;
+  if (ch.has_draft || ch.draft_text || ch.draft_preview) return true;
+  if (Number(ch.revision_count || 0) > 0 || Number(ch.check_score || 0) > 0) return true;
+  if ((ch.steps || []).length || (ch.checks || []).length) return true;
+  if (["confirmed", "awaiting_confirm", "needs_human"].includes(st)) {
+    // 无正文/无步骤的确认态不当作本轮已写（避免整本大纲灌进进度）
+    return Boolean(
+      ch.has_draft ||
+        ch.draft_text ||
+        ch.draft_preview ||
+        (ch.steps || []).length ||
+        (ch.checks || []).length ||
+        Number(ch.revision_count || 0) > 0
+    );
+  }
+  return false;
+}
+
+/** 进度卡章节合入 live；只保留本轮已写/在写章 */
+function progressChaptersWithLive(card) {
+  const chapters = Array.isArray(card?.payload?.chapters) ? card.payload.chapters : [];
+  const tid = String(card?.payload?.task_id || "").trim();
+  const liveMap = tid ? liveWritingOverlay.value?.[tid] : null;
+  const merged = chapters.map((ch) => {
+    const live = liveMap?.[String(ch?.key || "")];
+    if (!live) return ch;
+    return {
+      ...ch,
+      status: live.status || ch.status,
+      status_label: live.status_label || ch.status_label,
+      steps: live.steps?.length ? live.steps : ch.steps,
+      evidence: live.evidence?.length ? live.evidence : ch.evidence,
+      evidence_count: live.evidence?.length || ch.evidence_count || (ch.evidence || []).length,
+      element_results: live.element_results?.length
+        ? live.element_results
+        : ch.element_results,
+      is_running: live.is_running != null ? Boolean(live.is_running) : ch.is_running,
+      revision_count:
+        live.revision_count != null ? live.revision_count : ch.revision_count,
+      max_revisions: live.max_revisions != null ? live.max_revisions : ch.max_revisions,
+      write_score_pass:
+        live.write_score_pass != null ? live.write_score_pass : ch.write_score_pass,
+      rewritten: live.rewritten != null ? live.rewritten : ch.rewritten,
+      check_action: live.check_action || ch.check_action,
+      check_score: live.check_score != null ? live.check_score : ch.check_score,
+      check_below_threshold:
+        live.check_below_threshold != null
+          ? live.check_below_threshold
+          : ch.check_below_threshold,
+      check_reason: live.check_reason || ch.check_reason,
+      checks: live.checks?.length ? live.checks : ch.checks,
+      has_draft: Boolean(live.has_draft || ch.has_draft),
+    };
+  });
+  // live 里正在跑的章即使 payload 尚未带 has_draft 也要露出
+  const liveKeys = new Set(Object.keys(liveMap || {}));
+  return merged.filter((ch) => {
+    if (!ch || ch.structure_only) return false;
+    if (liveKeys.has(String(ch.key || "")) && liveMap[String(ch.key || "")]?.is_running) {
+      return true;
+    }
+    return chapterWasWrittenOrWriting(ch);
+  });
 }
 
 function clearLiveWritingChapter(taskId, chapterKey) {
@@ -2986,7 +3749,24 @@ function applyLiveWritingOverlayToDocs(docs) {
         steps: live.steps?.length ? live.steps : ch.steps,
         evidence: live.evidence?.length ? live.evidence : ch.evidence,
         evidence_count: live.evidence?.length || ch.evidence_count || (ch.evidence || []).length,
+        element_results: live.element_results?.length
+          ? live.element_results
+          : ch.element_results,
         is_running: Boolean(live.is_running),
+        revision_count:
+          live.revision_count != null ? live.revision_count : ch.revision_count,
+        max_revisions: live.max_revisions != null ? live.max_revisions : ch.max_revisions,
+        write_score_pass:
+          live.write_score_pass != null ? live.write_score_pass : ch.write_score_pass,
+        rewritten: live.rewritten != null ? live.rewritten : ch.rewritten,
+        check_action: live.check_action || ch.check_action,
+        check_score: live.check_score != null ? live.check_score : ch.check_score,
+        check_below_threshold:
+          live.check_below_threshold != null
+            ? live.check_below_threshold
+            : ch.check_below_threshold,
+        check_reason: live.check_reason || ch.check_reason,
+        checks: live.checks?.length ? live.checks : ch.checks,
       };
     });
     return { ...doc, chapters };
@@ -3026,6 +3806,15 @@ function normalizeDocWindowChapter(ch) {
     draft_text: ch?.draft_text || ch?.draft_preview || "",
     structure_only: Boolean(ch?.structure_only || cfg.structure_only),
     is_next: Boolean(ch?.is_next),
+    revision_count: Number(ch?.revision_count || 0),
+    max_revisions: Number(ch?.max_revisions || 5),
+    write_score_pass: Number(ch?.write_score_pass || 70),
+    rewritten: Boolean(ch?.rewritten),
+    check_action: ch?.check_action || "",
+    check_score: Number(ch?.check_score || 0),
+    check_below_threshold: Boolean(ch?.check_below_threshold),
+    check_reason: ch?.check_reason || "",
+    element_results: Array.isArray(ch?.element_results) ? ch.element_results : [],
     // 顶层也带 points，避免文档窗合并时只看见空的 config
     points,
     keywords,
@@ -3044,6 +3833,8 @@ function normalizeDocWindowChapter(ch) {
       aux_prompt: cfg.aux_prompt || ch?.aux_prompt || "",
       reference_text: cfg.reference_text || ch?.reference_text || "",
       fixed_output: Boolean(cfg.fixed_output ?? ch?.fixed_output),
+      compose: normalizeCompose(cfg.compose || ch?.compose, { fixed_output: cfg.fixed_output || ch?.fixed_output, presence: cfg.presence || ch?.presence }),
+      presence: presenceForCompose(normalizeCompose(cfg.compose || ch?.compose, { fixed_output: cfg.fixed_output || ch?.fixed_output, presence: cfg.presence || ch?.presence })),
       structure_only: Boolean(cfg.structure_only || ch?.structure_only),
       element_ids: Array.isArray(cfg.element_ids)
         ? [...cfg.element_ids]
@@ -3077,7 +3868,7 @@ function onDocWindowFocus(payload) {
     setChapterTab(tid, key, "config");
   } else if (payload?.tab) {
     const t = String(payload.tab || "").trim();
-    if (t === "draft" || t === "preview") {
+    if (t === "progress" || t === "draft" || t === "preview" || t === "process" || t === "text") {
       setChapterTab(tid, key, "text");
     } else if (t === "content") {
       setChapterTab(tid, key, "config");
@@ -3098,6 +3889,10 @@ function onDocWindowElementsSaved(payload) {
       tags: [...(item.tags || [])],
     })),
   };
+  // 目录拉取 / 配置链已落盘：勿 force 拉库冲掉刚关联的要点行
+  if (payload?.fromOutlineLoad || payload?.skipOutlineReload) return;
+  bumpDocOutlineReload({ force: false });
+  bumpClientConfigRevision();
 }
 
 /** 文档窗保存的项目资料根：开写时一并带入（会话侧由后端写入 freeform） */
@@ -3116,39 +3911,19 @@ function onDocWindowConfigSaved(payload) {
   const chapter = payload?.chapter;
   if (!tid || !key || !chapter) return;
   if (Array.isArray(payload?.elementNodes)) {
-    onDocWindowElementsSaved({ taskId: tid, elementNodes: payload.elementNodes });
+    onDocWindowElementsSaved({
+      taskId: tid,
+      elementNodes: payload.elementNodes,
+      skipOutlineReload: Boolean(payload?.alreadyPersisted),
+    });
   }
   applyChapterSnapshotToSession(tid, key, chapter);
 
-  // 文档窗已 PUT 到文档副本（w*）；勿再 configure_chapter / force 重拉，否则旧进度或缓存会盖回
-  if (payload?.alreadyPersisted || payload?.syncSession === false) {
-    ElMessage.success("章节配置已保存到本文档副本");
-    schedulePersistUiState(true);
-    return;
-  }
-  const progress = (messages.value || [])
-    .flatMap((m) => m.cards || [])
-    .reverse()
-    .find(
-      (c) =>
-        c?.type === "progress" &&
-        String(c?.payload?.task_id || "").trim() === tid
-    );
-  const chapters = progress?.payload?.chapters || [];
-  const hit = chapters.find((ch) => ch?.key === key);
-  if (progress?.payload?.task_id === tid && hit) {
-    sendAction("configure_chapter", configPayload(tid, hit))
-      .then(() => {
-        driveDocWindow("config_saved", { taskId: tid, chapterKey: key, tab: "config" });
-        bumpDocOutlineReload({ force: true });
-      })
-      .catch(() => {
-        bumpDocOutlineReload({ force: true });
-      });
-  } else {
-    ElMessage.success("章节配置已保存到本文档副本");
-    driveDocWindow("config_saved", { taskId: tid, chapterKey: key, tab: "config" });
-    bumpDocOutlineReload({ force: true });
+  // 文档窗配置一律静默：已 PUT 到副本，勿再 configure_chapter 刷对话
+  if (!payload?.quiet) ElMessage.success("章节配置已保存");
+  if (payload?.alreadyPersisted) {
+    if (payload?.quiet) bumpClientConfigRevision();
+    else bumpDocOutlineReload({ force: false });
   }
   schedulePersistUiState(true);
 }
@@ -3173,14 +3948,15 @@ function applyChapterSnapshotToSession(tid, key, chapter) {
     aux_prompt: chapter.aux_prompt || cfg.aux_prompt || "",
     reference_text: chapter.reference_text || cfg.reference_text || "",
     fixed_output: Boolean(chapter.fixed_output),
+    compose: normalizeCompose(chapter.compose || cfg.compose, { fixed_output: chapter.fixed_output, presence: chapter.presence || cfg.presence }),
+    presence: presenceForCompose(normalizeCompose(chapter.compose || cfg.compose, { fixed_output: chapter.fixed_output, presence: chapter.presence || cfg.presence })),
     structure_only: Boolean(chapter.structure_only),
-    element_ids: Array.isArray(chapter.element_ids)
-      ? [...chapter.element_ids]
-      : Array.isArray(cfg.element_ids)
-        ? [...cfg.element_ids]
-        : Array.isArray(prev.element_ids)
-          ? [...prev.element_ids]
-          : [],
+    // snapshot 显式带了章级列表时按列表替换，勿 union prev 粘住要点泄漏
+    element_ids:
+      Object.prototype.hasOwnProperty.call(chapter, "element_ids") ||
+      Object.prototype.hasOwnProperty.call(cfg, "element_ids")
+        ? unionElementIds(chapter.element_ids, cfg.element_ids)
+        : unionElementIds(prev.element_ids),
   };
   chapterEdits.value = {
     ...chapterEdits.value,
@@ -3200,6 +3976,8 @@ function applyChapterSnapshotToSession(tid, key, chapter) {
     row.aux_prompt = nextEdit.aux_prompt;
     row.reference_text = nextEdit.reference_text;
     row.fixed_output = Boolean(chapter.fixed_output);
+    row.presence = nextEdit.presence;
+    row.compose = nextEdit.compose;
     row.config = {
       ...(row.config || {}),
       points: [...points],
@@ -3208,6 +3986,8 @@ function applyChapterSnapshotToSession(tid, key, chapter) {
       aux_prompt: nextEdit.aux_prompt,
       reference_text: nextEdit.reference_text,
       fixed_output: Boolean(chapter.fixed_output),
+      presence: nextEdit.presence,
+      compose: nextEdit.compose,
       structure_only: Boolean(chapter.structure_only),
       element_ids: [...nextEdit.element_ids],
     };
@@ -3377,7 +4157,8 @@ async function onDocWindowWizardAction(payload) {
       const hasTrigger =
         live.trigger_begin_study === true ||
         (Array.isArray(live.trigger_chapter_study) && live.trigger_chapter_study.length > 0);
-      if (hasTrigger || cmd === "re_study_chapters") {
+      // 仅在已选定分析方式时兜底挂 trigger；方式澄清卡回合不得用勾选章抢跑
+      if (hasTrigger || (cmd === "re_study_chapters" && String(p.study_method || "").trim())) {
         if (
           cmd === "re_study_chapters" &&
           Array.isArray(p.chapter_keys) &&
@@ -3386,13 +4167,21 @@ async function onDocWindowWizardAction(payload) {
         ) {
           liveBlueprintWizard.value = mergeWizardPayload(live, {
             trigger_chapter_study: p.chapter_keys.map((k) => String(k || "").trim()).filter(Boolean),
+            chapter_study_keys: p.chapter_keys.map((k) => String(k || "").trim()).filter(Boolean),
             step: "study",
             ...(String(p.study_method || "").trim()
               ? { study_method: String(p.study_method).trim() }
               : {}),
           });
         }
-        schedulePageStudyKickoff(80);
+        if (
+          hasTrigger ||
+          (Array.isArray(liveBlueprintWizard.value?.trigger_chapter_study) &&
+            liveBlueprintWizard.value.trigger_chapter_study.length) ||
+          liveBlueprintWizard.value?.trigger_begin_study === true
+        ) {
+          schedulePageStudyKickoff(80, { arm: true });
+        }
       }
     }
     if (
@@ -3440,7 +4229,7 @@ async function onDocWindowWriteAction(payload) {
     navigateTo?.("materials");
     return;
   }
-  // 管理关联：本地立刻弹面板，不依赖会话流 / 进度卡（分析中也可点）
+  // 文档窗关联：本地弹面板 + 静默落盘，不走对话流、不刷气泡
   if (action === "associate_elements") {
     if (!tid) {
       ElMessage.warning("还没有文档任务，无法关联要素");
@@ -3475,7 +4264,7 @@ async function onDocWindowWriteAction(payload) {
       : [];
     associatePointContext.value =
       isPointAssociate &&
-      (payload?.pointItemId || payload?.pointIndex != null)
+      (payload?.pointItemId || payload?.pointIndex != null || payload?.pointIndex === 0)
         ? {
             id: String(payload.pointItemId || "").trim(),
             index: Number(payload.pointIndex),
@@ -3492,15 +4281,30 @@ async function onDocWindowWriteAction(payload) {
         edit.pointsText = pointsFromPointItems(pointSnapshot).join("\n");
       }
     }
-    openChapterElementAssociate(tid, chapter);
+    await openChapterElementAssociate(tid, chapter);
+    driveDocWindow("elements_associated", {
+      taskId: tid,
+      chapterKey: chapter.key,
+      tab: "config",
+    });
     return;
   }
   if (!tid) return;
   const progress = latestProgressCards().find((c) => c?.type === "progress");
   const progressPayload = progress?.payload || { task_id: tid, chapters: [] };
-  const ch =
-    (progressPayload.chapters || []).find((item) => item?.key === key) ||
-    (payload?.chapter ? { ...payload.chapter, key } : null);
+  const fromProgress = (progressPayload.chapters || []).find((item) => item?.key === key) || null;
+  const fromPayload =
+    payload?.chapter && typeof payload.chapter === "object" ? payload.chapter : null;
+  const mergedKey = String(key || fromPayload?.key || fromProgress?.key || "").trim();
+  const ch = mergedKey
+    ? {
+        ...(fromProgress || {}),
+        ...(fromPayload || {}),
+        key: mergedKey,
+        sequence: String(fromPayload?.sequence || fromProgress?.sequence || "").trim(),
+        title: String(fromPayload?.title || fromProgress?.title || "").trim(),
+      }
+    : null;
   if (action === "start_writing") {
     armDocWindowAutoOpen();
     const chapterKeys = (payload?.chapterKeys || payload?.chapter_keys || [])
@@ -3536,6 +4340,14 @@ async function onDocWindowWriteAction(payload) {
         // 禁止把 progress 卡整包章节列表带回去当「写全部」；只传勾选/焦点章
         chapter_keys: scopedKeys,
         focus_chapter_key: focusKey || progressPayload.focus_chapter_key || "",
+        ...(scopedKeys.length <= 1
+          ? {
+              chapter_key: focusKey || key,
+              sequence: String(payload?.chapter?.sequence || "").trim(),
+              title: String(payload?.chapter?.title || "").trim(),
+              chapter_title: String(payload?.chapter?.title || "").trim(),
+            }
+          : {}),
         ...(projectFolderIds.length
           ? {
               project_folder_ids: projectFolderIds,
@@ -3550,6 +4362,9 @@ async function onDocWindowWriteAction(payload) {
               already_persisted: Boolean(payload?.already_persisted),
               from_doc_window: Boolean(payload?.from_doc_window),
             }
+          : {}),
+        ...(payload?.chapterConfig && typeof payload.chapterConfig === "object"
+          ? payload.chapterConfig
           : {}),
       },
       { force: true }
@@ -3579,7 +4394,8 @@ async function onDocWindowWriteAction(payload) {
         taskId: tid || bid,
         blueprintId: bid,
         chapterKey: focusKey,
-        mainView: "preview",
+        mainView: "chapter",
+        tab: "content",
       });
     }
     const projectFolderIds = (
@@ -3595,7 +4411,9 @@ async function onDocWindowWriteAction(payload) {
         ? { writing_pace: String(payload?.writing_pace || payload?.pace || "").trim() }
         : {}),
       ...(chapterKeys.length ? { chapter_keys: chapterKeys } : {}),
-      ...(focusKey ? { focus_chapter_key: focusKey } : {}),
+      ...(focusKey ? { focus_chapter_key: focusKey, chapter_key: focusKey } : {}),
+      sequence: String(payload?.chapter?.sequence || "").trim(),
+      title: String(payload?.chapter?.title || "").trim(),
       ...(projectFolderIds.length
         ? {
             project_folder_ids: projectFolderIds,
@@ -3692,13 +4510,40 @@ async function onDocWindowWriteAction(payload) {
     await sendAction("generate_freeform_points", {
       task_id: tid,
       ...(chapterKeys.length ? { chapter_keys: chapterKeys } : {}),
-      ...(key ? { focus_chapter_key: key } : {}),
+      ...(key ? { focus_chapter_key: key, chapter_key: key } : {}),
+      sequence: String(payload?.chapter?.sequence || "").trim(),
+      title: String(payload?.chapter?.title || "").trim(),
     });
     bumpDocOutlineReload({ force: true });
     return;
   }
   if (!ch?.key) {
     ElMessage.warning("请先选择章节");
+    return;
+  }
+  if (action === "generate_chapter_boilerplate") {
+    await sendAction("generate_chapter_boilerplate", {
+      task_id: tid,
+      chapter_key: ch.key,
+      sequence: String(ch.sequence || "").trim(),
+      title: String(ch.title || "").trim(),
+      chapter_title: String(ch.title || "").trim(),
+      source_text: payload?.source_text || "",
+      message: payload?.message || "",
+    });
+    bumpDocOutlineReload({ force: true });
+    return;
+  }
+  if (action === "generate_chapter_describes") {
+    await sendAction("generate_chapter_describes", {
+      task_id: tid,
+      chapter_key: ch.key,
+      sequence: String(ch.sequence || "").trim(),
+      title: String(ch.title || "").trim(),
+      chapter_title: String(ch.title || "").trim(),
+      point_items: payload?.point_items || [],
+    });
+    bumpDocOutlineReload({ force: true });
     return;
   }
   if (action === "configure") {
@@ -3726,6 +4571,7 @@ async function onDocWindowWriteAction(payload) {
     await retryChapter(tid, ch, {
       writeMode,
       alreadyPersisted: Boolean(payload?.already_persisted || payload?.from_doc_window),
+      chapterConfig: payload?.chapterConfig,
     });
     bumpDocOutlineReload({ force: true });
     return;
@@ -3801,6 +4647,21 @@ function markChapterTextTouched(taskId, chapterKey) {
   if (edit) edit._touched = true;
 }
 
+function unionElementIds(...candidates) {
+  const out = [];
+  const seen = new Set();
+  for (const raw of candidates) {
+    if (!Array.isArray(raw)) continue;
+    for (const id of raw) {
+      const s = String(id || "").trim();
+      if (!s || seen.has(s)) continue;
+      seen.add(s);
+      out.push(s);
+    }
+  }
+  return out;
+}
+
 function ensureChapterEdit(taskId, ch, { refreshText = false } = {}) {
   const key = chapterEditKey(taskId, ch?.key);
   const raw = ch?.draft_text || ch?.draft_preview || "";
@@ -3823,8 +4684,10 @@ function ensureChapterEdit(taskId, ch, { refreshText = false } = {}) {
         aux_prompt: cfg.aux_prompt || "",
         reference_text: cfg.reference_text || "",
         fixed_output: Boolean(cfg.fixed_output),
+        compose: normalizeCompose(cfg.compose, { fixed_output: cfg.fixed_output, presence: cfg.presence }),
+        presence: presenceForCompose(normalizeCompose(cfg.compose, { fixed_output: cfg.fixed_output, presence: cfg.presence })),
         structure_only: Boolean(cfg.structure_only || ch?.structure_only),
-        element_ids: [...(cfg.element_ids || [])],
+        element_ids: unionElementIds(cfg.element_ids, ch?.element_ids),
       },
     };
   } else if (refreshText && !chapterEdits.value[key]._touched) {
@@ -3836,18 +4699,21 @@ function ensureChapterEdit(taskId, ch, { refreshText = false } = {}) {
   if (edit && edit.structure_only == null) {
     edit.structure_only = Boolean(ch?.config?.structure_only || ch?.structure_only);
   }
-  if (edit && !Array.isArray(edit.element_ids)) {
-    edit.element_ids = [...(ch?.config?.element_ids || [])];
+  if (edit) {
+    edit.element_ids = unionElementIds(
+      edit.element_ids,
+      ch?.element_ids,
+      ch?.config?.element_ids
+    );
   }
   return edit;
 }
 
 function configPayload(taskId, ch) {
   const edit = ensureChapterEdit(taskId, ch);
-  let els = elementsForTask(taskId);
   let elementIds = Array.isArray(edit.element_ids) ? [...edit.element_ids] : [];
   // 写作 clone 与蓝本要素/关联可能只落在一侧：重试前互相回落，避免空检索退回「按要点写」
-  if (!els.length || !elementIds.length) {
+  if (!elementIds.length) {
     const docs = conversationDocuments.value || [];
     const tid = String(taskId || "").trim();
     const hit =
@@ -3860,16 +4726,13 @@ function configPayload(taskId, ch) {
         : hit?.writingTaskId) || ""
     ).trim();
     if (twin && twin !== tid) {
-      if (!els.length) els = elementsForTask(twin);
-      if (!elementIds.length) {
-        const twinEdit = chapterEdits.value[chapterEditKey(twin, ch.key)];
-        if (Array.isArray(twinEdit?.element_ids) && twinEdit.element_ids.length) {
-          elementIds = [...twinEdit.element_ids];
-        } else if (Array.isArray(ch?.element_ids) && ch.element_ids.length) {
-          elementIds = [...ch.element_ids];
-        } else if (Array.isArray(ch?.config?.element_ids) && ch.config.element_ids.length) {
-          elementIds = [...ch.config.element_ids];
-        }
+      const twinEdit = chapterEdits.value[chapterEditKey(twin, ch.key)];
+      if (Array.isArray(twinEdit?.element_ids) && twinEdit.element_ids.length) {
+        elementIds = [...twinEdit.element_ids];
+      } else if (Array.isArray(ch?.element_ids) && ch.element_ids.length) {
+        elementIds = [...ch.element_ids];
+      } else if (Array.isArray(ch?.config?.element_ids) && ch.config.element_ids.length) {
+        elementIds = [...ch.config.element_ids];
       }
     }
   }
@@ -3888,12 +4751,13 @@ function configPayload(taskId, ch) {
     describes: edit.describes,
     aux_prompt: edit.aux_prompt,
     reference_text: edit.reference_text,
-    fixed_output: Boolean(edit.fixed_output),
+    fixed_output: false,
+    compose: normalizeCompose(edit.compose, { fixed_output: edit.fixed_output, presence: edit.presence }),
+    presence: presenceForCompose(normalizeCompose(edit.compose, { fixed_output: edit.fixed_output, presence: edit.presence })),
     structure_only: Boolean(edit.structure_only),
-    element_ids: elementIds,
   };
-  // 未 hydrate 时勿传空 elements，否则后端会把已有要素整表覆盖掉
-  if (els.length) payload.elements = els;
+  if (elementIds.length) payload.element_ids = elementIds;
+  // 要素体以库为准：configure_chapter 不传 elements，避免进度卡瘦身列表盖回任务
   return payload;
 }
 
@@ -3933,6 +4797,9 @@ async function confirmOneChapter(payload, ch) {
   await sendAction("confirm_chapter", {
     task_id: taskId,
     chapter_key: ch.key,
+    sequence: String(ch.sequence || "").trim(),
+    title: String(ch.title || "").trim(),
+    chapter_title: String(ch.title || "").trim(),
     text,
     decision: "approve",
   });
@@ -4001,6 +4868,12 @@ function supplementAssociateFromGap() {
     label.replace(new RegExp(`^${seq}\\s*`), "").trim() || ck;
   const ch = { key: ck, sequence: seq, title };
   ensureChapterEdit(tid, ch);
+  associatePointContext.value = {
+    id: String(pick.item.point_id || "").trim(),
+    index: Number(pick.item.point_index),
+    slot: String(pick.item.slot_label || pick.item.element_name || "").trim(),
+    pointItems: chapterPointRowsForSupplement(tid, ck),
+  };
   openChapterElementAssociate(tid, ch);
 }
 
@@ -4139,67 +5012,23 @@ function writingSupplementGapResolved(item, taskId) {
 }
 
 function visibleWritingSupplementItems(card) {
-  const raw = card?.payload?.items || [];
-  const tid = String(card?.payload?.task_id || "").trim();
-  const dedupe = new Set();
-  const stage1 = [];
-  for (const item of raw) {
-    const ck = String(item?.chapter_key || "").trim();
-    const eid = String(item?.element_id || "").trim();
-    const pi = Number(item?.point_index);
-    const sig = eid
-      ? `e:${ck}:${eid}`
-      : Number.isFinite(pi) && pi >= 0
-        ? `p:${ck}:${pi}`
-        : `s:${ck}:${String(item?.slot_label || "").slice(0, 80)}`;
-    if (dedupe.has(sig)) continue;
-    dedupe.add(sig);
-    stage1.push(item);
-  }
-  const byCh = new Map();
-  for (const item of stage1) {
-    const ck = String(item?.chapter_key || "").trim();
-    if (!byCh.has(ck)) byCh.set(ck, []);
-    byCh.get(ck).push(item);
-  }
-  const out = [];
-  for (const [ck, group] of byCh.entries()) {
-    const elemGaps = group.filter((g) => String(g?.element_id || "").trim());
-    const other = group.filter((g) => !String(g?.element_id || "").trim());
-    const elemNames = elemGaps
-      .map((g) => {
-        const el = elementsForTask(tid).find(
-          (e) => String(e?.id || "") === String(g.element_id || "").trim()
-        );
-        return String(el?.name || g.element_name || "").trim();
-      })
-      .filter(Boolean);
-    out.push(...elemGaps);
-    for (const pg of other) {
-      const slot = String(pg?.slot_label || "").trim();
-      if (elemNames.length && slot && elemNames.some((n) => namesOverlap(slot, n))) continue;
-      out.push(pg);
-    }
-  }
-  return out.filter((item) => !writingSupplementGapResolved(item, tid));
+  return (card?.payload?.items || []).filter((item) => item && typeof item === "object");
 }
 
 function writingSupplementHint(card) {
   const pl = card?.payload || {};
   const n = visibleWritingSupplementItems(card).length;
   if (n > 0) {
-    return `开写前还有 ${n} 处配置待补（仅开始写作前提示）；补上后检索会更准，不补也可先写。`;
+    return `写作前还有 ${n} 处配置待补；补上后检索会更准，不补也可先写。`;
   }
   return (
     pl.hint ||
     card?.title ||
-    "开写前按写作要点与关联要素检查仍缺配置项（仅开始写作前提示）"
+    "按写作要点与关联要素检查仍缺配置项"
   );
 }
 
 async function onElementConfigureSaved(result) {
-  await applyElementConfigureSavedResult(result);
-  await restoreCurrentSession({ suppressAutoPopups: false });
   await applyElementConfigureSavedResult(result);
 }
 
@@ -4227,17 +5056,43 @@ async function applyElementConfigureSavedResult(result) {
     }
   }
   if (!tid || !ck) return;
-  const elementIds = (result.element_ids || [])
-    .map((id) => String(id || "").trim())
-    .filter(Boolean);
+  const progress = latestProgressCards().find((c) => c?.type === "progress");
+  const progCh = (progress?.payload?.chapters || []).find((c) => c?.key === ck);
+  const prevLinked = unionElementIds(
+    chapterEdits.value[chapterEditKey(tid, ck)]?.element_ids,
+    progCh?.element_ids,
+    progCh?.config?.element_ids
+  );
   const pointItems = Array.isArray(result.point_items)
     ? result.point_items.map((row) => ({ ...row }))
     : [];
   const points = Array.isArray(result.points)
     ? result.points.map((line) => String(line || "")).filter(Boolean)
     : [];
-  const progress = latestProgressCards().find((c) => c?.type === "progress");
-  const progCh = (progress?.payload?.chapters || []).find((c) => c?.key === ck);
+  const newEid = el?.id ? String(el.id).trim() : "";
+  const pointBoundNew =
+    Boolean(associatePointContext.value) ||
+    String(result.associate_scope || result.associateScope || "").trim() === "point" ||
+    (newEid &&
+      pointItems.some((row) => String(row?.element_id || "").trim() === newEid));
+  // 要点关联：章级 ids 保持原样，并剔除本次要点要素，防止历史脏数据回流
+  const elementIds = chapterElementIdsForPersist(
+    pointBoundNew
+      ? prevLinked.filter((id) => id !== newEid)
+      : unionElementIds(prevLinked, result.element_ids),
+    pointItems
+  );
+  const pointLink = associatePointContext.value
+    ? { ...associatePointContext.value }
+    : pointBoundNew && newEid
+      ? {
+          id: "",
+          index: pointItems.findIndex(
+            (row) => String(row?.element_id || "").trim() === newEid
+          ),
+          slot: "",
+        }
+      : null;
   const ch = {
     key: ck,
     sequence: progCh?.sequence || "",
@@ -4250,7 +5105,13 @@ async function applyElementConfigureSavedResult(result) {
   const editKey = chapterEditKey(tid, ck);
   const edit = chapterEdits.value[editKey];
   if (edit) {
-    edit.element_ids = [...elementIds];
+    if (pointBoundNew) {
+      edit.element_ids = unionElementIds(edit.element_ids, elementIds).filter(
+        (id) => id !== newEid
+      );
+    } else {
+      edit.element_ids = [...elementIds];
+    }
     if (pointItems.length) {
       edit.point_items = pointItems.map((row) => ({ ...row }));
       edit.pointsText = points.join("\n");
@@ -4266,44 +5127,19 @@ async function applyElementConfigureSavedResult(result) {
     tab: "config",
     elementIds,
     elementNodes: elementsForTask(tid),
-    newElementIds: el?.id ? [String(el.id)] : [],
+    newElementIds: newEid ? [newEid] : [],
     pointItems,
+    ...(pointBoundNew
+      ? {
+          associateScope: "point",
+          ...(pointLink ? { pointItemLink: pointLink } : {}),
+        }
+      : {}),
   });
-  bumpDocOutlineReload({ force: true });
+  if (pointBoundNew) associatePointContext.value = null;
 }
 
 /** 关联要素确认后写入对话（打开弹窗不写气泡，避免刷屏） */
-function appendElementAssociateChatTranscript(phase, payload = {}) {
-  if (phase !== "done") return;
-  const docId = currentFocusDocumentId();
-  const chapterLabel = String(payload.chapterLabel || "").trim() || "当前章节";
-  const slot = String(payload.slot || "").trim();
-  const elementSummary = String(payload.elementSummary || "").trim() || "—";
-  const lines = [
-    `章节：${chapterLabel}`,
-    slot ? `写作要点待补项：${slot}` : null,
-    payload.pointText ? `要点：${String(payload.pointText).slice(0, 160)}` : null,
-    `关联要素：${elementSummary}`,
-  ].filter(Boolean);
-  const bg = String(payload.describes || "").trim();
-  if (bg) {
-    lines.push(
-      `章节说明（背景）：${bg.slice(0, 120)}${bg.length > 120 ? "…" : ""}`
-    );
-  }
-  messages.value.push({
-    role: "assistant",
-    text: slot
-      ? `已将要素关联到待补项「${slot}」：${elementSummary}`
-      : `本章要素关联已更新：${elementSummary}`,
-    cards: [],
-    steps: lines.map((message) => ({ message, kind: "process" })),
-    document_id: docId,
-    document_key: docId,
-  });
-  scheduleScrollChatToBottom(true);
-}
-
 function onSupplementGapRowClick(card, item, msgIndex, cardIndex, event) {
   if (card?.payload?.readonly || isCardUsed(msgIndex, cardIndex)) return;
   const tag = String(event?.target?.tagName || "").toLowerCase();
@@ -4318,18 +5154,30 @@ async function dismissWritingSupplement(card, item, msgIndex, cardIndex) {
     gap_id: item?.id,
     chapter_key: item?.chapter_key,
     element_id: item?.element_id,
+    chapter_label: item?.chapter_label,
+    sequence: item?.sequence,
+    title: item?.title || item?.chapter_title,
+    pointSlot: item?.slot_label || item?.element_name || item?.slot,
+    slot: item?.slot_label || item?.element_name || item?.slot,
   });
   markCardUsed(msgIndex, cardIndex);
 }
 
 async function skipWritingSupplementCheck(card, msgIndex, cardIndex) {
   const pl = card?.payload || {};
+  const firstGap = (pl.items || pl.gaps || [])[0] || {};
   await sendAction(
     "skip_writing_supplement_check",
     {
       task_id: pl.task_id,
       chapter_keys: pl.chapter_keys || [],
       writing_pace: pl.writing_pace || "",
+      resume_action: pl.resume_action || "",
+      chapter_key: pl.chapter_key || firstGap.chapter_key || "",
+      sequence: pl.sequence || firstGap.sequence || "",
+      title: pl.title || firstGap.title || "",
+      chapter_label: pl.chapter_label || firstGap.chapter_label || "",
+      _write_mode: pl._write_mode || "",
     },
     { force: true }
   );
@@ -4343,43 +5191,133 @@ async function recheckWritingSupplements(card) {
     task_id: pl.task_id,
     chapter_keys: pl.chapter_keys || [],
     writing_pace: pl.writing_pace || "",
+    resume_action: pl.resume_action || "",
+    chapter_key: pl.chapter_key || "",
+    sequence: pl.sequence || "",
+    title: pl.title || "",
+    chapter_label: pl.chapter_label || "",
+    _write_mode: pl._write_mode || "",
   });
 }
 
 async function saveChapterConfig(taskId, ch) {
-  await sendAction("configure_chapter", configPayload(taskId, ch));
-  driveDocWindow("config_saved", {
-    taskId,
-    chapterKey: ch?.key,
-    tab: "config",
-  });
+  // 文档窗/进度卡「保存配置」：静默落盘，不刷对话气泡
+  const tid = String(taskId || "").trim();
+  const key = String(ch?.key || "").trim();
+  if (!tid || !key) return;
+  try {
+    const body = configPayload(tid, ch);
+    const slim = await request(
+      docOutlineUrl(tid, { fresh: true, writingTaskId: writingTaskIdForTask(tid) })
+    );
+    const chapters = (slim?.chapters || []).map((item) => ({ ...item }));
+    const idx = chapters.findIndex((item) => String(item.key || "") === key);
+    if (idx < 0) throw new Error("未找到该章节");
+    const prev = chapters[idx] || {};
+    const pointItems = Array.isArray(body.point_items)
+      ? body.point_items.map((row) => ({ ...row }))
+      : Array.isArray(prev.point_items)
+        ? prev.point_items.map((row) => ({ ...row }))
+        : [];
+    const points = String(body.points_text || "")
+      .split(/\n+/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const savedChapter = {
+      ...prev,
+      key,
+      sequence: body.sequence || prev.sequence,
+      title: body.title || prev.title || key,
+      points: points.length ? points : Array.isArray(prev.points) ? [...prev.points] : [],
+      point_items: pointItems,
+      describes: body.describes ?? prev.describes,
+      aux_prompt: body.aux_prompt ?? prev.aux_prompt,
+      reference_text: body.reference_text ?? prev.reference_text,
+      compose: body.compose || prev.compose,
+      presence: body.presence || prev.presence,
+      structure_only: Boolean(body.structure_only),
+      element_ids: Array.isArray(body.element_ids)
+        ? [...body.element_ids]
+        : Array.isArray(prev.element_ids)
+          ? [...prev.element_ids]
+          : [],
+    };
+    chapters[idx] = savedChapter;
+    await request(`/api/writing/tasks/${encodeURIComponent(tid)}/outline`, {
+      method: "PUT",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ chapters }),
+    });
+    applyChapterSnapshotToSession(tid, key, savedChapter);
+    ElMessage.success("章节配置已保存");
+    driveDocWindow("config_saved", {
+      taskId: tid,
+      chapterKey: key,
+      chapter: savedChapter,
+      tab: "config",
+      alreadyPersisted: true,
+      syncSession: false,
+      quiet: true,
+    });
+  } catch (error) {
+    ElMessage.error(error?.message || "保存章节配置失败");
+  }
 }
 
-async function retryChapter(taskId, ch, { writeMode = "start", alreadyPersisted = false } = {}) {
+async function retryChapter(taskId, ch, { writeMode = "start", alreadyPersisted = false, chapterConfig = null } = {}) {
   const key = chapterEditKey(taskId, ch?.key);
   const edit = chapterEdits.value[key];
   // 重试前清掉「已手改」标记，完成后用新草稿刷新编辑区
   if (edit) edit._touched = false;
   const chapterKey = String(ch?.key || "").trim();
-  const displayLabel = chapterUserLabel(taskId, chapterKey, {
+  const overlay =
+    chapterConfig && typeof chapterConfig === "object" && !Array.isArray(chapterConfig)
+      ? chapterConfig
+      : {};
+  let sequence = String(
+    edit?.sequence || ch?.sequence || overlay.sequence || ""
+  ).trim();
+  let title = String(edit?.title || ch?.title || overlay.title || "").trim();
+  if (isPlaceholderChapterName(title) || isInternalChapterSlug(title, chapterKey)) {
+    title = "";
+  }
+  const resolved = chapterUserLabel(taskId, chapterKey, {
     task_id: taskId,
-    sequence: edit?.sequence || ch?.sequence,
-    title: edit?.title || ch?.title,
+    sequence,
+    title,
   });
+  if ((!sequence || !title) && !isPlaceholderChapterName(resolved)) {
+    const m = String(resolved).match(/^(\d+(?:\.\d+)*)\s+(.+)$/);
+    if (m) {
+      sequence = sequence || m[1];
+      title = title || m[2];
+    } else if (!title) {
+      title = resolved;
+    }
+  }
+  const packId = String(
+    sessionRuntime.value?.pending_materials_pack_id ||
+      (sessionRuntime.value?.pending_materials_pack_by_blueprint || {})[
+        String(selectedBlueprint.value || "").trim()
+      ] ||
+      ""
+  ).trim();
   const base = {
     task_id: taskId,
     chapter_key: chapterKey,
-    sequence: String(edit?.sequence || ch?.sequence || "").trim(),
-    title: String(edit?.title || ch?.title || "").trim(),
-    chapter_title: displayLabel,
+    sequence,
+    title,
+    chapter_title: title,
     _write_mode: writeMode === "rewrite" ? "rewrite" : "start",
+    ...(packId ? { materials_pack_id: packId, pack_id: packId } : {}),
   };
-  if (isInternalChapterSlug(base.title, chapterKey)) {
-    base.title = "";
-  }
-  const body = alreadyPersisted
-    ? { ...base, already_persisted: true, from_doc_window: true }
-    : { ...configPayload(taskId, ch), ...base };
+  const preferDisk =
+    alreadyPersisted ||
+    /^w/i.test(String(taskId || "").trim()) ||
+    Boolean(chapterConfig && typeof chapterConfig === "object");
+  const body = preferDisk
+    ? { ...overlay, ...base, already_persisted: true, from_doc_window: true }
+    : { ...configPayload(taskId, ch), ...overlay, ...base };
   await sendAction("retry_chapter", body, { force: true });
 }
 
@@ -4491,15 +5429,19 @@ async function streamSearchBranch(action_payload) {
 async function retrySearchChapter(taskId, ch) {
   if (sending.value) return;
   sending.value = true;
-  const title = ch?.title || ch?.key || "";
+  const payload = enrichActionPayload("retry_search_chapter", {
+    ...configPayload(taskId, ch),
+    sequence: String(ch?.sequence || "").trim(),
+    title: String(ch?.title || "").trim(),
+    chapter_title: String(ch?.title || "").trim(),
+  });
   messages.value.push({
     role: "user",
-    text: `仅重试检索 · ${title}`,
+    text: actionDisplayLabel("retry_search_chapter", payload),
     cards: [],
     steps: [],
   });
   try {
-    const payload = { ...configPayload(taskId, ch), chapter_title: title };
     await streamSearchBranch(payload);
   } catch (error) {
     searchBranchDialog.value = {
@@ -4555,12 +5497,12 @@ const robots = ref([]);
 const robotId = ref("");
 const currentRobot = ref(null);
 const sending = ref(false);
-/** 发送中或文档窗操作锁（分析/写作）时禁止对话框输入 */
+/** 发送中或写作锁时禁止对话框输入；分析中仍可说话（例如「切换到另一份」） */
 const composerLocked = computed(
   () =>
     Boolean(sending.value) ||
-    Boolean(docWindowOpsLocked.value) ||
-    Boolean(pointsDraftInflight.value)
+    Boolean(pointsDraftInflight.value) ||
+    isDocWindowWriteLockActive()
 );
 
 const pauseBusy = ref(false);
@@ -5171,6 +6113,8 @@ const conversationDocuments = computed(() => {
       ...(keepLiveTitle ? {} : { title: liveBp.title || liveBid || (liveWid ? "文档副本" : "蓝本模版") }),
       status: wizardStepCardHeadline(liveStep, liveBp) || "蓝本",
       wizardStep: liveStep,
+      wizardMode:
+        String(liveBp.mode || existingLive?.wizardMode || "").trim() || undefined,
       outlineConfirmed:
         Boolean(liveBp.outline_confirmed) || liveStep === "study" || liveStep === "done",
       study_analyzed: Number(liveBp.study_analyzed ?? 0),
@@ -5379,8 +6323,11 @@ const conversationDocuments = computed(() => {
         (focusKey.startsWith("bp:") && bid && `bp:${bid}` === focusKey) ||
         (focusKey.startsWith("task:") && dTid && focusKey === `task:${dTid}`) ||
         (focusTid && dTid && focusTid === dTid);
-      if (!isFocus && !(!focusKey && docs.length === 1)) continue;
-      if (namedTitle && focusKey && !titleMatchesFocus) continue;
+      if (!isFocus) {
+        if (!(!focusKey && docs.length === 1)) continue;
+        // 无焦点时才用标题对齐，避免把文档2名字画到文档1；焦点文档直接盖会话定名
+        if (namedTitle && !titleMatchesFocus) continue;
+      }
       d.title = displayTitle;
     }
   }
@@ -5670,17 +6617,74 @@ const taskElementNodes = ref({});
 function syncTaskElementsFromProgress(payload) {
   const taskId = payload?.task_id;
   if (!taskId || !Array.isArray(payload?.element_nodes)) return;
+  const prev = taskElementNodes.value[taskId] || [];
+  const merged = mergeElementNodes(prev, payload.element_nodes).map((item) => ({
+    ...item,
+    knowledge_folder_ids: [...(item.knowledge_folder_ids || [])],
+    tags: [...(item.tags || [])],
+  }));
   taskElementNodes.value = {
     ...taskElementNodes.value,
-    [taskId]: payload.element_nodes.map((item) => ({
-      ...item,
-      knowledge_folder_ids: [...(item.knowledge_folder_ids || [])],
-    })),
+    [taskId]: merged,
   };
 }
 
 function elementsForTask(taskId) {
   return taskElementNodes.value[taskId] || [];
+}
+
+/** 关联面板用：写作副本 / 蓝本 / 待收录队列上的要素都要能勾选 */
+function relatedElementTaskIds(taskId) {
+  const tid = String(taskId || "").trim();
+  const ids = new Set();
+  // 无 taskId 时绝不扫全会话文档，否则对话框关闭态每次渲染都会卡死页面
+  if (!tid) return [];
+  ids.add(tid);
+  const wid = writingTaskIdForTask(tid);
+  if (wid) ids.add(wid);
+  for (const d of conversationDocuments.value || []) {
+    const a = String(d?.taskId || "").trim();
+    const b = String(d?.writingTaskId || "").trim();
+    const c = String(d?.blueprintId || "").trim();
+    if (tid === a || tid === b || tid === c || (wid && (wid === a || wid === b))) {
+      if (a) ids.add(a);
+      if (b) ids.add(b);
+      if (c) ids.add(c);
+    }
+  }
+  return [...ids];
+}
+
+function pendingElementsForTasks(taskIds) {
+  const allow = new Set((taskIds || []).map((x) => String(x || "").trim()).filter(Boolean));
+  if (!allow.size) return [];
+  // 直接读 runtime，避免依赖后方才声明的 elementLibraryPendingItems
+  const pending = sessionRuntime.value?.element_library_pending;
+  const list = Array.isArray(pending) ? pending : [];
+  const out = [];
+  for (const row of list) {
+    if (!row || typeof row !== "object") continue;
+    const rowTid = String(row.task_id || "").trim();
+    if (rowTid && !allow.has(rowTid)) continue;
+    const el = row.element;
+    if (el && typeof el === "object" && String(el.id || "").trim()) {
+      out.push({ ...el });
+    }
+  }
+  return out;
+}
+
+function elementsForAssociate(taskId) {
+  const tid = String(taskId || "").trim();
+  if (!tid) return [];
+  const ids = relatedElementTaskIds(tid);
+  if (!ids.length) return [];
+  let all = [];
+  for (const id of ids) {
+    all = mergeElementNodes(all, taskElementNodes.value[id] || []);
+  }
+  all = mergeElementNodes(all, pendingElementsForTasks(ids));
+  return all;
 }
 
 function taskIdForCard(card) {
@@ -5695,15 +6699,7 @@ function touchTaskElements(taskId) {
 
 function syncChapterElementIdsFromConfig(taskId, ch) {
   const edit = ensureChapterEdit(taskId, ch);
-  const fromEdit = Array.isArray(edit.element_ids) ? edit.element_ids : [];
-  const fromCfg = Array.isArray(ch?.config?.element_ids) ? ch.config.element_ids : [];
-  const fromCh = Array.isArray(ch?.element_ids) ? ch.element_ids : [];
-  const picked =
-    (fromEdit.length && fromEdit) ||
-    (fromCfg.length && fromCfg) ||
-    (fromCh.length && fromCh) ||
-    fromEdit;
-  edit.element_ids = [...picked];
+  edit.element_ids = unionElementIds(edit.element_ids, ch?.config?.element_ids, ch?.element_ids);
   return edit;
 }
 
@@ -5722,7 +6718,7 @@ const chapterElementAssociate = ref({
   label: "",
   linkedIds: [],
   associateScope: "chapter",
-  seedCreateDraft: null,
+  pointSeed: null,
 });
 const associatePackSlots = ref([]);
 const associatePointContext = ref(null);
@@ -5752,12 +6748,76 @@ async function loadPackSlotOptionsForTask(taskId) {
   }
 }
 
+function slotFromPointText(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return "";
+  const m = raw.match(/（待补充[：:]([^）)]*)）/);
+  return (m && String(m[1] || "").trim()) || "";
+}
+
+async function collectChapterLinkedIds(taskId, ch, edit) {
+  const tid = String(taskId || "").trim();
+  const ck = String(ch?.key || "").trim();
+  const progress = latestProgressCards().find((c) => c?.type === "progress");
+  const progCh = (progress?.payload?.chapters || []).find((c) => c?.key === ck);
+  let ids = unionElementIds(
+    edit?.element_ids,
+    ch?.element_ids,
+    ch?.config?.element_ids,
+    progCh?.element_ids,
+    progCh?.config?.element_ids
+  );
+  if (ids.length || !tid || !ck) return ids;
+  try {
+    const slim = await request(
+      docOutlineUrl(tid, { writingTaskId: writingTaskIdForTask(tid) })
+    );
+    const node = (slim?.chapters || []).find((item) => String(item?.key || "") === ck);
+    ids = unionElementIds(ids, node?.element_ids, node?.config?.element_ids);
+  } catch {
+    /* 无目录时仍可打开空关联面板 */
+  }
+  return ids;
+}
+
+async function ensureTaskElementsLoaded(taskId) {
+  const tid = String(taskId || "").trim();
+  if (!tid) return [];
+  const ids = relatedElementTaskIds(tid);
+  // 打开关联时主动拉齐副本/蓝本要素，并并入待收录队列里的要素体
+  for (const id of ids) {
+    try {
+      const task = await request(`/api/writing/tasks/${encodeURIComponent(id)}`);
+      if (Array.isArray(task?.element_nodes) && task.element_nodes.length) {
+        syncTaskElementsFromProgress({ task_id: id, element_nodes: task.element_nodes });
+        if (id !== tid) {
+          syncTaskElementsFromProgress({ task_id: tid, element_nodes: task.element_nodes });
+        }
+      }
+    } catch {
+      /* 某一侧任务读失败不挡面板 */
+    }
+  }
+  const pendingEls = pendingElementsForTasks(ids);
+  if (pendingEls.length) {
+    syncTaskElementsFromProgress({ task_id: tid, element_nodes: pendingEls });
+    for (const id of ids) {
+      if (id !== tid) {
+        syncTaskElementsFromProgress({ task_id: id, element_nodes: pendingEls });
+      }
+    }
+  }
+  return elementsForAssociate(tid);
+}
+
 async function openChapterElementAssociate(taskId, ch) {
   if (!taskId || !ch?.key) return;
+  await ensureTaskElementsLoaded(taskId);
   const edit = syncChapterElementIdsFromConfig(taskId, ch);
   const key = chapterEditKey(taskId, ch.key);
   const chapterEdit = chapterEdits.value[key] || edit;
-  let seedCreateDraft = null;
+  // 打开只弹关联面板：章节要素不生成；要点要素也不自动生成，由面板按钮按需触发
+  let pointSeed = null;
   const ctx = associatePointContext.value;
   if (ctx) {
     let pointText = "";
@@ -5775,49 +6835,26 @@ async function openChapterElementAssociate(taskId, ch) {
       row = items.find((r) => String(r?.id || "") === String(ctx.id).trim()) || null;
     }
     if (row) {
-      pointText = String(row.text || "").trim();
+      pointText = String(row.text || row.label || "").trim();
       if (!slot) slot = String(row.slot || "").trim();
     }
-    if (slot || pointText) {
-      const loading = ElMessage({
-        message: "正在生成要素配置…",
-        type: "info",
-        duration: 0,
-      });
-      try {
-        const data = await request(
-          `/api/writing/tasks/${encodeURIComponent(taskId)}/elements/draft-from-point`,
-          {
-            method: "POST",
-            headers: authHeaders({ "Content-Type": "application/json" }),
-            body: JSON.stringify({
-              chapter_key: ch.key,
-              title: String(ch.title || chapterEdit.title || "").trim(),
-              sequence: String(ch.sequence || chapterEdit.sequence || "").trim(),
-              describes: String(chapterEdit.describes || "").trim(),
-              point_text: pointText,
-              slot,
-              point_id: String(ctx.id || "").trim(),
-            }),
-          }
-        );
-        seedCreateDraft = data?.draft || null;
-        if (seedCreateDraft) {
-          ElMessage.success(data?.from_llm ? "已生成要素草稿，请确认" : "已预填要素草稿，请确认");
-        }
-      } catch (error) {
-        ElMessage.warning(error?.message || "要素草稿生成失败，请手动配置");
-      } finally {
-        loading.close();
-      }
-    }
+    if (!slot) slot = slotFromPointText(pointText);
+    pointSeed = {
+      chapterKey: ch.key,
+      title: String(ch.title || chapterEdit.title || "").trim(),
+      sequence: String(ch.sequence || chapterEdit.sequence || "").trim(),
+      describes: String(chapterEdit.describes || "").trim(),
+      pointText,
+      slot,
+      pointId: String(ctx.id || row?.id || "").trim(),
+    };
   }
   chapterElementAssociate.value = {
     visible: true,
     taskId,
     chapterKey: ch.key,
     label: `${ch.sequence || ""} ${ch.title || ch.key}`.trim(),
-    linkedIds: (() => {
+    linkedIds: await (async () => {
       if (ctx) {
         const items = Array.isArray(ctx.pointItems) && ctx.pointItems.length
           ? ctx.pointItems
@@ -5833,10 +6870,10 @@ async function openChapterElementAssociate(taskId, ch) {
         const eid = String(row?.element_id || "").trim();
         return eid ? [eid] : [];
       }
-      return [...(edit.element_ids || [])];
+      return collectChapterLinkedIds(taskId, ch, edit);
     })(),
     associateScope: ctx ? "point" : "chapter",
-    seedCreateDraft,
+    pointSeed,
   };
   associatePackSlots.value = await loadPackSlotOptionsForTask(taskId);
 }
@@ -5940,40 +6977,69 @@ async function onChapterElementAssociateConfirm({ linkedIds, newElements }) {
       []
     );
   }
-  const pointItemLink = associatePointContext.value;
-  const isPointScope = Boolean(pointItemLink);
+  const pointItemLink = associatePointContext.value
+    ? { ...associatePointContext.value }
+    : null;
+  // 面板 associateScope 为真源；context 丢失时仍按要点落盘，禁止把 linkedIds 写进章级
+  const isPointScope =
+    String(chapterElementAssociate.value?.associateScope || "").trim() === "point" ||
+    Boolean(pointItemLink);
   let chapterElementIds = [...prevChapterIds];
+  let resolvedPointLink = pointItemLink;
   if (isPointScope) {
+    // 无可用 index/id 时，把本次勾选落到第一条仍待关联的要点，避免「点了确定却没写上」
+    const seed = chapterElementAssociate.value?.pointSeed || null;
+    const link = {
+      id: String(pointItemLink?.id || seed?.pointId || "").trim(),
+      index: pointItemLink?.index,
+      slot: String(pointItemLink?.slot || seed?.slot || "").trim(),
+      ...(Array.isArray(pointItemLink?.pointItems)
+        ? { pointItems: pointItemLink.pointItems }
+        : {}),
+    };
+    const idx = Number(link.index);
+    const hasIdx = Number.isFinite(idx) && idx >= 0 && idx < pointItems.length;
+    const hasId =
+      String(link.id || "").trim() &&
+      pointItems.some((row) => String(row?.id || "") === String(link.id || "").trim());
+    if (!hasIdx && !hasId) {
+      const fallback = pointItems.findIndex(
+        (row) =>
+          !String(row?.element_id || "").trim() &&
+          (row?.needs_supplement ||
+            textNeedsSupplement(String(row?.text || "")) ||
+            String(row?.slot || "").trim())
+      );
+      link.index = fallback >= 0 ? fallback : 0;
+    }
+    resolvedPointLink = link;
     pointItems = linkPointItemsToElements(pointItems, all, {
       elementIds: linkedIds,
       newElementIds: newIds,
-      pointLink: pointItemLink,
+      pointLink: link,
       assignOrphans: false,
     });
+    // 要点模式：章级 ids 保持 prev，绝不把本次 linkedIds 并进章节
+    chapterElementIds = [...prevChapterIds];
   } else {
+    // 关联面板提交的是本章完整列表（含取消勾选）；勿再并回 prev，否则无法取消关联
     chapterElementIds = [...linkedIds];
     edit.element_ids = [...chapterElementIds];
   }
   const pointsLines = pointsFromPointItems(pointItems);
+  // 关联后绝不能用空 points 盖掉原要点正文
+  if (!pointsLines.length && pointItems.length) {
+    for (const row of pointItems) {
+      const text = String(row?.text || "").trim();
+      if (text) pointsLines.push(text);
+    }
+  }
   if (!isPointScope) {
     edit.element_ids = [...chapterElementIds];
   }
   edit.point_items = pointItems;
-  edit.pointsText = pointsLines.join("\n");
+  if (pointsLines.length) edit.pointsText = pointsLines.join("\n");
   chapterEdits.value = { ...chapterEdits.value, [key]: { ...edit } };
-  const linkedElements = linkedIds
-    .map((id) => all.find((item) => String(item?.id || "") === String(id || "").trim()))
-    .filter(Boolean);
-  const elementSummary = linkedElements
-    .map((el) => `${el.name || el.id}（${elementKindLabel(el.kind)}）`)
-    .join("、");
-  let slotLabel = String(pointItemLink?.slot || "").trim();
-  let pointText = "";
-  const pi = Number(pointItemLink?.index);
-  if (Number.isFinite(pi) && pi >= 0 && pointItems[pi]) {
-    pointText = String(pointItems[pi].text || "");
-    if (!slotLabel) slotLabel = String(pointItems[pi].slot || "").trim();
-  }
   associatePointContext.value = null;
   touchTaskElements(tid);
   const pointPatch = {
@@ -5989,7 +7055,7 @@ async function onChapterElementAssociateConfirm({ linkedIds, newElements }) {
     elementNodes: all,
     elementIds: [...chapterElementIds],
     newElementIds: newIds,
-    pointItemLink,
+    pointItemLink: resolvedPointLink,
     associateScope: isPointScope ? "point" : "chapter",
     pointItems: pointItems.map((row) => ({ ...row })),
   };
@@ -6007,21 +7073,22 @@ async function onChapterElementAssociateConfirm({ linkedIds, newElements }) {
       });
     }
     const slim = await request(
-      `/api/writing/tasks/${encodeURIComponent(tid)}/doc-outline?fresh=1`
+      docOutlineUrl(tid, { fresh: true, writingTaskId: writingTaskIdForTask(tid) })
     );
     const chapters = (slim?.chapters || []).map((item) => ({ ...item }));
     const idx = chapters.findIndex((item) => String(item.key || "") === chapterKey);
     let savedChapter = null;
     if (idx >= 0) {
       const prev = chapters[idx];
+      const persistIds = chapterElementIdsForPersist(chapterElementIds, pointItems);
       savedChapter = {
         ...prev,
-        element_ids: [...chapterElementIds],
+        element_ids: [...persistIds],
         point_items: pointItems.map((row) => ({ ...row })),
         points: pointsLines,
         config: {
           ...(prev.config && typeof prev.config === "object" ? prev.config : {}),
-          element_ids: [...chapterElementIds],
+          element_ids: [...persistIds],
           point_items: pointItems.map((row) => ({ ...row })),
           points: pointsLines,
         },
@@ -6036,23 +7103,18 @@ async function onChapterElementAssociateConfirm({ linkedIds, newElements }) {
     ElMessage.success("要素关联已保存");
     if (savedChapter) {
       applyChapterSnapshotToSession(tid, chapterKey, savedChapter);
+      driveDocWindow("bindings_committed", {
+        taskId: tid,
+        chapterKey,
+        tab: "config",
+        serverChapter: savedChapter,
+      });
     }
-    const editSnap = chapterEdits.value[chapterEditKey(tid, chapterKey)] || {};
-    appendElementAssociateChatTranscript("done", {
-      chapterLabel: String(chapterElementAssociate.value?.label || "").trim() || chapterKey,
-      slot: slotLabel,
-      pointText,
-      elementSummary,
-      describes: editSnap.describes || "",
-    });
   } catch (error) {
     ElMessage.error(error?.message || "保存要素关联失败");
+    driveDocWindow("bindings_refresh", { taskId: tid, chapterKey, tab: "config" });
   }
-
-  // 落盘后再推一次，防止 configure 的 config_saved / loadHistory 冲掉乐观态
-  patchChapterElementIdsEverywhere(tid, chapterKey, chapterElementIds, pointPatch);
-  driveDocWindow("elements_associated", elementsAssociatedLocate);
-  // 新建要素：入队待收录并提示；纯勾选已有库要素不打扰
+  // 新建要素：入队待收录（只亮角标，不自动弹窗）；纯勾选已有库要素不打扰
   const brandNew = (newElements || []).filter(
     (el) => el?.id && !String(el.library_item_id || "").trim()
   );
@@ -6063,11 +7125,9 @@ async function onChapterElementAssociateConfirm({ linkedIds, newElements }) {
       chapterTitle: String(chapterElementAssociate.value?.label || "").trim(),
       elementIds: brandNew.map((el) => el.id),
       elements: brandNew,
-      openDialog: true,
+      openDialog: false,
     });
   }
-  // 本地已是真值；软刷新即可，force 重拉易与进度卡旧 point_items 竞态冲掉关联
-  bumpDocOutlineReload({ force: false });
 }
 const renderTemplates = ref([]);
 const wordStyles = ref([]);
@@ -6629,7 +7689,11 @@ const phaseLabel = computed(() => {
   const wr = writingRuntime.value;
   const prog = wr?.progress;
   if (wr?.active && prog && Number(prog.total) > 0) {
+    const running = Boolean(prog.running);
     const extra = ` · 章 ${prog.confirmed || 0}/${prog.total}`;
+    if (!running && phase.value === "writing") {
+      base = "待继续";
+    }
     return base ? `${base}${extra}` : extra.slice(3);
   }
   if (wr?.paused && base) return `${base} · 已暂停`;
@@ -6781,7 +7845,9 @@ async function onRobotChange(id, options = {}) {
       render_template_ids: [...(currentRobot.value.render_template_ids || [])],
       word_style_ids: [...(currentRobot.value.word_style_ids || [])],
     };
-    await Promise.all([loadRenderTemplatesForRobot(id), loadWordStyles(), loadHistory()]);
+    const sidecars = [loadRenderTemplatesForRobot(id), loadWordStyles()];
+    if (!options.skipHistory) sidecars.push(loadHistory());
+    await Promise.all(sidecars);
     syncDefaultExportTemplate();
     if (
       !skipResourceCheck &&
@@ -6811,6 +7877,90 @@ function persistSession(id) {
   else localStorage.removeItem(key);
 }
 
+/** 进度卡历史上塞过整章 draft_text / 完整要素节点；加载/落库时裁掉，避免会话变慢 */
+function slimProgressCardPayload(payload) {
+  if (!payload || typeof payload !== "object") return payload || {};
+  const chapters = (Array.isArray(payload.chapters) ? payload.chapters : []).filter(
+    (ch) => chapterWasWrittenOrWriting(ch)
+  );
+  const slimChapters = chapters.map((ch) => {
+    if (!ch || typeof ch !== "object") return ch;
+    const cfg = ch.config && typeof ch.config === "object" ? ch.config : null;
+    const next = {
+      ...ch,
+      draft_preview: String(ch.draft_preview || ch.draft_text || "").slice(0, 1800),
+      evidence: Array.isArray(ch.evidence)
+        ? ch.evidence.slice(0, 8).map((ev) => ({
+            ...ev,
+            excerpt: String(ev?.excerpt || "").slice(0, 180),
+            query: String(ev?.query || "").slice(0, 80),
+          }))
+        : ch.evidence,
+      element_results: Array.isArray(ch.element_results)
+        ? ch.element_results.slice(0, 12).map((row) => ({
+            ...row,
+            value: String(row?.value || "").slice(0, 240),
+            query: String(row?.query || "").slice(0, 120),
+          }))
+        : ch.element_results,
+      uncovered_points: Array.isArray(ch.uncovered_points)
+        ? ch.uncovered_points.slice(0, 12)
+        : ch.uncovered_points,
+      steps: Array.isArray(ch.steps) ? ch.steps.slice(-8) : ch.steps,
+    };
+    delete next.draft_text;
+    if (cfg) {
+      next.config = {
+        ...cfg,
+        reference_text: "",
+        describes: String(cfg.describes || ""),
+        aux_prompt: String(cfg.aux_prompt || "").slice(0, 240),
+        points: Array.isArray(cfg.points) ? cfg.points.slice(0, 20) : cfg.points,
+        point_items: Array.isArray(cfg.point_items)
+          ? cfg.point_items.slice(0, 20).map((row, i) => ({
+              id: String(row?.id || `p${i}`),
+              text: String(row?.text || "").slice(0, 200),
+              ...(String(row?.element_id || "").trim()
+                ? {
+                    element_id: String(row.element_id).trim(),
+                    element_name: String(row?.element_name || "").slice(0, 80),
+                  }
+                : {}),
+              ...(String(row?.slot || "").trim() ? { slot: String(row.slot).trim() } : {}),
+            }))
+          : cfg.point_items,
+        extracts: [],
+      };
+    }
+    return next;
+  });
+  const nodes = Array.isArray(payload.element_nodes) ? payload.element_nodes : [];
+  const slimNodes = nodes.slice(0, 64).map((item) => ({
+    id: String(item?.id || "").trim(),
+    name: String(item?.name || item?.id || "").trim(),
+    kind: String(item?.kind || "").trim(),
+    query: String(item?.query || "").slice(0, 120),
+    result: String(item?.result || item?.value || "").slice(0, 240),
+    required: item?.required !== false,
+    library_item_id: String(item?.library_item_id || "").trim(),
+    knowledge_folder_ids: Array.isArray(item?.knowledge_folder_ids)
+      ? item.knowledge_folder_ids.slice(0, 8)
+      : [],
+  })).filter((row) => row.id);
+  return { ...payload, chapters: slimChapters, element_nodes: slimNodes };
+}
+
+function slimMessageCard(card) {
+  if (!card || typeof card !== "object") return card;
+  if (card.type === "blueprint_wizard") {
+    return { ...card, payload: freezeWizardCardPayload(card.payload || {}) };
+  }
+  if (card.type === "progress") {
+    return { ...card, payload: slimProgressCardPayload(card.payload || {}) };
+  }
+  return card;
+}
+
 function mapSessionMessages(session) {
   return (session?.messages || []).map((m) => {
     const steps = Array.isArray(m.steps) ? m.steps : [];
@@ -6820,15 +7970,18 @@ function mapSessionMessages(session) {
       text: m.text,
       document_key: docKey,
       document_id: String(m.document_id || m.document_key || "").trim() || docKey,
-      cards: (m.cards || []).map((c) => {
-        if (c?.type !== "blueprint_wizard") return c;
-        // 落库卡一律冻掉自驱 trigger，避免重进会话又自动提取/分析
-        return { ...c, payload: freezeWizardCardPayload(c.payload || {}) };
-      }),
-      // 历史过程条若停在「正在…」则收成完成态
+      cards: (m.cards || []).map((c) => slimMessageCard(c)),
+      // 历史过程条若停在「正在… / ▶ 正在分析」则收成完成态
       steps: steps.map((row) => {
         const msg = String(row?.message || "");
-        if (!msg || (!/^正在/.test(msg) && !/正在自动生成/.test(msg))) return row;
+        if (
+          !msg ||
+          (!/^正在/.test(msg) &&
+            !/正在自动生成/.test(msg) &&
+            !isStudyRunningProcessMessage(msg))
+        ) {
+          return row;
+        }
         return { ...row, message: processMessageAsDone(msg) };
       }),
     };
@@ -6923,7 +8076,7 @@ function scrollChatToFocusThread() {
     const list = messages.value || [];
     for (let i = list.length - 1; i >= 0; i -= 1) {
       if (!messageVisibleInThread(list[i])) continue;
-      const el = chatStageEl.value?.querySelectorAll(".bubble")?.[i];
+      const el = chatStageEl.value?.querySelectorAll(".chat-bubble, .bubble")?.[i];
       el?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
       scheduleScrollChatToBottom(true);
       break;
@@ -7115,19 +8268,25 @@ function buildUiStatePayload() {
     const steps = msg.steps || [];
     const cards = msg.cards || [];
     const hasWizard = cards.some((c) => c?.type === "blueprint_wizard");
-    // 过程条与向导卡快照必须落库；无过程/无向导的纯气泡已由 turn 写入服务端
-    if (!steps.length && !hasWizard) return;
+    const hasProgress = cards.some((c) => c?.type === "progress");
+    // 过程条 / 向导 / 进度卡需落库；纯气泡已由 turn 写入。进度卡历史会塞整章正文，必须回写瘦身后的快照
+    if (!steps.length && !hasWizard && !hasProgress) return;
     // 不回写 text：服务端已落库。错位序号曾把 AI 正文写成用户的话。
     const patch = { index: mi, role: String(msg.role || "") };
     if (steps.length) patch.steps = steps.slice(-30);
     if (cards.length) {
       patch.cards = cards.map((c) => {
-        const payload = { ...(c?.payload || {}) };
         if (c?.type === "blueprint_wizard") {
           // 最新卡也冻 trigger：进行中的自驱只活在内存 live，不写回消息快照
-          return { ...c, payload: slimWizardPayload(freezeWizardCardPayload(payload)) };
+          return {
+            ...c,
+            payload: slimWizardPayload(freezeWizardCardPayload({ ...(c?.payload || {}) })),
+          };
         }
-        return { ...c, payload };
+        if (c?.type === "progress") {
+          return { ...c, payload: slimProgressCardPayload(c?.payload || {}) };
+        }
+        return { ...c, payload: { ...(c?.payload || {}) } };
       });
     }
     message_patches.push(patch);
@@ -7173,6 +8332,7 @@ function buildUiStatePayload() {
     template_wizard: tplPatch,
     export_prefs: exportPatch,
     chapter_edits,
+    config_revision: clientConfigRevision.value,
   };
   if (focusKey) {
     freeform_patch.focus_document_key = focusKey;
@@ -7194,6 +8354,19 @@ function buildUiStatePayload() {
       (focusBpFromDoc && !/^w/i.test(focusBpFromDoc) ? focusBpFromDoc : "") ||
       String(selectedBlueprint.value || "").trim(),
     focus_document_key: focusKey,
+  };
+}
+
+/** 流式开写前只带焦点/向导/章节草稿，不扫全部历史卡 */
+function buildStreamClientSync() {
+  const full = buildUiStatePayload();
+  return {
+    used_card_keys: full.used_card_keys,
+    chapter_edits: full.chapter_edits,
+    freeform_patch: full.freeform_patch,
+    focus_task_id: full.focus_task_id,
+    focus_blueprint_id: full.focus_blueprint_id,
+    focus_document_key: full.focus_document_key,
   };
 }
 
@@ -7587,14 +8760,14 @@ async function onLibraryPendingChanged(payload) {
   }
 }
 
-/** 文档窗静默新增要素后入队待收录，并刷新角标 / 必要时打开对话框 */
+/** 文档窗静默新增要素后入队待收录，并刷新角标（默认不弹窗，用户点「待收录要素」再开） */
 async function queueElementLibraryPending({
   taskId,
   chapterKey = "",
   chapterTitle = "",
   elementIds = [],
   elements = [],
-  openDialog = true,
+  openDialog = false,
 } = {}) {
   const sid = String(sessionId.value || "").trim();
   const tid = String(taskId || "").trim();
@@ -7665,6 +8838,9 @@ async function applySession(session, { suppressAutoPopups = true } = {}) {
     }
     persistSession(session.id);
     messages.value = mapSessionMessages(session);
+    for (const m of messages.value) {
+      if ((m.cards || []).some((c) => c?.type === "progress")) syncWritingProgressToBubble(m);
+    }
     if (!messages.value.length) seedOpeningGreeting();
     phase.value = session.phase || "intent";
     taskId.value = session.task_id || "";
@@ -7687,7 +8863,8 @@ async function applySession(session, { suppressAutoPopups = true } = {}) {
     ensureLibraryPendingCardVisible(session);
     if (session.robot_id) {
       robotId.value = session.robot_id;
-      await onRobotChange(session.robot_id, { skipResourceCheck: true });
+      // 先出消息，机器人侧车后台补；boot 已拉过 history
+      void onRobotChange(session.robot_id, { skipResourceCheck: true, skipHistory: true });
     }
     scrollChatToBottom(true);
   } finally {
@@ -7899,8 +9076,41 @@ function applyDoneMeta(data) {
     }
     return null;
   })();
-  if (studyPayloadFromCards) {
-    applyLiveWizardFromSource(studyPayloadFromCards);
+  const studyKickFromWizard = (() => {
+    const src = studyPayloadFromCards || wizardFromDone;
+    if (!src || typeof src !== "object") return null;
+    const keys = (src.trigger_chapter_study || src.chapter_study_keys || [])
+      .map((k) => String(k || "").trim())
+      .filter(Boolean);
+    if (src.trigger_begin_study === true || keys.length) {
+      return {
+        ...src,
+        step: "study",
+        ...(keys.length ? { trigger_chapter_study: keys, chapter_study_keys: keys } : {}),
+      };
+    }
+    return null;
+  })();
+  const liveHasStudyKick = (() => {
+    const live = liveBlueprintWizard.value || {};
+    const keys = (live.trigger_chapter_study || live.chapter_study_keys || [])
+      .map((k) => String(k || "").trim())
+      .filter(Boolean);
+    return live.trigger_begin_study === true || keys.length > 0;
+  })();
+  // softSync/GET 路径不得因残留卡 payload 重新武装；仅 SSE done 显式带 kick 时才 arm
+  const allowArmFromDone = data?._allowStudyKickArm === true;
+  if (studyKickFromWizard && allowArmFromDone) {
+    pageStudyKickArmed = true;
+    applyLiveWizardFromSource(studyKickFromWizard);
+  } else if (studyKickFromWizard && !allowArmFromDone) {
+    // GET/softSync 偶发带回 trigger：剥掉，禁止自动开跑
+    applyLiveWizardFromSource(stripEphemeralWizardTriggers(studyKickFromWizard));
+  } else if (pageStudyInflight || (liveHasStudyKick && pageStudyKickArmed)) {
+    // 本轮已排队/开跑的分析：softSync 剥过的 GET 快照不得清掉 trigger
+  } else if (liveHasStudyKick) {
+    // 上一轮残留 trigger：开写/闲聊 GET 不得再点燃自动分析
+    liveBlueprintWizard.value = stripEphemeralWizardTriggers(liveBlueprintWizard.value || {});
   } else if (
     shouldSuppressBlueprintWizardForFreeform(
       {
@@ -7920,8 +9130,7 @@ function applyDoneMeta(data) {
   } else {
     const bp = wizardFromDone;
     if (bp) {
-      // 会话快照 / softSync 里的 leftover trigger 不得点燃自动分析；
-      // 本轮真正要开跑时由 done 后续的 studyIntent 分支再写入并 kickoff。
+      // 会话快照 / softSync 里的 leftover trigger 不得点燃自动分析
       applyLiveWizardFromSource(stripEphemeralWizardTriggers(bp));
     }
   }
@@ -7985,7 +9194,12 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
   const ownerEpoch = currentSessionEpoch();
   const ownerSidAtStart = String(sessionId.value || "").trim();
   streamFocusPinnedKey = "";
-  writingStreamActive = false;
+  const writeStreamAction =
+    action === "start_writing" ||
+    action === "write_analyzed_only" ||
+    action === "retry_chapter" ||
+    action === "save_and_retry";
+  writingStreamActive = writeStreamAction;
   const stillThisStream = () => {
     if (!isCurrentSessionContext(ownerEpoch)) return false;
     const cur = String(sessionId.value || "").trim();
@@ -8020,7 +9234,7 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
         session_id: sessionId.value || "",
         action,
         action_payload,
-        client_sync: client_sync || buildUiStatePayload(),
+        client_sync: client_sync || buildStreamClientSync(),
       }),
     });
   } catch (error) {
@@ -8095,11 +9309,13 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
         onBlueprintWizardProcess(msg);
         return;
       }
-      // 写作过程行改由小窗承接，不进会话过程条
-      if (isWritingProcessMessage(msg)) {
-        if (/检索|写作|检查|正在写|开始写/.test(String(msg))) {
-          onBlueprintWizardProcess(msg);
-        }
+      // 写作过程：边跑边进行气泡虚线框（不要等整章结束）
+      const writeLine =
+        isWritingProcessMessage(msg) ||
+        (writingStreamActive && /^[　▶✓]/.test(msg));
+      if (writeLine) {
+        appendWriteProgress(msgRef, msg);
+        scheduleScrollChatToBottom();
         return;
       }
       const studyish =
@@ -8157,10 +9373,15 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
         invokeHook: false,
       });
       if (focusTid && key) {
-        setDocWindowStudyBusy(
-          true,
-          total > 0 ? `要点进度 ${analyzed}/${total}` : "正在起草写作要点…"
-        );
+        const studyDone = unanalyzed <= 0 && analyzed > 0;
+        if (studyDone) {
+          setDocWindowStudyBusy(false);
+        } else {
+          setDocWindowStudyBusy(
+            true,
+            total > 0 ? `要点进度 ${analyzed}/${total}` : "正在起草写作要点…"
+          );
+        }
         // 副本 w* 分析时不要把 blueprintId 写成 w*，否则「同步到蓝本库」会丢源蓝本
         if (isWritingCopyId(focusTid) && sourceBp) {
           liveBlueprintWizard.value = mergeWizardPayload(liveBlueprintWizard.value || {}, {
@@ -8168,7 +9389,7 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
             source_blueprint_id: sourceBp,
             working_task_id: focusTid,
             step: "study",
-            study_stream_active: true,
+            study_stream_active: !studyDone,
             study_analyzed: analyzed,
             study_unanalyzed: unanalyzed,
           });
@@ -8179,11 +9400,16 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
           chapterKey: key,
           tab: "config",
           points: Array.isArray(event.points) ? event.points : null,
+          point_items: Array.isArray(event.point_items) ? event.point_items : null,
           keywords: Array.isArray(event.keywords) ? event.keywords : null,
           describes: event.describes || "",
+          structure_only: event.structure_only,
+          ...(event.clear_element_bindings
+            ? { clear_element_bindings: true }
+            : {}),
         });
-        // 末章强制直读库；中途软刷新即可
-        bumpDocOutlineReload({ force: unanalyzed <= 0 });
+        // 本章要点已由 locate 合入；立刻拉目录会用库蓝本旧 point_items 盖掉右侧表
+        if (unanalyzed <= 0) bumpDocOutlineReload({ force: true });
       }
       scheduleScrollChatToBottom();
       return;
@@ -8192,9 +9418,92 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
       const stepLine = formatStepEvent(event);
       const writing = isWritingPipelineEvent(event);
       if (writing) {
-        onBlueprintWizardProcess(stepLine);
+        // 边跑边追加；写步骤开始时补一次本章要点上下文
+        const st = String(event.status || "").trim();
+        const step = String(event.step || "").trim();
+        if (step === "write" && (st === "running" || !st)) {
+          const row =
+            findProgressChapterRow(msgRef, event.chapter) ||
+            {
+              key: event.chapter,
+              title: event.title || "",
+              ...(event.result?.config || {}),
+              points: event.result?.points,
+              describes: event.result?.describes,
+              aux_prompt: event.result?.aux_prompt,
+              config: event.result?.config,
+            };
+          pushChapterWriteContext(msgRef, row, { title: event.title || "" });
+          const defects = Array.isArray(event.result?.check_defects)
+            ? event.result.check_defects
+            : [];
+          if (defects.length) {
+            appendWriteProgress(msgRef, `上一轮检查缺陷 · ${defects.length} 条`);
+            for (const d of defects.slice(0, 6)) {
+              const msg = String(d?.message || "").trim();
+              if (!msg) continue;
+              const idx = Number(d?.index);
+              appendWriteProgress(
+                msgRef,
+                Number.isFinite(idx) && idx >= 0 ? `改第 ${idx + 1} 段：${msg}` : `待改：${msg}`
+              );
+            }
+          }
+        }
+        if (step === "write" && st === "done") {
+          const paras = event.result?.paragraphs;
+          const html = Array.isArray(paras)
+            ? paras
+                .map((p) => (typeof p === "string" ? p : p?.text || ""))
+                .filter(Boolean)
+                .join("\n")
+            : "";
+          const writeTid = String(
+            (msgRef.cards || []).find((c) => c?.type === "progress")?.payload?.task_id ||
+              event.task_id ||
+              ""
+          ).trim();
+          const ck = String(event.chapter || "").trim();
+          if (writeTid && ck && html.trim()) {
+            liveWriteHtmlByChapter.set(`${writeTid}::${ck}`, html.trim());
+            const row = findProgressChapterRow(msgRef, ck);
+            appendChapterDraftToBubble(msgRef, {
+              tid: writeTid,
+              chapterKey: ck,
+              title: event.title || row?.title,
+              html: html.trim(),
+            });
+          }
+        }
+        if (step === "check" && (st === "done" || st === "skipped")) {
+          const writeTid = String(
+            (msgRef.cards || []).find((c) => c?.type === "progress")?.payload?.task_id ||
+              event.task_id ||
+              ""
+          ).trim();
+          const ck = String(event.chapter || "").trim();
+          if (writeTid && ck) {
+            const row = findProgressChapterRow(msgRef, ck);
+            const html = resolveChapterDraftHtml(writeTid, ck, { ch: row, event });
+            appendChapterDraftToBubble(msgRef, {
+              tid: writeTid,
+              chapterKey: ck,
+              title: event.title || row?.title,
+              html,
+            });
+          }
+        }
+        appendWriteProgress(
+          msgRef,
+          stepLine,
+          event.status === "error" ? "error" : "process"
+        );
       } else {
         pushProcess(msgRef, stepLine, event.status === "error" ? "error" : "step");
+      }
+      if (writing) {
+        writingStreamActive = true;
+        setDocWindowWriteBusy(true, "正在写作…");
       }
       if (event.chapter) {
         const progress = (msgRef.cards || []).find((c) => c?.type === "progress");
@@ -8207,32 +9516,33 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
           if (writing) {
             const st = String(event.status || "").trim();
             const step = String(event.step || "").trim();
-            // status=done 时勿用 step 冒充 running；仍定位章节以便 force 刷后回钉
             const running =
               st === "running" ||
               (!st && ["searching", "writing", "checking", "running"].includes(step));
-            writingStreamActive = true;
-            setDocWindowWriteBusy(true, "正在写作…");
             if (running || st === "done" || !st) {
               driveDocWindow("write_running", {
                 taskId: writeTid,
                 chapterKey: event.chapter,
-                mainView: "preview",
+                mainView: "chapter",
+                tab: "content",
               });
             }
           }
         }
       }
-      if (!writing) scheduleScrollChatToBottom();
+      scheduleScrollChatToBottom();
       return;
     }
     if (event.type === "chapter_start") {
       const idx = event.index && event.total ? `(${event.index}/${event.total}) ` : "";
       const line = `▶ ${idx}开始写「${event.title || event.chapter || "章节"}」`;
-      // 不进会话；只驱动小窗「写作过程」→ 正文
-      onBlueprintWizardProcess(line);
       writingStreamActive = true;
       setDocWindowWriteBusy(true, "正在写作…");
+      const row =
+        findProgressChapterRow(msgRef, event.chapter) ||
+        { key: event.chapter, title: event.title || "" };
+      pushChapterWriteContext(msgRef, row, { title: event.title || event.chapter || "" });
+      appendWriteProgress(msgRef, line);
       if (event.task_id && event.chapter) {
         resetLiveWritingChapter(event.task_id, event.chapter, {
           title: event.title || "",
@@ -8241,17 +9551,17 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
         driveDocWindow("write_running", {
           taskId: event.task_id,
           chapterKey: event.chapter,
-          mainView: "preview",
+          mainView: "chapter",
+          tab: "content",
         });
       }
+      scheduleScrollChatToBottom();
       return;
     }
     if (event.type === "chapter_done") {
       const idx = event.index && event.total ? `(${event.index}/${event.total}) ` : "";
       const st = event.status_label || event.status || "";
       const line = `✓ ${idx}「${event.title || event.chapter || "章节"}」结束${st ? ` · ${st}` : ""}`;
-      // 不进会话；写作完成必须定位到本章「正文」页签，并刷新目录「已写作」态
-      onBlueprintWizardProcess(line);
       const doneTid = String(
         (Array.isArray(event.cards) &&
           event.cards.find((c) => c?.type === "progress")?.payload?.task_id) ||
@@ -8259,33 +9569,71 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
           ""
       ).trim();
       const doneKey = String(event.chapter || "").trim();
+      let doneHit = null;
       if (Array.isArray(event.cards) && event.cards.length) {
         msgRef.cards = event.cards;
         const progress = event.cards.find((c) => c?.type === "progress");
         const tid = progress?.payload?.task_id || event.task_id;
-        const hit = (progress?.payload?.chapters || []).find((c) => c?.key === event.chapter);
-        if (tid && hit) adoptServerDraft(tid, hit, { force: true });
+        doneHit = (progress?.payload?.chapters || []).find((c) => c?.key === event.chapter);
+        if (tid && doneHit) adoptServerDraft(tid, doneHit, { force: true });
         if (tid && event.chapter) clearLiveWritingChapter(tid, event.chapter);
+        const doneHtmlEarly = resolveChapterDraftHtml(String(tid || "").trim(), doneKey, {
+          event,
+          ch: doneHit,
+        });
+        pushChapterWriteDone(msgRef, doneHit, {
+          title: event.title || doneHit?.title || "",
+          statusLabel: st,
+          preview: doneHtmlEarly,
+          taskId: tid || doneTid,
+          chapterKey: doneKey,
+        });
         expandOnlyChapter(tid || event.task_id, event.chapter, event.cards, { refreshText: true });
       } else if (event.task_id && event.chapter) {
         clearLiveWritingChapter(event.task_id, event.chapter);
         expandOnlyChapter(event.task_id, event.chapter, msgRef.cards, { refreshText: true });
+        doneHit = findProgressChapterRow(msgRef, event.chapter);
+        const doneHtmlEarly = resolveChapterDraftHtml(doneTid, doneKey, {
+          event,
+          ch: doneHit,
+        });
+        pushChapterWriteDone(msgRef, doneHit, {
+          title: event.title || "",
+          statusLabel: st,
+          preview: doneHtmlEarly,
+          taskId: doneTid,
+          chapterKey: doneKey,
+        });
+      } else {
+        appendWriteProgress(msgRef, line);
       }
+      const doneHtml = resolveChapterDraftHtml(doneTid, doneKey, { event, ch: doneHit });
+      if (doneTid && doneKey && doneHtml) {
+        liveWriteHtmlByChapter.set(`${doneTid}::${doneKey}`, doneHtml);
+      }
+      bumpDraftPreviewReload();
       if (doneTid && doneKey) {
         driveDocWindow("write_chapter_done", {
           taskId: doneTid,
           chapterKey: doneKey,
           mainView: "preview",
+          tab: "content",
+          draftHtml: doneHtml,
+          draftTitle: event.title || "",
         });
       }
-      // 软刷目录：把已写章节 status/has_draft 合回蓝本树；刷完后小窗会再钉正文 tab
-      bumpDocOutlineReload({ force: false });
+      // 软刷目录：把已写章节 status/has_draft 合回蓝本树；刷完后钉回写作进度（获取到的要素）
+      bumpDocOutlineReload({ force: docWindowOpen.value });
       if (doneTid && doneKey) {
         nextTick(() => {
+          bumpDraftPreviewReload();
           driveDocWindow("write_chapter_done", {
             taskId: doneTid,
             chapterKey: doneKey,
             mainView: "preview",
+            tab: "content",
+            draftHtml: doneHtml,
+            draftTitle: event.title || "",
           });
         });
       }
@@ -8295,6 +9643,7 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
       writingStreamActive = false;
       setDocWindowWriteBusy(false);
       bumpDocOutlineReload({ force: true });
+      bumpDraftPreviewReload();
       if (event.type === "writing_paused") {
         if (Array.isArray(event.cards) && event.cards.length) {
           msgRef.cards = event.cards;
@@ -8327,7 +9676,7 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
       const doneCardsFallback = Array.isArray(event.cards) ? event.cards : [];
       if (serverReply) msgRef.text = serverReply;
       try {
-      applyDoneMeta(event);
+      applyDoneMeta({ ...event, _allowStudyKickArm: true });
       const doneFocus = normalizeDocumentRegistryKey(
         String(
           event.runtime?.focus_document_key ||
@@ -8383,30 +9732,53 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
         hasEarlyCreateWizardCard(msgRef?.cards || []);
       // 分析/完成不进会话气泡；名称/上传/提取/确认目录必须保留（否则无「确认目录」按钮）
       const chatWizardSteps = new Set(["meta", "upload", "outline", "outline_confirm"]);
+      const writingDoneTurn =
+        action === "start_writing" ||
+        action === "write_analyzed_only" ||
+        action === "retry_chapter" ||
+        action === "save_and_retry" ||
+        action === "skip_writing_supplement_check";
+      const isWriteTurn =
+        writingDoneTurn ||
+        action === "select_write_chapters" ||
+        /还没完成蓝本分析|正在按你说的章节准备开写|正在按刚才分析的章节准备开写|开始写「/.test(
+          String(serverReply || "")
+        );
       nextCards = (nextCards || []).filter((c) => {
         if (c?.type !== "blueprint_wizard") return true;
+        if (writingDoneTurn) return false;
         const step = normalizeWizardStep(c?.payload?.step || eventWizard?.step);
         return chatWizardSteps.has(step);
       });
-      nextCards = ensureChatWizardCardsFromRuntime(
-        nextCards,
-        {
-          ...(event.runtime || {}),
-          blueprint_wizard: eventWizard || event.blueprint_wizard,
-          workflows: {
-            ...((event.runtime || {}).workflows || {}),
-            blueprint_wizard: eventWizard || event.runtime?.workflows?.blueprint_wizard,
+      if (!writingDoneTurn) {
+        nextCards = ensureChatWizardCardsFromRuntime(
+          nextCards,
+          {
+            ...(event.runtime || {}),
+            blueprint_wizard: eventWizard || event.blueprint_wizard,
+            workflows: {
+              ...((event.runtime || {}).workflows || {}),
+              blueprint_wizard: eventWizard || event.runtime?.workflows?.blueprint_wizard,
+            },
           },
-        },
-        serverReply || event.reply || ""
-      );
+          serverReply || event.reply || ""
+        );
+      }
+      const doneHasStudyKick =
+        Boolean(studyCardPayload) ||
+        Boolean(eventWizard?.trigger_begin_study === true) ||
+        (Array.isArray(eventWizard?.trigger_chapter_study) &&
+          eventWizard.trigger_chapter_study.length > 0) ||
+        (Array.isArray(eventWizard?.chapter_study_keys) &&
+          eventWizard.chapter_study_keys.length > 0);
       if (
         freeformNow &&
         !keepEarlyWizard &&
         !hasEarlyCreateWizardCard(nextCards) &&
-        !studyCardPayload
+        !doneHasStudyKick
       ) {
         // 本轮已无早期卡才清 live；有提取/确认卡或本轮分析 trigger 时必须保留
+        // 分析卡会被滤掉，但 done.blueprint_wizard 仍可能带 trigger（澄清选「依据样本」后）
         const hasChatWizard = (nextCards || []).some(
           (c) =>
             c?.type === "blueprint_wizard" &&
@@ -8415,6 +9787,7 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
         if (!hasChatWizard) liveBlueprintWizard.value = null;
       }
       msgRef.cards = nextCards;
+      // 实时写作过程已按 step/chapter 增量追加；此处勿整卡重刷，避免一下蹦出
       if (
         (action === "start_writing" ||
           action === "write_analyzed_only" ||
@@ -8452,13 +9825,48 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
         !freeformNow ||
         keepEarlyWizard ||
         hasEarlyCreateWizardCard(nextCards) ||
-        Boolean(studyCardPayload);
+        Boolean(studyCardPayload) ||
+        doneHasStudyKick;
       // 保存章节配置 / 加要素等不得复活会话里残留的分析 trigger，否则会「保存完就开始分析」
+      // resolve_intent_clarify：点选「依据样本分析」后服务端已挂 trigger，但分析卡被滤掉，必须按分析意图开跑
       const studyIntentAction =
-        !action ||
-        action === "blueprint_wizard" ||
-        action === "re_study_chapters" ||
-        action === "confirm_outline";
+        !isWriteTurn &&
+        (action === "blueprint_wizard" ||
+          action === "re_study_chapters" ||
+          action === "go_study" ||
+          action === "confirm_outline" ||
+          action === "resolve_intent_clarify");
+      // 关联要素 / 加要素 / 保存配置等：即使 done 误带残留 trigger 也禁止开跑
+      const blockStudyKickAction = new Set([
+        "associate_elements",
+        "add_chapter_element",
+        "configure_chapter_element",
+        "save_chapter_config",
+        "set_session_meta",
+        "confirm_writing_document_name",
+        "focus_document",
+        "open_element_library",
+        "open_knowledge",
+      ]);
+      const nonStudyAction =
+        blockStudyKickAction.has(String(action || "").trim()) ||
+        (nextCards || []).some(
+          (c) =>
+            c?.type === "associate_elements" ||
+            c?.type === "element_configure" ||
+            c?.type === "element_configure_pending" ||
+            c?.type === "chapter_element_picker"
+        ) ||
+        // 口语「给×章添加要素」action 为空，靠回复/卡识别，禁止残留 trigger 开分析
+        /生成.+要素草稿|保存并关联本章|添加章节要素|已为「[^」]+」打开关联面板/.test(
+          String(serverReply || event.reply || "")
+        );
+      if (isWriteTurn || nonStudyAction) {
+        pageStudyKickArmed = false;
+        liveBlueprintWizard.value = stripEphemeralWizardTriggers(
+          liveBlueprintWizard.value || {}
+        );
+      }
       const hasStudyTriggerInSource =
         source &&
         typeof source === "object" &&
@@ -8467,9 +9875,17 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
             source.trigger_chapter_study.length > 0) ||
           (Array.isArray(source?.chapter_study_keys) &&
             source.chapter_study_keys.length > 0));
+      // 口语「分析第×章」action 为空，靠 done 上的 trigger；显式非分析动作不得靠残留 trigger 开跑
+      const allowStudyKickThisTurn =
+        !isWriteTurn &&
+        !nonStudyAction &&
+        (studyIntentAction || studyCardPayload || doneHasStudyKick);
       // 依据样本在 study 步常被判 freeform：有分析 trigger 时仍须 apply + kick
       if (source && typeof source === "object" && (allowWizardLive || (studyIntentAction && hasStudyTriggerInSource))) {
-        let applySource = studyIntentAction || studyCardPayload ? source : stripEphemeralWizardTriggers(source);
+        let applySource =
+          allowStudyKickThisTurn
+            ? source
+            : stripEphemeralWizardTriggers(source);
         // chapter_study_keys 与 trigger_chapter_study 对齐，kick 两边都能读到
         if (applySource && typeof applySource === "object") {
           const keys = (
@@ -8496,8 +9912,11 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
           (Array.isArray(applySource?.trigger_chapter_study) &&
             applySource.trigger_chapter_study.length > 0);
         // 分析卡不进气泡：仅在本轮真有分析意图时兜底开跑
-        if ((studyIntentAction || studyCardPayload) && hasStudyTrigger) {
-          schedulePageStudyKickoff(80);
+        if (allowStudyKickThisTurn && hasStudyTrigger) {
+          if (String(applySource?.study_method || "").trim()) {
+            stashPendingStudySource({ method: String(applySource.study_method).trim() });
+          }
+          schedulePageStudyKickoff(80, { arm: true });
         }
       }
       // 新消息里的向导卡保持服务端快照，禁止用 live 把「上传」卡改写成「确认目录」
@@ -8559,7 +9978,6 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
         });
         if (hasPoints) {
           bumpDocOutlineReload({ force: true });
-          nextTick(() => bumpDocOutlineReload({ force: true }));
         }
       }
       openFocusChapter(msgRef.cards);
@@ -8667,6 +10085,7 @@ async function send() {
     }
   } finally {
     sending.value = false;
+    void kickPageLevelStudyIfNeeded();
     await softSyncSessionAfterWizardAction();
     await loadHistory();
     await nextTick();
@@ -8730,6 +10149,11 @@ function isBlueprintWizardStale(msgIndex, cardIndex) {
  * 分析进度改由文档小窗，不随每轮回复再展示。
  */
 function shouldShowWizardCardInChat(card, msgIndex, cardIndex) {
+  const msg = messages.value?.[msgIndex];
+  const writingHere =
+    Boolean((msg?.steps || []).some((s) => s?._writeProgress)) ||
+    /写作完成|开始写「|按章检索/.test(String(msg?.text || ""));
+  if (writingHere) return false;
   return shouldShowBlueprintWizardInChat(card, msgIndex, cardIndex, {
     isFreeformWritingSession,
     isBlueprintWizardStale,
@@ -8851,7 +10275,13 @@ async function onDocWindowMaterialsPackPending(payload) {
   } else {
     await sendAction(
       "materials_pack_use",
-      { pack_id: packId, blueprint_id: blueprintId, task_id: "" },
+      {
+        pack_id: packId,
+        blueprint_id: blueprintId,
+        task_id: "",
+        name: payload?.packName || payload?.name || "",
+        pack_name: payload?.packName || payload?.name || "",
+      },
       { force: true }
     );
   }
@@ -9031,9 +10461,21 @@ function patchLatestBlueprintWizardCardFromServer(session) {
   }
 }
 
+let softSyncInflight = null;
+
 async function softSyncSessionAfterWizardAction() {
   const sid = sessionId.value;
   if (!sid) return;
+  if (softSyncInflight) return softSyncInflight;
+  softSyncInflight = _softSyncSessionAfterWizardAction(sid);
+  try {
+    await softSyncInflight;
+  } finally {
+    softSyncInflight = null;
+  }
+}
+
+async function _softSyncSessionAfterWizardAction(sid) {
   try {
     const session = await request(`/api/writing/chat/sessions/${encodeURIComponent(sid)}`);
     if (session.phase) phase.value = session.phase;
@@ -9168,7 +10610,9 @@ async function softSyncSessionAfterWizardAction() {
     );
     restoreUiStateFromSession(session, { preferLocalAdvance: true });
     if (liveBlueprintWizard.value && !pageStudyInflight) {
+      // 仅本轮已武装的分析 trigger 才保留；残留 trigger + 未武装不得靠 softSync 保活
       const keepStudy =
+        pageStudyKickArmed &&
         Array.isArray(liveBlueprintWizard.value.trigger_chapter_study) &&
         liveBlueprintWizard.value.trigger_chapter_study.length > 0;
       const liveNow = liveBlueprintWizard.value;
@@ -9282,6 +10726,7 @@ async function createMaterialsPackFromCard(card) {
 }
 
 async function sendAction(action, action_payload = {}, { force = false } = {}) {
+  action_payload = enrichActionPayload(action, action_payload);
   if (sending.value && !force) return;
   // 短窗去重：同一向导动作（尤其创建蓝本）300ms～8s 内不重复发，避免回车+点击打出两条
   if (action === "blueprint_wizard") {
@@ -9313,9 +10758,10 @@ async function sendAction(action, action_payload = {}, { force = false } = {}) {
     );
   }
   const actionDocId = currentFocusDocumentId();
+  const instruction = actionDisplayLabel(action, action_payload);
   messages.value.push({
     role: "user",
-    text: actionDisplayLabel(action, action_payload),
+    text: instruction,
     cards: [],
     steps: [],
     document_key: actionDocId,
@@ -9324,6 +10770,7 @@ async function sendAction(action, action_payload = {}, { force = false } = {}) {
   scheduleScrollChatToBottom(true);
   try {
     await streamChat({
+      message: instruction,
       action,
       action_payload,
       client_sync: buildUiStatePayload(),
@@ -9358,6 +10805,7 @@ async function sendAction(action, action_payload = {}, { force = false } = {}) {
     }
   } finally {
     sending.value = false;
+    void kickPageLevelStudyIfNeeded();
     if (isWriteAction && !writingStreamActive) {
       setDocWindowWriteBusy(false);
     } else if (isPointsOrConfirmAction && !writingStreamActive) {
@@ -9425,10 +10873,13 @@ async function sendAction(action, action_payload = {}, { force = false } = {}) {
           null;
         const key = String(hit?.key || preferKey || "").trim();
         if (key) {
+          bumpDraftPreviewReload();
           driveDocWindow("write_chapter_done", {
             taskId: tid,
             chapterKey: key,
             mainView: "preview",
+            tab: "content",
+            draftHtml: liveWriteHtmlByChapter.get(`${tid}::${key}`) || "",
           });
         }
       }
@@ -9655,7 +11106,7 @@ function chapterStubFromAssociateCard(card) {
   const parts = label.split(/\s+/).filter(Boolean);
   const sequence = parts.length > 1 && /^\d+(?:\.\d+)*$/.test(parts[0]) ? parts[0] : "";
   const title = sequence ? parts.slice(1).join(" ") : label || key;
-  return { key, sequence, title, config: { element_ids: [] } };
+  return { key, sequence, title };
 }
 
 function onAssociateElementsCard(card, msgIndex, cardIndex) {
@@ -9670,6 +11121,19 @@ function onAssociateElementsCard(card, msgIndex, cardIndex) {
     return;
   }
   ensureChapterEdit(tid, ch);
+  const pl = card?.payload || {};
+  const isPoint =
+    String(pl.associateScope || "") === "point" ||
+    pl.pointItemId ||
+    pl.pointIndex != null;
+  if (isPoint) {
+    associatePointContext.value = {
+      id: String(pl.pointItemId || "").trim(),
+      index: Number(pl.pointIndex),
+      slot: String(pl.pointSlot || "").trim(),
+      pointItems: Array.isArray(pl.pointItems) ? pl.pointItems.map((row) => ({ ...row })) : [],
+    };
+  }
   openChapterElementAssociate(tid, ch);
   driveDocWindow("elements_associated", {
     taskId: tid,
@@ -9700,11 +11164,16 @@ function onDocWindowHintCard(card, msgIndex = -1, cardIndex = -1) {
     card?.payload?.task_id || card?.payload?.blueprint_id || taskId.value || selectedBlueprint.value || ""
   ).trim();
   const action = String(card?.payload?.action || "open_doc_window").trim();
-  const tab = action === "analyze" || action === "select_write" ? "topology" : "chapter";
+  const chapterKey = String(card?.payload?.chapter_key || "").trim();
+  const tabHint = String(card?.payload?.tab || "").trim();
+  const tab =
+    tabHint ||
+    (action === "analyze" || action === "select_write" ? "topology" : chapterKey ? "config" : "chapter");
   driveDocWindow(action || "open_doc_window", {
     taskId: tid,
     blueprintId: String(card?.payload?.blueprint_id || tid).trim(),
     tab,
+    chapterKey,
   });
 }
 
@@ -9998,6 +11467,7 @@ let pendingStudySource = { method: "", text: "" };
 const studySourcePasteDrafts = ref({});
 let pageStudyToken = "";
 let pageStudyInflight = false;
+let pageStudyKickArmed = false;
 let pageStudyKickTimer = null;
 /** 会话世代：换会话/新建时递增，阻断旧分析流回写消息与文档窗 */
 let sessionEpoch = 0;
@@ -10024,6 +11494,7 @@ function isCurrentSessionContext(epoch, sid = "") {
 
 /** 换会话/新建：掐断在途分析与文档窗，禁止旧流串到新会话 */
 function hardResetCrossSessionUi({ closeDocWindow = true } = {}) {
+  pageStudyKickArmed = false;
   bumpSessionEpoch();
   if (pageStudyKickTimer) {
     clearTimeout(pageStudyKickTimer);
@@ -10052,6 +11523,7 @@ function hardResetCrossSessionUi({ closeDocWindow = true } = {}) {
   pageStudyOwnerEpoch = 0;
   pageStudyOwnerSessionId = "";
   pageStudyOwnerBlueprintId = "";
+  pageStudyOwnerTaskId = "";
   releaseStudyOpsLock({ notify: false });
   liveBlueprintWizard.value = null;
   liveWizardsByDoc.value = {};
@@ -10080,7 +11552,8 @@ function hardResetCrossSessionUi({ closeDocWindow = true } = {}) {
   }
 }
 
-function schedulePageStudyKickoff(delayMs = 120) {
+function schedulePageStudyKickoff(delayMs = 120, { arm = false } = {}) {
+  if (arm) pageStudyKickArmed = true;
   if (pageStudyKickTimer) clearTimeout(pageStudyKickTimer);
   pageStudyKickTimer = setTimeout(() => {
     pageStudyKickTimer = null;
@@ -10119,11 +11592,29 @@ async function kickPageLevelStudyIfNeeded() {
     .map((k) => String(k || "").trim())
     .filter(Boolean);
   const hasTrigger = Boolean(live.trigger_begin_study) || keys.length > 0;
+  if (!pageStudyInflight && !pageStudyKickArmed && hasTrigger && !sending.value) {
+    liveBlueprintWizard.value = stripEphemeralWizardTriggers(live);
+    if (!pointsDraftInflight.value) {
+      setDocWindowStudyBusy(false);
+    }
+    return;
+  }
   const streamFlag = Boolean(live.study_stream_active);
+  const beginAll = Boolean(live.trigger_begin_study) && !keys.length;
+  const token = `${studyTaskId}:${keys.join(",")}:${beginAll ? "all" : "keys"}`;
   // 无会话或文档登记对不上时，禁止兜底开跑（防止旧 live 触发）
   if (!String(sessionId.value || "").trim()) return;
-  // 向导卡学习也靠 study_stream_active 上锁；孤立残留靠 watchdog +「解除锁定」收
-  if (pageStudyInflight || hasTrigger || streamFlag) {
+  // 同一批已经跑完，但 softSync/服务端又把 trigger 写回来 → 再上锁却因 token 相同不开跑 = 死锁
+  if (!pageStudyInflight && hasTrigger && pageStudyToken && token === pageStudyToken) {
+    if (pageStudyKickArmed) {
+      pageStudyToken = "";
+    } else {
+      clearStudyTriggersAndUnlock({ step: "study" });
+      return;
+    }
+  }
+  // 真正在跑 / 待开跑才上锁。裸 study_stream_active 不得在对话已完成后把文档窗锁死。
+  if (pageStudyInflight || hasTrigger) {
     const method = String(live.study_method || pendingStudySource.method || "").trim();
     const busyLabel =
       method === "source"
@@ -10136,17 +11627,28 @@ async function kickPageLevelStudyIfNeeded() {
             ? "正在分析本章…"
             : "正在分析章节…";
     setDocWindowStudyBusy(true, busyLabel);
-  } else if (!pageStudyInflight && !pointsDraftInflight.value && !sending.value) {
+  } else if (streamFlag) {
+    liveBlueprintWizard.value = mergeWizardPayload(live, { study_stream_active: false });
+    if (!pointsDraftInflight.value && !sending.value) {
+      setDocWindowStudyBusy(false);
+    }
+  } else if (!pointsDraftInflight.value && !sending.value) {
     setDocWindowStudyBusy(false);
   }
-  // 分析卡已从会话气泡剔除，必须由页面兜底开跑；勿等 sending 结束（否则会错过 trigger）
+  // 对话回合进行中不要用 leftover trigger 再开分析（会把「切换到另一份」抢回当前文档）
+  if (sending.value) return;
+  // 分析卡已从会话气泡剔除，必须由页面兜底开跑；sending 结束后再 kick
   if (!studyTaskId || pageStudyInflight) return;
-  if (normalizeWizardStep(live.step) !== "study") return;
-  const beginAll = Boolean(live.trigger_begin_study) && !keys.length;
+  if (normalizeWizardStep(live.step) !== "study") {
+    if (pageStudyKickArmed && hasTrigger) {
+      liveBlueprintWizard.value = mergeWizardPayload(live, { step: "study" });
+    } else {
+      return;
+    }
+  }
   if (!keys.length && !beginAll) return;
   // 向导卡若已真正开跑（清了 trigger 并置 stream_active），不要抢跑
   if (streamFlag && !hasTrigger) return;
-  const token = `${studyTaskId}:${keys.join(",")}:${beginAll ? "all" : "keys"}`;
   if (token === pageStudyToken) return;
   pageStudyToken = token;
   await runPageLevelStudy(studyTaskId, keys, { beginAll });
@@ -10179,6 +11681,8 @@ function latestAssistantMessage() {
 }
 
 function stashPendingStudySource({ method = "", text = "" } = {}) {
+  // 用户显式再分析同一章时允许重新 kick（勿被旧 pageStudyToken 当成残留 trigger）
+  pageStudyToken = "";
   const nextMethod = String(method || "").trim();
   const nextText = String(text || "");
   if (!nextMethod && !nextText.trim()) return;
@@ -10186,6 +11690,24 @@ function stashPendingStudySource({ method = "", text = "" } = {}) {
     method: nextMethod || pendingStudySource.method || "",
     text: nextText.trim() ? nextText : pendingStudySource.text || "",
   };
+}
+
+/** 剥掉学习自驱残留并解锁文档窗，同步 per-doc 缓存 */
+function clearStudyTriggersAndUnlock(extra = {}) {
+  // 分析结束后必须卸武装：否则下一轮关联要素/闲聊若又见到残留 trigger 会再次开跑
+  pageStudyKickArmed = false;
+  const live = liveBlueprintWizard.value || {};
+  const cleaned = mergeWizardPayload(live, {
+    study_stream_active: false,
+    trigger_begin_study: false,
+    trigger_chapter_study: [],
+    chapter_study_keys: [],
+    ...extra,
+  });
+  liveBlueprintWizard.value = cleaned;
+  const key = wizardDocKeyFromPayload(cleaned, currentFocusDocumentId());
+  if (key) rememberLiveWizardForDoc(key, cleaned);
+  setDocWindowStudyBusy(false);
 }
 
 function consumePendingStudySource(live = {}) {
@@ -10196,29 +11718,14 @@ function consumePendingStudySource(live = {}) {
 }
 
 function studySourcePasteText(cardKey) {
-  return String(studySourcePasteDrafts.value[cardKey] || "").trim();
+  return htmlToPlain(studySourcePasteDrafts.value[cardKey] || "").trim();
 }
 
-function onStudySourcePasteInput(cardKey, event) {
-  const el = event?.target;
+function onStudySourcePasteHtml(cardKey, html) {
   studySourcePasteDrafts.value = {
     ...studySourcePasteDrafts.value,
-    [cardKey]: String(el?.innerText || el?.textContent || ""),
+    [cardKey]: String(html || ""),
   };
-}
-
-function onStudySourceRichPaste(cardKey, event) {
-  const recovered = recoverClipboardPlain(event);
-  if (!recovered.trim()) return;
-  event.preventDefault();
-  const box = event?.currentTarget;
-  if (box) {
-    box.innerText = `${String(box.innerText || "").trim()}\n${recovered}`.trim();
-    studySourcePasteDrafts.value = {
-      ...studySourcePasteDrafts.value,
-      [cardKey]: String(box.innerText || recovered),
-    };
-  }
 }
 
 async function submitStudySourcePaste(card, msgIndex, cardIndex) {
@@ -10241,10 +11748,13 @@ async function submitStudySourcePaste(card, msgIndex, cardIndex) {
     chapter_sequences: payload.chapter_sequences || [],
     study_scope: payload.study_scope || "self",
     study_message: payload.study_message || payload.chapter_label || "",
+    chapter_label: payload.chapter_label || payload.study_message || "",
+    sequence: (payload.chapter_sequences || [])[0] || "",
     blueprint_id: payload.blueprint_id || "",
     task_id: payload.task_id || payload.working_task_id || "",
     working_task_id: payload.working_task_id || payload.task_id || "",
     locate_chapter_key: (payload.chapter_keys || [])[0] || "",
+    chapter_key: (payload.chapter_keys || [])[0] || "",
   });
 }
 
@@ -10283,6 +11793,7 @@ async function runPageLevelStudy(studyTaskId, chapterKeys, { beginAll = false } 
   pageStudyOwnerEpoch = ownerEpoch;
   pageStudyOwnerSessionId = ownerSid;
   pageStudyOwnerBlueprintId = libraryBp || ownerStudyTid;
+  pageStudyOwnerTaskId = ownerStudyTid;
   pageStudyAbortController = new AbortController();
   const studySignal = pageStudyAbortController.signal;
   const stillHere = () => isCurrentSessionContext(ownerEpoch, ownerSid);
@@ -10333,11 +11844,17 @@ async function runPageLevelStudy(studyTaskId, chapterKeys, { beginAll = false } 
       sessionId: ownerSid,
     });
   }
+  let resolvedStudyKeys = [...(chapterKeys || [])];
   try {
-    let keys = [...(chapterKeys || [])];
+    let keys = [...resolvedStudyKeys];
     if (beginAll || !keys.length) {
       try {
-        const slim = await request(`/api/writing/tasks/${encodeURIComponent(ownerStudyTid)}/doc-outline`);
+        const slim = await request(
+          docOutlineUrl(ownerStudyTid, {
+            fresh: true,
+            writingTaskId: writingTaskIdForTask(ownerStudyTid),
+          })
+        );
         if (!stillHere()) return;
         keys = (slim?.chapters || [])
           .filter((ch) => !ch.structure_only && !(Array.isArray(ch.points) && ch.points.length))
@@ -10347,6 +11864,7 @@ async function runPageLevelStudy(studyTaskId, chapterKeys, { beginAll = false } 
         keys = [];
       }
     }
+    resolvedStudyKeys = [...keys];
     if (!stillHere()) return;
     if (!keys.length) {
       ElMessage.info("没有待分析的章节");
@@ -10434,12 +11952,17 @@ async function runPageLevelStudy(studyTaskId, chapterKeys, { beginAll = false } 
             total > 0
               ? `✓ (${idx}/${total}) 「${label}」${note ? ` · ${note}` : "完成"}`
               : `✓ 「${label}」${note ? ` · ${note}` : "完成"}`;
+          const progressMsg = resolveProgressAssistantMessage(
+            libraryBp || ownerStudyTid,
+            ownerStudyTid
+          );
+          settleStudyRunningSteps(progressMsg, { label });
           pushStudyProgress(line, "step", {
             epoch: ownerEpoch,
             sid: ownerSid,
             blueprintId: libraryBp || ownerStudyTid,
           });
-          // 学完立刻合入要点/检索词/简述，目录「待分析」马上变「已分析」
+          // 学完立刻合入要点/检索词/简述，目录「待分析」马上变「已分析」；重分析清空旧要素关联
           driveDocWindow("analyze", {
             blueprintId: sanitizeLibraryBlueprintId(liveBlueprintWizard.value?.blueprint_id || libraryBp, libraryBp),
             taskId: ownerStudyTid,
@@ -10449,6 +11972,9 @@ async function runPageLevelStudy(studyTaskId, chapterKeys, { beginAll = false } 
             keywords: Array.isArray(result.keywords) ? result.keywords : null,
             describes: result.describes || "",
             structure_only: result.structure_only,
+            ...(event.clear_element_bindings
+              ? { clear_element_bindings: true }
+              : {}),
             sessionEpoch: ownerEpoch,
             sessionId: ownerSid,
           });
@@ -10498,15 +12024,22 @@ async function runPageLevelStudy(studyTaskId, chapterKeys, { beginAll = false } 
           chapterKey: String(event.chapter),
           tab: "config",
           points: Array.isArray(event.points) ? event.points : null,
+          point_items: Array.isArray(event.point_items) ? event.point_items : null,
           keywords: Array.isArray(event.keywords) ? event.keywords : null,
           describes: event.describes || "",
           structure_only: event.structure_only,
+          // 后端未显式要求时不要默认 true，否则每次进度回写都会冲掉已关联要素
+          ...(event.clear_element_bindings
+            ? { clear_element_bindings: true }
+            : {}),
           sessionEpoch: ownerEpoch,
           sessionId: ownerSid,
         });
-        bumpDocOutlineReload({ force: unanalyzed <= 0 });
+        if (unanalyzed <= 0) bumpDocOutlineReload({ force: true });
         const totalNow = analyzed + unanalyzed;
-        if (totalNow > 0) {
+        if (unanalyzed <= 0 && analyzed > 0) {
+          setDocWindowStudyBusy(false);
+        } else if (totalNow > 0) {
           setDocWindowStudyBusy(true, `分析进度 ${analyzed}/${totalNow}`);
         }
         pushStudyProgressLine(studyProgressLineFromChapterEvent(event), "process", {
@@ -10526,7 +12059,15 @@ async function runPageLevelStudy(studyTaskId, chapterKeys, { beginAll = false } 
       }
       if (event.type === "error") throw new Error(event.detail || "分析失败");
       if (event.type === "process" && event.message) {
-        pushStudyProgress(event.message, "process", {
+        const processText = String(event.message || "");
+        if (/分析完成|要点分析完成|写作要点分析完成/.test(processText)) {
+          const progressMsg = resolveProgressAssistantMessage(
+            libraryBp || ownerStudyTid,
+            ownerStudyTid
+          );
+          settleStudyRunningSteps(progressMsg, { all: true });
+        }
+        pushStudyProgress(processText, "process", {
           epoch: ownerEpoch,
           sid: ownerSid,
           blueprintId: libraryBp || ownerStudyTid,
@@ -10534,6 +12075,14 @@ async function runPageLevelStudy(studyTaskId, chapterKeys, { beginAll = false } 
       }
     });
     if (!stillHere()) return;
+    {
+      const progressMsg = resolveProgressAssistantMessage(
+        libraryBp || ownerStudyTid,
+        ownerStudyTid
+      );
+      settleStudyRunningSteps(progressMsg, { all: true });
+      finalizeAssistantProcessSteps(progressMsg);
+    }
     pushStudyProgress("✓ 章节分析已完成", "step", {
       epoch: ownerEpoch,
       sid: ownerSid,
@@ -10543,43 +12092,110 @@ async function runPageLevelStudy(studyTaskId, chapterKeys, { beginAll = false } 
     bumpDocOutlineReload({ force: true });
   } catch (error) {
     if (!isAbortError(error) && stillHere()) {
-      pushStudyProgress(`分析失败：${error?.message || "未知错误"}`, "error", {
-        epoch: ownerEpoch,
-        sid: ownerSid,
-        blueprintId: libraryBp || ownerStudyTid,
-      });
-      ElMessage.error(error?.message || "分析失败");
+      const progressMsg = resolveProgressAssistantMessage(
+        libraryBp || ownerStudyTid,
+        ownerStudyTid
+      );
+      settleStudyRunningSteps(progressMsg, { all: true });
+      finalizeAssistantProcessSteps(progressMsg);
+      // 长分析流易被刷新/代理掐断；服务端常已写完，先刷目录再决定要不要报失败
+      if (isTransientNetworkError(error)) {
+        pushStudyProgress("连接中断，正在核对分析进度…", "process", {
+          epoch: ownerEpoch,
+          sid: ownerSid,
+          blueprintId: libraryBp || ownerStudyTid,
+        });
+        try {
+          bumpDocOutlineReload({ force: true });
+          const slim = await request(
+            docOutlineUrl(ownerStudyTid, {
+              fresh: true,
+              writingTaskId: writingTaskIdForTask(ownerStudyTid),
+            })
+          );
+          if (!stillHere()) return;
+          const chapters = Array.isArray(slim?.chapters) ? slim.chapters : [];
+          const want = (resolvedStudyKeys || []).map((k) => String(k || "").trim()).filter(Boolean);
+          const doneN = chapters.filter((ch) => {
+            const key = String(ch?.key || "").trim();
+            if (want.length && !want.includes(key)) return false;
+            if (ch?.structure_only) return false;
+            return Array.isArray(ch?.points) && ch.points.length > 0;
+          }).length;
+          const targetN = want.length || chapters.filter((ch) => !ch?.structure_only).length;
+          if (doneN > 0 && (want.length ? doneN >= want.length : doneN > 0)) {
+            pushStudyProgress(
+              `✓ 章节分析已完成（连接中断前已落盘 ${doneN}${targetN ? `/${targetN}` : ""} 章）`,
+              "step",
+              {
+                epoch: ownerEpoch,
+                sid: ownerSid,
+                blueprintId: libraryBp || ownerStudyTid,
+              }
+            );
+            ElMessage.success("章节分析已完成");
+          } else {
+            pushStudyProgress(
+              `分析连接中断：已确认 ${doneN} 章落盘，可再说「继续分析」补跑未完成的章节`,
+              "error",
+              {
+                epoch: ownerEpoch,
+                sid: ownerSid,
+                blueprintId: libraryBp || ownerStudyTid,
+              }
+            );
+            ElMessage.warning("分析连接中断，已落盘部分可继续分析");
+          }
+        } catch {
+          pushStudyProgress(`分析失败：${error?.message || "网络中断"}`, "error", {
+            epoch: ownerEpoch,
+            sid: ownerSid,
+            blueprintId: libraryBp || ownerStudyTid,
+          });
+          ElMessage.error(error?.message || "分析失败");
+        }
+      } else {
+        pushStudyProgress(`分析失败：${error?.message || "未知错误"}`, "error", {
+          epoch: ownerEpoch,
+          sid: ownerSid,
+          blueprintId: libraryBp || ownerStudyTid,
+        });
+        ElMessage.error(error?.message || "分析失败");
+      }
     }
   } finally {
     const ownedThisRun =
       pageStudyOwnerEpoch === ownerEpoch &&
       pageStudyOwnerBlueprintId === (libraryBp || ownerStudyTid);
+    // 先清 stream_active 再把 inflight 置 false，避免 kickoff watch 在残留标记上重新上锁
+    if (stillHere()) {
+      const progressMsg = resolveProgressAssistantMessage(
+        libraryBp || ownerStudyTid,
+        ownerStudyTid
+      );
+      settleStudyRunningSteps(progressMsg, { all: true });
+      finalizeAssistantProcessSteps(progressMsg);
+      const endExtra = { step: "study" };
+      if (libraryBp) {
+        endExtra.blueprint_id = libraryBp;
+        endExtra.source_blueprint_id = libraryBp;
+      }
+      if (isWritingCopyId(ownerStudyTid)) {
+        endExtra.working_task_id = ownerStudyTid;
+      }
+      clearStudyTriggersAndUnlock(endExtra);
+      void persistUiStateForced().catch(() => {});
+    } else if (ownedThisRun) {
+      setDocWindowStudyBusy(false);
+    }
     if (ownedThisRun) {
       pageStudyInflight = false;
       pageStudyAbortController = null;
       pageStudyOwnerEpoch = 0;
       pageStudyOwnerSessionId = "";
       pageStudyOwnerBlueprintId = "";
-    }
-    // 严禁把旧会话分析结束态写回新会话 live
-    if (stillHere()) {
-      const endPatch = {
-        step: "study",
-        study_stream_active: false,
-        trigger_begin_study: false,
-        trigger_chapter_study: [],
-        chapter_study_keys: [],
-      };
-      if (libraryBp) {
-        endPatch.blueprint_id = libraryBp;
-        endPatch.source_blueprint_id = libraryBp;
-      }
-      if (isWritingCopyId(ownerStudyTid)) {
-        endPatch.working_task_id = ownerStudyTid;
-      }
-      liveBlueprintWizard.value = mergeWizardPayload(liveBlueprintWizard.value || {}, endPatch);
-      setDocWindowStudyBusy(false);
-      void persistUiStateForced().catch(() => {});
+      pageStudyOwnerTaskId = "";
+      // 保留 pageStudyToken：用于识别 softSync 写回的同批残留 trigger，避免回锁死锁
     }
   }
 }
@@ -10876,140 +12492,18 @@ onUnmounted(() => {
   flex-direction: column;
   gap: 14px;
 }
-.bubble {
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
+.chat-bubble.bubble {
+  width: 100%;
 }
-.bubble.user {
-  flex-direction: row-reverse;
+.thread :deep(.ant-bubble) {
+  max-width: 100%;
 }
-.avatar {
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
-  background: #eef2ff;
-  color: var(--ay-blue);
-  font-size: 12px;
-  font-weight: 650;
-  display: grid;
-  place-items: center;
-  flex: 0 0 auto;
+.thread :deep(.ant-bubble-content-wrapper) {
+  max-width: min(640px, 86vw);
 }
-.bubble.user .avatar {
-  background: #e8f0fe;
-}
-.body-col {
-  max-width: min(560px, 78vw);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.bubble-doc-tag {
-  font-size: 11px;
-  line-height: 1.3;
-  color: var(--ay-muted, #888);
-  padding: 0 2px;
-}
-.bubble.user .bubble-doc-tag {
-  color: rgba(255, 255, 255, 0.72);
-  text-align: right;
-}
-.body {
-  padding: 12px 14px;
-  border-radius: 14px;
-  background: #fff;
-  border: 1px solid var(--ay-line);
-  line-height: 1.55;
-  font-size: 14px;
-}
-.bubble.user .body {
-  background: #4e6ef2;
-  border-color: #4e6ef2;
+.bubble.user :deep(.rich),
+.bubble.user :deep(.body) {
   color: #fff;
-}
-.cursor {
-  display: inline-block;
-  margin-left: 1px;
-  color: var(--ay-blue);
-  animation: blink 1s step-end infinite;
-}
-@keyframes blink {
-  50% {
-    opacity: 0;
-  }
-}
-.process-log {
-  list-style: none;
-  margin: 0;
-  padding: 8px 10px;
-  border-radius: 12px;
-  border: 1px dashed #c5d0f5;
-  background: #f5f7ff;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.process-log.done {
-  border-color: #cbd5e1;
-  background: #f8fafc;
-  opacity: 0.9;
-}
-.process-log.done .dot {
-  background: #94a3b8;
-}
-.process-log li {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  font-size: 12px;
-  color: #475569;
-  line-height: 1.4;
-}
-.process-log .dot {
-  width: 6px;
-  height: 6px;
-  margin-top: 5px;
-  border-radius: 50%;
-  background: #4e6ef2;
-  flex: 0 0 auto;
-}
-.process-log .error {
-  color: #b91c1c;
-}
-.process-log .error .dot {
-  background: #ef4444;
-}
-.process-log .chapter {
-  color: #1d4ed8;
-  font-weight: 650;
-}
-.process-log .chapter .dot {
-  background: #3b82f6;
-}
-.process-log .step .dot {
-  background: #64748b;
-}
-.process-log .chain {
-  color: #0f766e;
-  font-size: 12px;
-}
-.process-log .chain .dot {
-  background: #14b8a6;
-}
-.chain-debug-detail {
-  margin: 6px 0 0 14px;
-  padding: 8px 10px;
-  max-height: 220px;
-  overflow: auto;
-  font-size: 11px;
-  line-height: 1.35;
-  white-space: pre-wrap;
-  word-break: break-word;
-  background: #f0fdfa;
-  border: 1px solid #99f6e4;
-  border-radius: 6px;
-  color: #134e4a;
 }
 .rich :deep(p) {
   margin: 0 0 0.55em;
@@ -11279,33 +12773,19 @@ onUnmounted(() => {
   padding: var(--card-inner-pad, 10px) var(--card-inner-pad, 10px) 0;
   font-size: 13px;
   line-height: 1.5;
-  color: var(--el-text-color-regular);
+  color: var(--ay-ink);
 }
 .study-source-paste-card .hint {
   margin: 0;
   padding: var(--card-inner-pad, 10px) var(--card-inner-pad, 10px) 8px;
   font-size: 13px;
   line-height: 1.5;
-  color: var(--el-text-color-regular);
+  color: var(--ay-ink);
 }
-.study-source-rich-paste {
-  min-height: 140px;
-  max-height: 280px;
-  overflow: auto;
+.study-source-rich-editor {
   margin: 0 10px 8px;
-  padding: 10px 12px;
-  border: 1px dashed #cbd5e1;
-  border-radius: 10px;
-  background: #fff;
-  line-height: 1.55;
-  font-size: 13px;
-  outline: none;
 }
-.study-source-rich-paste:empty::before {
-  content: attr(data-placeholder);
-  color: #94a3b8;
-}
-.study-source-paste-card.used .study-source-rich-paste {
+.study-source-paste-card.used .study-source-rich-editor {
   pointer-events: none;
   opacity: 0.7;
 }
@@ -11563,7 +13043,7 @@ onUnmounted(() => {
   list-style: none;
   margin: 8px 0 0;
   padding: 0;
-  border: 1px solid var(--el-border-color-lighter);
+  border: 1px solid var(--ay-line);
   border-radius: 8px;
   overflow: hidden;
 }
@@ -11574,14 +13054,14 @@ onUnmounted(() => {
   align-items: center;
   padding: 8px 10px;
   font-size: 13px;
-  border-bottom: 1px solid var(--el-border-color-extra-light);
+  border-bottom: 1px solid var(--ay-line);
 }
 .chapter-element-linked-list li:last-child {
   border-bottom: none;
 }
-.chapter-element-linked-list .el-sum {
+.chapter-element-linked-list .sum {
   font-size: 12px;
-  color: var(--el-text-color-secondary);
+  color: var(--ay-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -11599,7 +13079,7 @@ onUnmounted(() => {
   align-items: center;
   margin-bottom: 8px;
 }
-.chapter-element-row .el-input {
+.chapter-element-row .ant-input {
   flex: 1;
   min-width: 88px;
 }
@@ -11610,25 +13090,53 @@ onUnmounted(() => {
   margin-top: 4px;
 }
 .progress-card {
-  --card-inner-pad: 3px;
+  --card-inner-pad: 0;
   padding: var(--card-inner-pad);
-}
-.prog-head {
   display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: flex-start;
-  margin-bottom: 10px;
+  flex-direction: column;
+  gap: 8px;
 }
-.prog-meta {
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--ay-muted);
+.progress-log-block {
+  margin: 0;
 }
-.prog-collapse-hint {
-  margin: 6px 0 0;
+.progress-log-block.run .fold-process {
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+.progress-score-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.progress-retry-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: #0f172a;
+  line-height: 1.3;
+}
+.progress-score-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: #ecfdf5;
+  color: #047857;
+  border: 1px solid #a7f3d0;
   font-size: 12px;
-  color: #64748b;
+  font-weight: 700;
+  line-height: 1.3;
+}
+.progress-score-chip.bad {
+  background: #fff7ed;
+  color: #c2410c;
+  border-color: #fed7aa;
+}
+.fold-process > li.emph {
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 700;
 }
 .chapter-fold.next {
   border-style: dashed;
@@ -11740,13 +13248,43 @@ onUnmounted(() => {
   vertical-align: middle;
 }
 .fold-hint {
-  color: #b45309;
+  color: #64748b;
   font-size: 11px;
   line-height: 1.35;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+.fold-process {
+  margin: 0;
+  padding: 8px 10px 8px 22px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+  list-style: disc;
+  font-size: 12px;
+  color: #334155;
+  line-height: 1.55;
+}
+.fold-process > li + li {
+  margin-top: 6px;
+}
+.fold-process > li.nest {
+  list-style: circle;
+  margin-left: 4px;
+}
+.fold-process > li.mute {
+  color: #64748b;
+}
+.fold-process-sub {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  list-style: circle;
+  color: #475569;
+}
+.fold-process-sub li + li {
+  margin-top: 3px;
 }
 .fold-status {
   flex: 0 0 auto;
@@ -11873,26 +13411,26 @@ onUnmounted(() => {
   gap: 8px;
   align-items: center;
 }
-.human-tabs :deep(.el-tabs__header) {
+.human-tabs :deep(.ant-tabs-nav) {
   margin: 0 0 12px;
   border-bottom: none !important;
 }
-.human-tabs :deep(.el-tabs__nav-wrap),
-.human-tabs :deep(.el-tabs__nav-scroll) {
+.human-tabs :deep(.ant-tabs-nav-wrap),
+.human-tabs :deep(.ant-tabs-nav-wrap) {
   overflow: visible;
 }
-.human-tabs :deep(.el-tabs__nav-wrap::after) {
+.human-tabs :deep(.ant-tabs-nav-wrap::after) {
   display: none !important;
   height: 0 !important;
 }
-.human-tabs :deep(.el-tabs__nav) {
+.human-tabs :deep(.ant-tabs-nav-list) {
   width: 100%;
   display: flex;
   gap: 8px;
   border: none !important;
   float: none;
 }
-.human-tabs :deep(.el-tabs__item) {
+.human-tabs :deep(.ant-tabs-tab) {
   flex: 1 1 0;
   min-width: 0;
   height: auto;
@@ -11908,18 +13446,18 @@ onUnmounted(() => {
   color: #64748b;
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
-.human-tabs :deep(.el-tabs__item.is-active) {
+.human-tabs :deep(.ant-tabs-tab.ant-tabs-tab-active) {
   background: #eff6ff;
   border-color: #93c5fd !important;
   color: #1d4ed8;
 }
-.human-tabs :deep(.el-tabs__item:not(.is-active)) {
+.human-tabs :deep(.ant-tabs-tab:not(.ant-tabs-tab-active)) {
   border-bottom-color: var(--ay-line) !important;
 }
-.human-tabs :deep(.el-tabs__active-bar) {
+.human-tabs :deep(.ant-tabs-ink-bar) {
   display: none;
 }
-.human-tabs :deep(.el-tabs__content) {
+.human-tabs :deep(.ant-tabs-content) {
   padding-top: 4px;
 }
 .cfg-save-hint {
@@ -12027,11 +13565,55 @@ onUnmounted(() => {
 .fold-evidence li {
   margin: 0 0 8px;
 }
+.fold-evidence li.miss .ev-tag.miss {
+  background: #ffedd5;
+  color: #c2410c;
+}
+.fold-obtained {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+  padding: 8px 10px;
+}
+.fold-obtained-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  font-weight: 650;
+  color: #475569;
+}
+.fold-steps {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: #334155;
+  line-height: 1.5;
+}
 .ev-head {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   align-items: baseline;
+}
+.ev-scope {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+}
+.ev-scope.chapter {
+  background: #dcfce7;
+  color: #15803d;
+}
+.ev-scope.point {
+  background: #ede9fe;
+  color: #6d28d9;
 }
 .ev-tag {
   padding: 0 6px;
@@ -12040,6 +13622,14 @@ onUnmounted(() => {
   color: #047857;
   font-size: 10px;
   font-weight: 700;
+}
+.ev-tag.ok {
+  background: #ecfdf5;
+  color: #047857;
+}
+.ev-tag.miss {
+  background: #ffedd5;
+  color: #c2410c;
 }
 .ev-point,
 .ev-excerpt {
@@ -12286,7 +13876,7 @@ onUnmounted(() => {
   flex: 1;
 }
 .composer-hints .suggested-next {
-  color: var(--el-color-primary);
+  color: var(--ay-blue);
   font-weight: 500;
 }
 .intent-audit-dev {
@@ -12308,7 +13898,7 @@ onUnmounted(() => {
   font-size: 12px;
   color: var(--ay-muted);
 }
-:global(.search-branch-dialog.el-dialog) {
+:global(.search-branch-dialog.ant-modal) {
   margin: 0 !important;
   position: fixed !important;
   right: 16px;
@@ -12321,7 +13911,7 @@ onUnmounted(() => {
   box-shadow: 0 12px 40px rgba(15, 23, 42, 0.18);
   border: 1px solid #e2e8f0;
 }
-:global(.search-branch-dialog .el-dialog__body) {
+:global(.search-branch-dialog .ant-modal__body) {
   flex: 1;
   overflow: auto;
   padding-top: 8px;

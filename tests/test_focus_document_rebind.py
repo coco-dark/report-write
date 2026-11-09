@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from report_writing.chat.intent_router import WRITING_PATH_BLUEPRINT, WRITING_PATH_FREEFORM, get_writing_path
+from report_writing.chat.session_state import (
+    WRITING_PATH_BLUEPRINT,
+    WRITING_PATH_FREEFORM,
+    get_writing_path,
+)
 from report_writing.chat.session_documents import (
     collected_blueprint_id_for_focus,
     rebind_session_to_focus_document,

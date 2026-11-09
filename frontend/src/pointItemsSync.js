@@ -28,6 +28,14 @@ export function textNeedsSupplement(text) {
   return SUPPLEMENT_TODO_RE.test(String(text || ""));
 }
 
+/** 去掉「（待补充：…）」等占位，便于改成不强制关联要素的普通要点 */
+export function stripSupplementMarkers(text) {
+  let t = String(text || "").replace(SUPPLEMENT_TODO_RE, "");
+  t = t.replace(/\s{2,}/g, " ").trim();
+  t = t.replace(/[，,；;]\s*[，,；;]+/g, "，");
+  return t.replace(/^[，,；;\s]+|[，,；;\s]+$/g, "").trim();
+}
+
 export function pointsFromPointItems(items) {
   const out = [];
   for (const row of items || []) {
@@ -49,13 +57,17 @@ export function syncPointItemsFromPoints(points, prevItems) {
   const out = [];
   lines.forEach((line, i) => {
     const prevRow = prev[i] || {};
-    const id = String(prevRow.id || prevRow.key || `p${i}`).trim() || `p${i}`;
-    let slot = humanLabel(prevRow.slot, prevRow.element_name);
+    const prevText = String(prevRow.text || prevRow.label || "").trim();
+    const sameLine = Boolean(prevText) && (prevText === line || prevText.includes(line) || line.includes(prevText));
+    let id = String(prevRow.id || prevRow.key || `p${i}`).trim() || `p${i}`;
+    let slot = sameLine ? humanLabel(prevRow.slot, prevRow.element_name) : "";
+    if (!sameLine) id = `p${i}`;
+    // 仅按当前正文判定待补；用户已改成普通要点后，不得再继承旧 needs_supplement
     if (!slot) slot = parseSlotFromText(line);
-    const needs = textNeedsSupplement(line) || Boolean(prevRow.needs_supplement);
+    const needs = textNeedsSupplement(line);
     const row = { id, text: line };
     if (slot) row.slot = slot;
-    const eid = String(prevRow.element_id || "").trim();
+    const eid = sameLine ? String(prevRow.element_id || "").trim() : "";
     if (eid) {
       row.element_id = eid;
       const ename = humanLabel(prevRow.element_name, slot);
@@ -120,11 +132,16 @@ export function normalizePointItemRow(row, index = 0) {
   const out = { id, text };
   const slot = humanLabel(row.slot, row.element_name) || parseSlotFromText(text);
   if (slot) out.slot = slot;
-  if (textNeedsSupplement(text) || row.needs_supplement) out.needs_supplement = true;
+  // 显式 false + 正文无占位 → 普通要点（可不关联要素）
+  if (row.needs_supplement === false && !textNeedsSupplement(text)) {
+    /* keep plain */
+  } else if (textNeedsSupplement(text) || row.needs_supplement) {
+    out.needs_supplement = true;
+  }
   const eid = String(row.element_id || "").trim();
   if (eid) {
     out.element_id = eid;
-    out.needs_supplement = false;
+    delete out.needs_supplement;
     const ename = humanLabel(row.element_name, slot);
     if (ename) out.element_name = ename;
   }
@@ -240,8 +257,11 @@ export function elementIdsFromPointItems(items) {
   return out;
 }
 
-/** 章节配置表格：优先 point_items，否则由 points 生成 */
+/** 章节配置表格：优先与 points 一致的 point_items，否则由 points 生成 */
 export function pointItemsFromChapter(node, ch, cfg) {
+  const pick = (a, b) => (Array.isArray(a) && a.length ? a : Array.isArray(b) ? b : []);
+  const points = pick(node?.points, pick(ch?.points, cfg?.points));
+  const lines = (points || []).map((p) => String(p || "").trim()).filter(Boolean);
   const outlineSources = [
     node?.point_items,
     ch?.point_items,
@@ -250,11 +270,16 @@ export function pointItemsFromChapter(node, ch, cfg) {
     ch?.config?.point_items,
   ];
   if (outlineSources.some((a) => Array.isArray(a))) {
-    return pickPointItemsAuthoritative(outlineSources);
+    const items = pickPointItemsAuthoritative(outlineSources);
+    if (!lines.length) return items;
+    const itemsText = pointsFromPointItems(items).join("\n");
+    const pointsText = lines.join("\n");
+    // 重分析后 points 已更新、旧 point_items 未换：以 points 为准，避免左右结果不一致
+    if (pointsText && itemsText && pointsText !== itemsText) {
+      return syncPointItemsFromPoints(lines, items);
+    }
+    return items;
   }
-  const pick = (a, b) => (Array.isArray(a) && a.length ? a : Array.isArray(b) ? b : []);
-  const points = pick(node?.points, pick(ch?.points, cfg?.points));
-  const lines = (points || []).map((p) => String(p || "").trim()).filter(Boolean);
   return syncPointItemsFromPoints(lines, []);
 }
 
@@ -290,9 +315,12 @@ export function linkPointItemsToElements(items, elements, options = {}) {
   }
   const pointLink = options.pointLink || null;
   const linkIndex =
-    pointLink != null && Number(pointLink.index) >= 0 ? Number(pointLink.index) : -1;
+    pointLink != null && Number.isFinite(Number(pointLink.index)) && Number(pointLink.index) >= 0
+      ? Number(pointLink.index)
+      : -1;
   const linkId = String(pointLink?.id || "").trim();
   const assignedNew = new Set();
+  const preferredIds = newIds.length ? newIds : elementIds;
 
   const idsUsedByOtherRows = (rowIndex) => {
     const used = new Set();
@@ -304,16 +332,43 @@ export function linkPointItemsToElements(items, elements, options = {}) {
     return used;
   };
 
+  const bindElement = (next, eid) => {
+    const id = String(eid || "").trim();
+    if (!id) return next;
+    const el = byId.get(id);
+    next.element_id = id;
+    const ename = humanLabel(el?.name, next.element_name, next.slot);
+    if (ename) next.element_name = ename;
+    else if (!String(next.element_name || "").trim()) delete next.element_name;
+    next.needs_supplement = false;
+    return next;
+  };
+
   const out = list.map((row, i) => {
     const next = { ...row };
     let eid = String(next.element_id || "").trim();
     const isTargetRow =
       (linkIndex >= 0 && linkIndex === i) ||
       (linkId && String(next.id || "") === linkId);
-    if (!eid && elementIds.length) {
-      if (pointOnly && !isTargetRow) {
-        return next;
+    // 要点作用域：始终把本次勾选写到目标行（可替换旧关联）；不得要求 eid 已在章 element_ids 里
+    if (pointOnly) {
+      if (!isTargetRow) return next;
+      if (preferredIds.length) {
+        if (newIds.length) {
+          eid = newIds.find((id) => !assignedNew.has(id)) || newIds[0];
+          if (eid) assignedNew.add(eid);
+        } else {
+          const used = idsUsedByOtherRows(i);
+          eid =
+            preferredIds.find((id) => id === eid) ||
+            preferredIds.find((id) => !used.has(id)) ||
+            preferredIds[preferredIds.length - 1] ||
+            "";
+        }
       }
+      return eid ? bindElement(next, eid) : next;
+    }
+    if (!eid && elementIds.length) {
       if (isTargetRow && (newIds.length || linkIndex >= 0 || linkId)) {
         if (newIds.length) {
           eid = newIds.find((id) => !assignedNew.has(id)) || newIds[0];
@@ -325,7 +380,7 @@ export function linkPointItemsToElements(items, elements, options = {}) {
       }
       if (!eid) {
         const slot = humanLabel(next.slot, next.element_name);
-        if (slot && !pointOnly) {
+        if (slot) {
           for (const id of elementIds) {
             const el = byId.get(id);
             if (!el) continue;
@@ -339,13 +394,9 @@ export function linkPointItemsToElements(items, elements, options = {}) {
         }
       }
     }
-    if (eid && elementIds.includes(eid)) {
-      const el = byId.get(eid);
-      next.element_id = eid;
-      const ename = humanLabel(el?.name, next.element_name, next.slot);
-      if (ename) next.element_name = ename;
-      else delete next.element_name;
-      next.needs_supplement = false;
+    // 已有要点关联即使不在本次章级勾选里也要保留回显
+    if (eid && (elementIds.includes(eid) || !elementIds.length || Boolean(next.element_id))) {
+      return bindElement(next, eid);
     }
     return next;
   });
@@ -354,7 +405,7 @@ export function linkPointItemsToElements(items, elements, options = {}) {
     out.map((r) => String(r?.element_id || "").trim()).filter(Boolean)
   );
   const orphanIds = elementIds.filter((id) => !usedIds.has(id));
-  if (!assignOrphans || !orphanIds.length) return out;
+  if (!assignOrphans || !orphanIds.length || pointOnly) return out;
 
   const patched = out.map((row) => ({ ...row }));
   for (const eid of orphanIds) {
@@ -366,13 +417,133 @@ export function linkPointItemsToElements(items, elements, options = {}) {
       return Boolean(slot) || textNeedsSupplement(text);
     });
     if (idx < 0) break;
-    const row = patched[idx];
-    const el = byId.get(eid);
-    row.element_id = eid;
-    const ename = humanLabel(el?.name, row.element_name, row.slot);
-    if (ename) row.element_name = ename;
-    else delete row.element_name;
-    row.needs_supplement = false;
+    bindElement(patched[idx], eid);
   }
   return patched;
+}
+
+/** 章级 / 要点级关联作用域（与后端 associate_scope 一致） */
+export const ASSOCIATE_SCOPE_CHAPTER = "chapter";
+export const ASSOCIATE_SCOPE_POINT = "point";
+
+/** 仅显式 true 才清空要素关联（分析进度默认不得洗绑） */
+export function shouldClearBindings(flag) {
+  return flag === true;
+}
+
+export function unionElementIds(...candidates) {
+  const out = [];
+  const seen = new Set();
+  for (const raw of candidates) {
+    const list = Array.isArray(raw) ? raw : [];
+    for (const id of list) {
+      const s = String(id || "").trim();
+      if (!s || seen.has(s)) continue;
+      seen.add(s);
+      out.push(s);
+    }
+  }
+  return out;
+}
+
+/**
+ * 合并章级 element_ids：默认空 incoming 不覆盖 locals；replace 用于用户章级面板提交的完整列表。
+ */
+export function mergeChapterElementIds(incoming, ...args) {
+  let replace = false;
+  const locals = [];
+  for (const a of args) {
+    if (
+      a &&
+      typeof a === "object" &&
+      !Array.isArray(a) &&
+      Object.prototype.hasOwnProperty.call(a, "replace")
+    ) {
+      replace = Boolean(a.replace);
+    } else {
+      locals.push(a);
+    }
+  }
+  const inc = unionElementIds(incoming);
+  const prev = unionElementIds(...locals);
+  if (replace) return inc;
+  if (!inc.length) return prev;
+  if (!prev.length) return inc;
+  const prevSet = new Set(prev);
+  if (inc.some((id) => !prevSet.has(id))) return unionElementIds(prev, inc);
+  return inc;
+}
+
+/** 落盘章级列表：剔除已挂在要点行上的 id */
+export function chapterElementIdsForPersist(chapterIds, pointItems) {
+  const pointBound = new Set(elementIdsFromPointItems(pointItems));
+  return unionElementIds(chapterIds).filter((id) => !pointBound.has(id));
+}
+
+/** UI / 检索预览：章级 + 要点行并集（不写盘） */
+export function chapterElementIdsForDisplay(chapterIds, pointItems) {
+  return unionElementIds(chapterIds, elementIdsFromPointItems(pointItems));
+}
+
+/** 将内存 pending 要点关联叠到 base 行上 */
+export function applyPendingPointItemBindings(baseItems, pendingByRowId) {
+  const map = pendingByRowId instanceof Map ? pendingByRowId : null;
+  if (!map?.size) {
+    return (baseItems || []).map((row) => ({ ...row }));
+  }
+  return (baseItems || []).map((row) => {
+    const rid = String(row?.id || "").trim();
+    const hit = rid ? map.get(rid) : null;
+    const eid = String(hit?.element_id || "").trim();
+    if (!eid) return { ...row };
+    const next = {
+      ...row,
+      element_id: eid,
+      needs_supplement: false,
+    };
+    const ename = humanLabel(hit?.element_name, row?.element_name, row?.slot);
+    if (ename) next.element_name = ename;
+    return next;
+  });
+}
+
+/** 从 point_items 写入 pending 要点关联表 */
+export function collectPointItemBindings(pointItems) {
+  const map = new Map();
+  for (const row of pointItems || []) {
+    const rid = String(row?.id || "").trim();
+    const eid = String(row?.element_id || "").trim();
+    if (!rid || !eid) continue;
+    map.set(rid, {
+      element_id: eid,
+      element_name: String(row?.element_name || "").trim(),
+    });
+  }
+  return map;
+}
+
+/** 服务端章节已与 pending 要点/章级关联对齐时可清除 pending */
+export function bindingsAligned(serverChapter, { chapterIds = [], pointBindings = null } = {}) {
+  const pendingCh = unionElementIds(chapterIds);
+  const serverCh = unionElementIds(
+    serverChapter?.element_ids,
+    serverChapter?.config?.element_ids
+  );
+  if (pendingCh.length) {
+    const ok = pendingCh.every((id) => serverCh.includes(id));
+    if (!ok) return false;
+  }
+  const map = pointBindings instanceof Map ? pointBindings : null;
+  if (!map?.size) return true;
+  const items = pickPointItemsAuthoritative([
+    serverChapter?.point_items,
+    serverChapter?.config?.point_items,
+  ]);
+  for (const [rowId, bind] of map) {
+    const want = String(bind?.element_id || "").trim();
+    if (!want) continue;
+    const row = items.find((r) => String(r?.id || "").trim() === String(rowId).trim());
+    if (String(row?.element_id || "").trim() !== want) return false;
+  }
+  return true;
 }

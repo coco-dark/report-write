@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from pathlib import Path
 
-from report_writing.chat.intent_clarify import (
+from report_writing.chat.clarify_flow import (
     apply_safe_default,
     begin_clarify,
     build_entry_path_clarify,
@@ -69,7 +71,7 @@ def test_resolve_by_alias_label():
     session = _session()
     build_study_scope_clarify(session, sequences=["2"], study_message="学习第2章")
     hit = try_handle_pending_message(session, "只要子章节")
-    assert isinstance(hit, dict)
+    assert isinstance(hit, Mapping)
     assert hit["slots"]["study_scope"] == "children"
 
 
@@ -77,7 +79,7 @@ def test_resolve_self_not_children_when_negating_subchapters():
     session = _session()
     build_study_scope_clarify(session, sequences=["1"], study_message="学习第1章")
     hit = try_handle_pending_message(session, "学习第一章就够了 不要子章节")
-    assert isinstance(hit, dict)
+    assert isinstance(hit, Mapping)
     assert hit["slots"]["study_scope"] == "self"
 
 
@@ -87,7 +89,7 @@ def test_new_intent_discards_pending():
     # 「写报告」过泛：可能挂起名/选路，也可能只给工作名后不挂卡
     pending0 = get_pending(session)
     if pending0 is None:
-        from report_writing.chat.intent_clarify import begin_clarify
+        from report_writing.chat.clarify_flow import begin_clarify
 
         begin_clarify(
             session,
@@ -138,7 +140,7 @@ def test_paraphrase_create_blueprint_via_llm(tmp_path: Path):
     build_entry_path_clarify(session, message="帮我写一份安全报告")
 
     hit_branch = try_handle_pending_message(session, "无蓝本 · 自己写")
-    assert isinstance(hit_branch, dict)
+    assert isinstance(hit_branch, Mapping)
     execute_clarify_spec(tmp_path, session, hit_branch, message="无蓝本 · 自己写")
     assert get_pending(session) and get_pending(session).get("source") == "entry_freeform_mode"
 
@@ -150,7 +152,7 @@ def test_paraphrase_create_blueprint_via_llm(tmp_path: Path):
         )
 
     hit = try_handle_pending_message(session, "创建新的蓝本", invoke=_invoke)
-    assert isinstance(hit, dict)
+    assert isinstance(hit, Mapping)
     assert hit["option_id"] == "template"
     assert hit["slots"]["entry_path"] in {"create_blueprint", "template"}
     assert get_pending(session) is None
@@ -173,7 +175,7 @@ def test_llm_followup_question_then_default():
     assert first == "你是想用现成蓝本，还是自己建一份？"
     assert get_pending(session) is not None
     second = try_handle_pending_message(session, "随便", invoke=_unclear)
-    assert isinstance(second, dict)
+    assert isinstance(second, Mapping)
     assert second["defaulted"] is True
 
 
@@ -184,7 +186,7 @@ def test_safe_default_after_second_miss():
     assert isinstance(first, str)
     assert get_pending(session) is not None
     second = try_handle_pending_message(session, "随便吧")
-    assert isinstance(second, dict)
+    assert isinstance(second, Mapping)
     assert second["defaulted"] is True
     assert second["slots"]["study_scope"] == "whole"
     assert get_pending(session) is None
@@ -204,6 +206,23 @@ def test_study_scope_needs_clarify_when_children_exist():
     assert study_scope_needs_clarify(task, "学习第2章", ["2"], resolved_scope="whole") is False
     assert study_scope_needs_clarify(task, "学习第2章", ["2"], resolved_scope="children") is False
     assert study_scope_needs_clarify(task, "学习第2章", ["2"], resolved_scope="self") is False
+    assert study_scope_needs_clarify(
+        task, "已选 3 章", ["2", "2.1", "2.2"], resolved_scope="selected"
+    ) is False
+
+
+def test_study_scope_question_only_names_chapters_with_children():
+    session = _session()
+    task = _task_with_children()
+    reply, _cards = build_study_scope_clarify(
+        session,
+        sequences=["2", "2.1", "2.2"],
+        study_message="学习第2章",
+        task=task,
+    )
+    assert "第2章" in (reply or "")
+    assert "第2.1章" not in (reply or "")
+    assert "第2.2章" not in (reply or "")
 
 
 def test_study_scope_no_clarify_without_children():
@@ -250,7 +269,7 @@ def test_entry_pending_meta_line_resolves_freeform():
         candidate={"kind": "entry_intent", "name": "entry_path"},
     )
     hit = try_handle_pending_message(session, "工作说明｜对话操作冒烟报告")
-    assert isinstance(hit, dict)
+    assert isinstance(hit, Mapping)
     assert hit["slots"].get("entry_path") == "freeform"
     assert get_pending(session) is None
 
@@ -308,7 +327,7 @@ def test_freeform_clarify_and_resolve():
     assert "目录" in reply
     assert cards and cards[0].type == "intent_clarify"
     hit = try_handle_pending_message(session, "确认目录")
-    assert isinstance(hit, dict)
+    assert isinstance(hit, Mapping)
     assert hit["slots"]["freeform_intent"] == "confirm_outline"
 
 
@@ -331,9 +350,9 @@ def test_entry_and_writing_builders_have_options():
     assert {o["id"] for o in writing_cards[0].payload["options"]} >= {"approve", "revise", "skip"}
 
 
-def test_ask_intent_llm_options_enrich_freeform_slots():
+def test_ask_intent_clarify_options_enrich_freeform_slots():
     """截图复现：大脑生成「不用蓝本，直接搭目录写」但未填 tool → 点选后应走到 skip_blueprint。"""
-    from report_writing.chat.intent_clarify import (
+    from report_writing.chat.clarify_flow import (
         begin_clarify,
         enrich_control_option_slots,
         execute_clarify_spec,
@@ -364,7 +383,7 @@ def test_ask_intent_llm_options_enrich_freeform_slots():
         },
     )
     hit = try_handle_pending_message(session, "不用蓝本，直接搭目录写")
-    assert isinstance(hit, dict)
+    assert isinstance(hit, Mapping)
     assert hit["slots"].get("tool") == "skip_blueprint"
     assert hit["slots"].get("entry_path") == "freeform"
     # 明确不用蓝本时优先走 entry_intent，避免误点 id=freeform 的错误 tool
@@ -380,7 +399,7 @@ def test_ask_intent_llm_options_enrich_freeform_slots():
         calls.append(str(action or ""))
         return "行，不用蓝本。接下来起草目录。", []
 
-    import report_writing.chat.intent_dispatch as dispatch_mod
+    import report_writing.chat.tool_dispatch as dispatch_mod
     import report_writing.chat.blueprint_actions as bp_mod
 
     orig = dispatch_mod.execute_dispatch_tool

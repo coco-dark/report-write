@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from report_writing.domain.models import ChatCard, ChatSession
+from report_writing.domain.models import ChatActionPayload, ChatCard, ChatPayload, ChatSession
 
 ACTION_SLOT_SOURCE = "action_slots"
 
 # tool -> 必填槽位（有 task 上下文时）
 _REQUIRED_SLOTS: dict[str, tuple[str, ...]] = {
     "configure_chapter": ("chapter_key",),
+    "get_chapter_info": ("chapter_key",),
+    "generate_chapter_describes": ("chapter_key",),
     "add_chapter_element": ("chapter_key",),
     "associate_elements": ("chapter_key",),
     "dissociate_chapter_element": ("chapter_key", "element_id"),
@@ -27,6 +29,8 @@ _REQUIRED_SLOTS: dict[str, tuple[str, ...]] = {
 
 _TOOL_QUESTIONS: dict[str, str] = {
     "configure_chapter": "你想改哪一章的配置？点一下，或者说章节号也行。",
+    "get_chapter_info": "要看哪一章的配置？点一下，或者说章节号也行。",
+    "generate_chapter_describes": "给哪一章生成章节说明？点一下，或者说章节号也行。",
     "add_chapter_element": "加到哪一章？点一下，或者说章节号就行。",
     "associate_elements": "关联到哪一章？点一下，或者说章节号就行。",
     "dissociate_chapter_element": "要取消哪一章、哪个要素的关联？",
@@ -71,12 +75,13 @@ def _chapter_elements(task: Any, chapter_key: str, *, limit: int = 6) -> list[tu
             break
     if node is None:
         return []
-    ids = [str(i).strip() for i in list(getattr(node, "element_ids", None) or []) if str(i).strip()]
-    by_id = {
-        str(getattr(el, "id", "") or "").strip(): el
-        for el in list(getattr(task, "element_nodes", None) or [])
-        if str(getattr(el, "id", "") or "").strip()
-    }
+    from report_writing.domain.point_items_sync import (
+        element_ids_for_chapter_node,
+        elements_by_id_from_task,
+    )
+
+    by_id = elements_by_id_from_task(task)
+    ids = element_ids_for_chapter_node(node, elements_by_id=by_id)
     file_first: list[tuple[str, str]] = []
     other: list[tuple[str, str]] = []
     for eid in ids:
@@ -92,14 +97,14 @@ def _chapter_elements(task: Any, chapter_key: str, *, limit: int = 6) -> list[tu
 
 def missing_action_slots(
     tool: str,
-    payload: dict[str, Any] | None,
+    payload: ChatPayload,
     *,
     session: ChatSession | None = None,
     task: Any = None,
 ) -> list[str]:
     """返回仍缺的必填槽位名。导航类返回空。"""
     name = str(tool or "").strip()
-    body = dict(payload or {})
+    body = ChatActionPayload.parse(payload).as_dict()
     required = _REQUIRED_SLOTS.get(name)
     if not required:
         return []
@@ -146,7 +151,7 @@ def missing_action_slots(
 def build_action_slot_clarify(
     session: ChatSession,
     tool: str,
-    payload: dict[str, Any] | None,
+    payload: ChatPayload,
     missing: list[str],
     *,
     task: Any = None,
@@ -154,10 +159,10 @@ def build_action_slot_clarify(
     blueprints: list[Any] | None = None,
 ) -> tuple[str, list[ChatCard]]:
     """挂起 action_slots 澄清；options 携带要合并进 args 的槽位。"""
-    from report_writing.chat.intent_clarify import begin_clarify
+    from report_writing.chat.clarify_flow import begin_clarify
 
     name = str(tool or "").strip()
-    body = dict(payload or {})
+    body = ChatActionPayload.parse(payload).as_dict()
     task_id = str(body.get("task_id") or getattr(session, "task_id", "") or "").strip()
     if task_id:
         body.setdefault("task_id", task_id)
@@ -387,7 +392,7 @@ def try_resolve_action_slot_message(
     """pending=action_slots 时，用原话匹配章节序号/标题或选项，合成 spec。"""
     import re
 
-    from report_writing.chat.intent_clarify import _spec_from_option, clear_pending, get_pending
+    from report_writing.chat.clarify_flow import _spec_from_option, clear_pending, get_pending
 
     pending = get_pending(session)
     if not pending or str(pending.get("source") or "") != ACTION_SLOT_SOURCE:
@@ -401,7 +406,7 @@ def try_resolve_action_slot_message(
     base_payload = dict(candidate.get("payload") or {})
 
     if task is not None:
-        from report_writing.chat.intent_chapter import resolve_chapter_key_from_message
+        from report_writing.chat.chapter_resolve import resolve_chapter_key_from_message
 
         key = resolve_chapter_key_from_message(task, text)
         if key:

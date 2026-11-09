@@ -71,6 +71,147 @@ def merge_brief_patch(session: ChatSession, patch: dict[str, Any]) -> dict[str, 
     return brief
 
 
+def _dedupe_basis_lines(lines: list[str], *, limit: int = _MAX_FACTS) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in lines:
+        text = str(raw or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text[:500])
+    return out[-limit:]
+
+
+def content_basis_document_keys(session: ChatSession, task: Any | None = None) -> set[str]:
+    """当前写作文档及其蓝本/副本登记键。内容依据只认这些车道，不串其它文档。"""
+    from report_writing.chat.session_documents import (
+        focus_document_key,
+        focus_document_meta,
+        normalize_document_registry_key,
+    )
+
+    def _add(bucket: set[str], raw: str) -> None:
+        k = normalize_document_registry_key(str(raw or "").strip())
+        if k:
+            bucket.add(k)
+
+    task_keys: set[str] = set()
+    if task is not None:
+        tid = str(getattr(task, "id", "") or "").strip()
+        src = str(getattr(task, "source_blueprint_id", "") or "").strip()
+        if tid:
+            _add(task_keys, f"task:{tid}")
+        if src:
+            _add(task_keys, f"bp:{src}")
+
+    focus_keys: set[str] = set()
+    _add(focus_keys, focus_document_key(session))
+    try:
+        meta = focus_document_meta(session)
+    except Exception:
+        meta = {}
+    _add(focus_keys, str(meta.get("registry_key") or ""))
+    bid = str(meta.get("blueprint_id") or "").strip()
+    if bid:
+        _add(focus_keys, f"bp:{bid}")
+    for tid in (
+        str(meta.get("writing_task_id") or "").strip(),
+        str(meta.get("task_id") or "").strip(),
+        str(getattr(session, "task_id", "") or "").strip(),
+    ):
+        if tid:
+            _add(focus_keys, f"task:{tid}")
+
+    if not task_keys:
+        return focus_keys
+    allowed = set(task_keys)
+    tid = str(getattr(task, "id", "") or "").strip()
+    src = str(getattr(task, "source_blueprint_id", "") or "").strip()
+    same_doc = tid and tid in {
+        str(meta.get("writing_task_id") or "").strip(),
+        str(meta.get("task_id") or "").strip(),
+        str(getattr(session, "task_id", "") or "").strip(),
+    }
+    if src and src == str(meta.get("blueprint_id") or "").strip():
+        same_doc = True
+    if same_doc:
+        allowed |= focus_keys
+    return allowed
+
+
+def _message_belongs_to_document(
+    session: ChatSession, msg: Any, allowed: set[str]
+) -> bool:
+    from report_writing.chat.dialogue import _resolve_message_document_key
+    from report_writing.chat.session_documents import (
+        normalize_document_registry_key,
+        session_documents_map,
+    )
+
+    raw = str(
+        getattr(msg, "document_key", "") or getattr(msg, "document_id", "") or ""
+    ).strip()
+    key = normalize_document_registry_key(
+        _resolve_message_document_key(session, raw)
+    )
+    if key:
+        return key in allowed
+    docs = session_documents_map(session)
+    # 未盖戳且没有多文档登记：当作本份文档（单文档会话）
+    return not docs
+
+
+def collect_dialogue_content_basis(
+    session: ChatSession, *, task: Any | None = None
+) -> list[str]:
+    """当前文档车道里用户说过的原文，以及本车道目标/备注。不做槽位抽取。"""
+    from report_writing.chat.session_documents import (
+        focus_document_key,
+        normalize_document_registry_key,
+    )
+
+    allowed = content_basis_document_keys(session, task)
+    focus = normalize_document_registry_key(focus_document_key(session) or "")
+    use_lane_brief = not allowed or not focus or focus in allowed
+    lines: list[str] = []
+    if use_lane_brief:
+        brief = get_writing_brief(session)
+        for fact in list(brief.get("facts") or []):
+            if str(fact).strip():
+                lines.append(str(fact).strip())
+        constraints = str(brief.get("user_constraints") or "").strip()
+        if constraints:
+            lines.append(constraints)
+        try:
+            from report_writing.chat.session_goal import get_session_goal
+
+            goal = get_session_goal(session)
+            for key in ("project", "summary", "notes", "doc_title"):
+                val = str(getattr(goal, key, "") or "").strip()
+                if val:
+                    lines.append(val)
+        except Exception:
+            pass
+    for msg in list(getattr(session, "messages", None) or []):
+        if str(getattr(msg, "role", "") or "") != "user":
+            continue
+        if allowed and not _message_belongs_to_document(session, msg, allowed):
+            continue
+        text = str(getattr(msg, "text", "") or "").strip()
+        if text:
+            lines.append(text[:500])
+    return _dedupe_basis_lines(lines)
+
+
+def attach_dialogue_content_basis(session: ChatSession, task: Any) -> list[str]:
+    """把本份文档对话原文记到写作任务，供各章写作当内容依据。不改 element_nodes。"""
+    lines = collect_dialogue_content_basis(session, task=task)
+    if hasattr(task, "writing_content_basis"):
+        task.writing_content_basis = list(lines)
+    return lines
+
+
 def ingest_user_turn(
     session: ChatSession,
     message: str,
@@ -78,7 +219,7 @@ def ingest_user_turn(
     invoke: InvokeFn | None = None,
 ) -> bool:
     """每轮用户话：同步 session_goal + 写作简报（静默，不挡执行路径）。"""
-    from report_writing.chat.session_goal import ingest_user_message_goal, parse_goal_patch_from_message
+    from report_writing.chat.session_goal import get_session_goal, ingest_user_message_goal
 
     text = (message or "").strip()
     if not text:
@@ -96,18 +237,13 @@ def ingest_user_turn(
     except Exception:
         pass
     changed = ingest_user_message_goal(session, text, invoke=invoke)
-    patch = parse_goal_patch_from_message(text, invoke=invoke)
-    if text and len(text) >= 8 and not patch.get("notes"):
+    if text and len(text) >= 8:
         append_brief_fact(session, text[:500])
-    if patch.get("notes") or patch.get("summary"):
-        merge_brief_patch(
-            session,
-            {
-                "narrative": patch.get("summary") or patch.get("notes") or "",
-                "facts": [text[:500]] if len(text) > 8 else [],
-            },
-        )
-        changed = True
+    if changed:
+        goal = get_session_goal(session)
+        narrative = str(goal.get("summary") or goal.get("notes") or "").strip()
+        if narrative:
+            merge_brief_patch(session, {"narrative": narrative})
     return changed
 
 
@@ -121,7 +257,7 @@ def build_writing_brief_view(session: ChatSession, *, home: Path | None = None) 
     goal = get_session_goal(session)
     view: dict[str, Any] = {
         "brief": brief,
-        "session_goal": goal,
+        "session_goal": goal.to_dict(),
         "session_goal_brief": session_goal_brief(session),
         "session": snap,
         "task_id": (session.task_id or "").strip(),
@@ -179,30 +315,14 @@ def writing_brief_prompt_block(session: ChatSession, *, home: Path | None = None
     task = view.get("task")
     if isinstance(task, dict) and (task.get("title") or task.get("category")):
         lines.append(f"当前任务：{task.get('category') or '—'}｜{task.get('title') or '—'}")
-    snap = view.get("session") or {}
     lines.append(
         "用户可用对话或点卡片，二者等价：确认大纲、生成要点、选节奏、开写、改章、导出。"
     )
-    lines.append(
-        "开写前若缺写作要点：先问是否要生成；用户说「好/是/生成」再 generate_freeform_points，然后 start_writing。"
-    )
-    from report_writing.chat.next_step import next_step_prompt_line
     from report_writing.chat.session_documents import focus_document_brief
 
     fdb = focus_document_brief(session)
     if "onboarding=" in fdb:
         lines.append(f"焦点文档：{fdb}")
-        if "待定名" in fdb:
-            lines.append("下一步：先 ask_entry_path 引导用户确认文档名称（定名卡），勿静默 set_session_meta。")
-        elif "待选线路" in fdb:
-            lines.append(
-                "下一步：ask_entry_path — 有蓝本 / 无蓝本（无蓝本再选模版或自动大纲），"
-                "勿直接说「生成目录」。"
-            )
-
-    ns = next_step_prompt_line(session, home=home)
-    if ns:
-        lines.append(ns)
     return "\n".join(lines)
 
 

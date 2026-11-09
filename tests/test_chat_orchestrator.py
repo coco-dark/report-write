@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from report_writing.chat_orchestrator import (
+from report_writing.chat import (
     _writing_chapter_keys,
     clone_blueprint_to_writing_task,
     handle_chat,

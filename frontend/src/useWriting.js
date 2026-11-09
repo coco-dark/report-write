@@ -1,5 +1,5 @@
 import { computed, reactive, ref, watch } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage } from "./ui.js";
 
 import { authHeaders, readStream, request } from "./api";
 import { formatExtracts, lines, newTaskId, parseExtracts } from "./constants";

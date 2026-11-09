@@ -37,13 +37,48 @@ def test_go_study_continues_unanalyzed_only(tmp_path: Path):
         blueprint_id=bid,
         freeform={"blueprint_wizard": {"blueprint_id": bid, "step": "study"}},
     )
-    reply, cards = execute_wizard_command(tmp_path, session, "go_study")
+    reply, cards = execute_wizard_command(
+        tmp_path, session, "go_study", study_method="sample"
+    )
     wizard = (session.freeform or {}).get("blueprint_wizard") or {}
     assert wizard.get("trigger_begin_study") in (None, False)
     keys = list(wizard.get("trigger_chapter_study") or [])
     assert set(keys) == {"c2", "c3"}
     assert "接着学" in reply or "还没完成" in reply
     assert cards and cards[0].type == "blueprint_wizard"
+
+
+def test_write_chapter_does_not_kick_remaining_study(tmp_path: Path):
+    """口语开写不得把未学章整批自动分析。"""
+    from report_writing.chat.tool_dispatch import execute_dispatch_tool
+
+    bid = _seed_partial(tmp_path)
+    session = ChatSession(
+        id="s_write_no_study",
+        blueprint_id=bid,
+        freeform={
+            "blueprint_wizard": {
+                "blueprint_id": bid,
+                "step": "study",
+                "trigger_chapter_study": ["c2", "c3"],
+            }
+        },
+    )
+    hit = execute_dispatch_tool(
+        tmp_path,
+        session,
+        {"tool": "re_study_chapters", "args": {}},
+        "帮我写第1章",
+        emit=None,
+        invoke=None,
+    )
+    assert hit is not None
+    reply, _cards, _ = hit
+    wizard = (session.freeform or {}).get("blueprint_wizard") or {}
+    assert not wizard.get("trigger_begin_study")
+    assert "c2" not in list(wizard.get("trigger_chapter_study") or [])
+    assert "自动分析" not in (reply or "")
+    assert "分析进度" not in (reply or "")
 
 
 def test_try_write_analyzed_offers_picker(tmp_path: Path):

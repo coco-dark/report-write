@@ -6,7 +6,7 @@ cd "$ROOT"
 PORT="${REPORT_WRITING_PORT:-8090}"
 HOST="${REPORT_WRITING_HOST:-0.0.0.0}"
 LOG="${REPORT_WRITING_SERVE_LOG:-/tmp/rw-serve.log}"
-export REPORT_WRITING_REDIS_URL="${REPORT_WRITING_REDIS_URL:-redis://127.0.0.1:6379/0}"
+# 勿默认写死本机 Redis：优先 REPORT_WRITING_REDIS_URL / config/application.local.yml
 export REPORT_WRITING_RELOAD="${REPORT_WRITING_RELOAD:-1}"
 export PYTHONPATH="${ROOT}/backend/src${PYTHONPATH:+:$PYTHONPATH}"
 PY="${ROOT}/.venv/bin/python"
@@ -15,7 +15,7 @@ if [[ ! -x "$PY" ]]; then
   exit 1
 fi
 
-# MySQL(13306) + Redis(6379)；可用 REPORT_WRITING_SKIP_DEPS=1 跳过
+# MySQL(13306) + Redis；可用 REPORT_WRITING_SKIP_DEPS=1 跳过 Docker 依赖
 if [[ "${REPORT_WRITING_SKIP_DEPS:-0}" != "1" ]]; then
   "$ROOT/scripts/ensure-deps.sh"
 fi
@@ -29,7 +29,7 @@ fi
 trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT INT TERM
 
 echo "报告书写 dev-serve → http://127.0.0.1:${PORT}/ （热更新 REPORT_WRITING_RELOAD=${REPORT_WRITING_RELOAD}，日志 ${LOG}）"
-echo "依赖: MySQL 127.0.0.1:13306 · Redis 127.0.0.1:6379"
+echo "依赖: MySQL/Redis 见 config 或 REPORT_WRITING_*；SKIP_DEPS=${REPORT_WRITING_SKIP_DEPS:-0}"
 echo "按 Ctrl+C 停止；请勿在其它终端反复 pkill，否则会断服。"
 
 while true; do

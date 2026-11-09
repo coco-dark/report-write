@@ -30,7 +30,22 @@ def is_rate_limit_error(exc: BaseException | None = None, text: str = "") -> boo
     return any(m in blob for m in markers)
 
 
+def is_arrearage_error(exc: BaseException | None = None, text: str = "") -> bool:
+    blob = f"{exc!r} {text}".lower()
+    return (
+        "arrearage" in blob
+        or "overdue-payment" in blob
+        or "欠费" in blob
+        or "overdue payment" in blob
+    )
+
+
 def user_message_for_llm_error(exc: BaseException) -> str | None:
+    if is_arrearage_error(exc):
+        return (
+            "百炼账号已欠费，写作助手暂时连不上模型。"
+            "请到阿里云百炼控制台充值后再试。"
+        )
     if is_model_not_found_error(exc):
         return (
             "百炼返回「模型不存在」(404)。请在 config/bailian.local.yml 使用控制台已开通的 model 名称，"

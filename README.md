@@ -60,7 +60,7 @@ FastAPI（report_writing.api）
 |----|------|------|
 | 前端 | `frontend/` | 对话页、文档窗、蓝本 / 要素 / 资料库、机器人与排版 |
 | HTTP API | `backend/src/report_writing/api/` | FastAPI 路由；静态资源来自 `npm run build` |
-| 对话编排 | `backend/src/report_writing/chat/` | 意图识别、澄清、工具调用、SSE 进度、开写前要点检查 |
+| 对话编排 | `backend/src/report_writing/chat/` | 选择卡、ReAct 总控（`create_agent`）、SSE；无独立「意图」路由 |
 | 总控与专员 | `backend/src/report_writing/agents/` | LangChain `create_agent` 工具循环；无密钥时可用脚本模型离线走通 |
 | 领域模型 | `backend/src/report_writing/domain/` | `WritingTask`、大纲、`point_items`、要素节点 |
 | 存储 | `services/store.py` + `data/` | 任务 JSON 为写作真源；MySQL 存目录级对象 |
@@ -79,7 +79,7 @@ FastAPI（report_writing.api）
 ## 设计思路
 
 **1. 总控调度专员，而不是一条死流水线。**  
-总控只决定何时 `call_study` / `call_search` / `call_write` / `call_check`。检索、写正文、核对引用分别由专员完成，避免单次超长提示词，也方便按章重试。
+总控通过 LangChain `create_agent` 工具循环决定何时调用各 Tool；章级 `call_study` / `call_search` / `call_write` / `call_check` 由 supervisor 专员执行。架构说明见 `backend/src/report_writing/chat/AGENT_ARCHITECTURE.md`。
 
 **2. 蓝本是写法真源，任务是一次写作副本。**  
 样板学习结果（语气、排版、章节要点）确认后进蓝本库。开写时克隆为写作任务（`w*`），改要点、关联要素、出草稿都落在任务上，不直接改库里的蓝本。

@@ -2,7 +2,7 @@
   <div v-if="!editing" class="blueprint-list ay-page ay-page-scroll">
     <div v-if="fromChat" class="chat-handoff-banner">
       <span>配置完成后返回对话继续写作。</span>
-      <el-button type="primary" link @click="returnToChat">返回对话</el-button>
+      <a-button @click="returnToChat" type="link">返回对话</a-button>
     </div>
     <header class="ay-hero list-hero">
       <div>
@@ -10,8 +10,8 @@
         <p>选择一份蓝本进入配置；不同蓝本互不影响。</p>
       </div>
       <div class="list-hero-actions">
-        <el-button v-if="fromChat" round @click="returnToChat">返回对话</el-button>
-        <el-button type="primary" round @click="openCreate">新建蓝本</el-button>
+        <a-button v-if="fromChat" @click="returnToChat" shape="round">返回对话</a-button>
+        <a-button type="primary" @click="openCreate" shape="round">新建蓝本</a-button>
       </div>
     </header>
 
@@ -42,42 +42,42 @@
           <span>{{ item.updated_at }}</span>
         </div>
         <div class="bp-actions" @click.stop>
-          <el-switch
-            :model-value="item.enabled !== false"
-            inline-prompt
-            active-text="启用"
-            inactive-text="停用"
-            :loading="statusBusyId === item.id"
-            @change="(val) => toggleEnabled(item, val)"
+          <a-switch
+ :checked="item.enabled !== false"
+ inline-prompt
+ checked-children="启用"
+ inchecked-children="停用"
+ :loading="statusBusyId === item.id"
+ @change="(val) => toggleEnabled(item, val)"
           />
-          <el-button size="small" type="danger" plain :loading="deleteBusyId === item.id" @click="removeBlueprint(item)">
+          <a-button size="small" :loading="deleteBusyId === item.id" @click="removeBlueprint(item)" danger>
             删除
-          </el-button>
+          </a-button>
         </div>
       </article>
     </div>
-    <el-empty v-if="!blueprints.length && !listLoading" description="还没有蓝本，先新建一份" :image-size="80" />
+    <a-empty v-if="!blueprints.length && !listLoading" description="还没有蓝本，先新建一份" :image-style="{ height: 80 }"  />
 
-    <el-dialog v-model="createDialog" title="新建书写蓝本" width="480px" destroy-on-close>
-      <el-form label-position="top">
-        <el-form-item label="名称">
-          <el-input v-model="createForm.title" placeholder="如：安全预评价正文蓝本" />
-        </el-form-item>
-        <el-form-item label="分类">
-          <el-input v-model="createForm.category" placeholder="如：安全评价" />
-        </el-form-item>
-        <el-form-item label="标签">
-          <el-input v-model="createForm.tagsText" placeholder="逗号或空格分隔" />
-        </el-form-item>
-        <el-form-item label="用途说明">
-          <el-input v-model="createForm.description" type="textarea" :rows="3" placeholder="何时选用这份蓝本" />
-        </el-form-item>
-      </el-form>
+    <a-modal v-model:open="createDialog" title="新建书写蓝本" width="480px" destroy-on-close centered>
+      <a-form layout="vertical">
+        <a-form-item label="名称">
+          <a-input v-model:value="createForm.title" placeholder="如：安全预评价正文蓝本" />
+        </a-form-item>
+        <a-form-item label="分类">
+          <a-input v-model:value="createForm.category" placeholder="如：安全评价" />
+        </a-form-item>
+        <a-form-item label="标签">
+          <a-input v-model:value="createForm.tagsText" placeholder="逗号或空格分隔" />
+        </a-form-item>
+        <a-form-item label="用途说明">
+          <a-textarea v-model:value="createForm.description" :rows="3" placeholder="何时选用这份蓝本" />
+        </a-form-item>
+      </a-form>
       <template #footer>
-        <el-button @click="createDialog = false">取消</el-button>
-        <el-button type="primary" :loading="busy" @click="submitCreate">创建</el-button>
+        <a-button @click="createDialog = false">取消</a-button>
+        <a-button type="primary" :loading="busy" @click="submitCreate">创建</a-button>
       </template>
-    </el-dialog>
+    </a-modal>
   </div>
 
   <div v-else class="blueprint">
@@ -90,30 +90,29 @@
         </div>
       </div>
 
-      <el-tabs v-model="railTab" class="rail-tabs">
-        <el-tab-pane label="蓝本" name="work">
+      <a-tabs v-model:activeKey="railTab" class="rail-tabs">
+        <a-tab-pane tab="蓝本" key="work">
           <div class="rail-block">
             <div class="block-title">蓝本信息</div>
-            <el-input v-model="specForm.title" size="small" placeholder="蓝本名称，如：安全预评价正文规格" />
-            <el-input v-model="specForm.category" size="small" placeholder="分类，如：安全评价 / 环评" />
-            <el-input
-              v-model="tagsText"
+            <a-input v-model:value="specForm.title" size="small" placeholder="蓝本名称，如：安全预评价正文规格" />
+            <a-input v-model:value="specForm.category" size="small" placeholder="分类，如：安全评价 / 环评" />
+            <a-input
+              v-model:value="tagsText"
               size="small"
               placeholder="标签，用逗号或空格分隔，如：预评价 目录 要点"
             />
-            <el-input
-              v-model="specForm.description"
-              type="textarea"
+            <a-textarea
+              v-model:value="specForm.description"
               :rows="2"
               size="small"
               placeholder="用途说明：何时选用这份蓝本"
             />
-            <el-button class="full" type="primary" plain :loading="busy" @click="saveSpec()">保存蓝本信息</el-button>
+            <a-button class="full" type="primary" :loading="busy" @click="saveSpec()">保存蓝本信息</a-button>
             <div class="meta-tags" v-if="currentTask">
-              <el-tag size="small" :type="statusTagType(currentTask.status)">
+              <a-tag size="small" :color="statusTagType(currentTask.status)">
                 {{ STATUS_LABELS[currentTask.status] || currentTask.status }}
-              </el-tag>
-              <el-tag size="small" type="info">{{ outlineConfirmed ? "目录已确认" : "目录未确认" }}</el-tag>
+              </a-tag>
+              <a-tag size="small" color="default">{{ outlineConfirmed ? "目录已确认" : "目录未确认" }}</a-tag>
             </div>
             <p class="hint tiny">无匹配蓝本时，Agent 将按模型能力直接生成。</p>
           </div>
@@ -125,82 +124,79 @@
               <div class="sample-name" :title="currentTask.sample_name">{{ currentTask.sample_name }}</div>
               <div class="sample-meta">已解析 {{ formatChars(currentTask.sample_chars) }}</div>
               <div class="sample-actions">
-                <el-upload
-                  :auto-upload="false"
-                  :show-file-list="false"
-                  accept=".pdf,.doc,.docx"
-                  :disabled="busy"
-                  :on-change="onBlueprintSample"
-                >
-                  <el-button size="small" :loading="sampleUploading">更换</el-button>
-                </el-upload>
-                <el-button size="small" type="danger" plain :disabled="busy" @click="removeBlueprintSample">
+                <a-upload
+ :before-upload="preventUpload"
+ :show-file-list="false"
+ accept=".pdf,.doc,.docx"
+ :disabled="busy"
+ @change="onBlueprintSample"
+ >
+                  <a-button size="small" :loading="sampleUploading">更换</a-button>
+                </a-upload>
+                <a-button size="small" :disabled="busy" @click="removeBlueprintSample" danger>
                   清除
-                </el-button>
+                </a-button>
               </div>
             </div>
-            <el-upload
-              v-else
-              drag
-              :auto-upload="false"
-              :show-file-list="false"
-              accept=".pdf,.doc,.docx"
-              :disabled="busy"
-              :on-change="onBlueprintSample"
-              class="sample-upload"
-            >
-              <div class="el-upload__text">拖拽或点击上传样本</div>
+            <a-upload-dragger
+ v-else
+ :before-upload="preventUpload"
+ :show-file-list="false"
+ accept=".pdf,.doc,.docx"
+ :disabled="busy"
+ @change="onBlueprintSample"
+ class="sample-upload"
+ >
+              <div class="ant-upload-text">拖拽或点击上传样本</div>
               <template #tip>
-                <div class="el-upload__tip">PDF / Word，上传后自动 RAG 解析</div>
+                <div class="ant-upload-hint">PDF / Word，上传后自动 RAG 解析</div>
               </template>
-            </el-upload>
+            </a-upload-dragger>
           </div>
 
           <div class="rail-block" v-if="outlineConfirmed">
             <div class="block-title">编写</div>
-            <el-button class="full" type="primary" :loading="busy" :disabled="!confirmed" @click="writeReport()">
+            <a-button class="full" type="primary" :loading="busy" :disabled="!confirmed" @click="writeReport()">
               开始编写
-            </el-button>
+            </a-button>
           </div>
-        </el-tab-pane>
+        </a-tab-pane>
 
-        <el-tab-pane label="节点" name="nodes" :disabled="!hasOutline">
-          <el-radio-group v-model="nodeKind" size="small" class="node-kind">
-            <el-radio-button value="chapter">章节节点</el-radio-button>
-            <el-radio-button value="element">要素节点</el-radio-button>
-          </el-radio-group>
+        <a-tab-pane :disabled="!hasOutline" tab="节点" key="nodes">
+          <a-radio-group v-model:value="nodeKind" size="small" class="node-kind">
+            <a-radio-button value="chapter">章节节点</a-radio-button>
+            <a-radio-button value="element">要素节点</a-radio-button>
+          </a-radio-group>
 
           <template v-if="nodeKind === 'chapter'">
             <div class="chapter-toolbar">
               <div class="chapter-toolbar-row">
-                <el-button
-                  class="toolbar-half"
-                  size="small"
-                  :disabled="outlineConfirmed || busy"
-                  @click="addOutlineNode(outlineFocus)"
-                >
+                <a-button
+ class="toolbar-half"
+ size="small"
+ :disabled="outlineConfirmed || busy"
+ @click="addOutlineNode(outlineFocus)"
+ >
                   新增章节
-                </el-button>
-                <el-button
-                  class="toolbar-half"
-                  size="small"
-                  type="danger"
-                  plain
-                  :disabled="outlineConfirmed || busy || !checkedKeys.length"
-                  @click="batchRemoveChapters"
-                >
+                </a-button>
+                <a-button
+ class="toolbar-half"
+ size="small"
+ :disabled="outlineConfirmed || busy || !checkedKeys.length"
+ @click="batchRemoveChapters"
+ danger>
                   批量删除{{ checkedKeys.length ? ` ${checkedKeys.length}` : "" }}
-                </el-button>
+                </a-button>
               </div>
-              <el-button
-                class="toolbar-primary"
-                size="small"
-                type="primary"
-                :disabled="busy || !checkedKeys.length"
-                @click="openAutoStudy"
-              >
+              <a-button
+ class="toolbar-primary"
+ size="small"
+ type="primary"
+ :disabled="busy || !checkedKeys.length"
+ @click="openAutoStudy"
+ >
                 依据文档分析{{ checkedKeys.length ? ` · ${checkedKeys.length} 章` : "" }}
-              </el-button>
+              </a-button>
               <button
                 v-if="(currentTask?.pending_study || []).length"
                 type="button"
@@ -217,71 +213,65 @@
                 }}
               </p>
             </div>
-            <el-tree
-              ref="chapterTreeRef"
-              class="chapter-tree"
-              :data="chapterTree"
-              node-key="key"
-              show-checkbox
-              default-expand-all
-              highlight-current
-              :expand-on-click-node="false"
-              :current-node-key="chapterNodes[outlineFocus]?.key"
-              @check="onTreeCheck"
-              @node-click="onTreeNodeClick"
-            >
+            <UiTree
+ ref="chapterTreeRef"
+ class="chapter-tree"
+ :data="chapterTree"
+ node-key="key"
+ show-checkbox
+ default-expand-all
+ highlight-current
+ :expand-on-click-node="false"
+ :current-node-key="chapterNodes[outlineFocus]?.key"
+ @check="onTreeCheck"
+ @node-click="onTreeNodeClick"
+ >
               <template #default="{ data }">
                 <div class="tree-row">
                   <span class="seq">{{ data.sequence || "—" }}</span>
                   <span class="name">{{ data.title }}</span>
-                  <el-tag v-if="isPendingStudy(data.key)" size="small" type="warning" effect="plain">
+                  <a-tag v-if="isPendingStudy(data.key)" size="small" color="warning">
                     待确认
-                  </el-tag>
-                  <el-tag v-else-if="hasChapterRunResult(data.key)" size="small" type="primary" effect="plain">
+                  </a-tag>
+                  <a-tag v-else-if="hasChapterRunResult(data.key)" size="small" color="blue">
                     已写
-                  </el-tag>
-                  <el-tag v-else-if="hasChapterStudyResult(data)" size="small" type="success" effect="plain">
+                  </a-tag>
+                  <a-tag v-else-if="hasChapterStudyResult(data)" size="small" color="success">
                     已分析
-                  </el-tag>
-                  <el-button
-                    v-if="hasChapterRunResult(data.key)"
-                    size="small"
-                    text
-                    type="primary"
-                    @click.stop="viewChapterRun(data.key)"
-                  >
+                  </a-tag>
+                  <a-button
+ v-if="hasChapterRunResult(data.key)"
+ size="small"
+ @click.stop="viewChapterRun(data.key)"
+ type="link">
                     正文
-                  </el-button>
-                  <el-tag v-if="(data.element_ids || []).length" size="small" effect="plain">
+                  </a-button>
+                  <a-tag v-if="(data.element_ids || []).length" size="small">
                     {{ data.element_ids.length }}
-                  </el-tag>
-                  <el-button
-                    v-if="hasChapterStudyResult(data)"
-                    size="small"
-                    text
-                    type="success"
-                    @click.stop="viewChapterResult(data.key)"
-                  >
+                  </a-tag>
+                  <a-button
+ v-if="hasChapterStudyResult(data)"
+ size="small"
+ @click.stop="viewChapterResult(data.key)"
+ type="text">
                     结果
-                  </el-button>
-                  <el-button
-                    v-if="canRunChapters"
-                    size="small"
-                    text
-                    type="primary"
-                    :loading="busy"
-                    title="仅运行本章（不含子章节）"
-                    @click.stop="runChapter(data.key, false)"
-                  >
+                  </a-button>
+                  <a-button
+ v-if="canRunChapters"
+ size="small"
+ :loading="busy"
+ title="仅运行本章（不含子章节）"
+ @click.stop="runChapter(data.key, false)"
+ type="link">
                     运行
-                  </el-button>
+                  </a-button>
                 </div>
               </template>
-            </el-tree>
+            </UiTree>
           </template>
 
           <template v-else>
-            <el-button class="full" size="small" :disabled="busy" @click="outlineWorkspaceRef?.startNewElement?.()">新增要素</el-button>
+            <a-button class="full" size="small" :disabled="busy" @click="outlineWorkspaceRef?.startNewElement?.()">新增要素</a-button>
             <p class="hint tiny">独立新建后，在拓扑图连线到章节。</p>
             <button
               v-for="element in elementNodes"
@@ -290,19 +280,19 @@
               class="node-row element"
               @click="openElementNode(element.id)"
             >
-              <el-tag size="small" type="info">{{ elementKindLabel(element.kind) }}</el-tag>
+              <a-tag size="small" color="default">{{ elementKindLabel(element.kind) }}</a-tag>
               <span class="name">{{ element.name || "未命名要素" }}</span>
             </button>
-            <el-empty v-if="!elementNodes.length" description="暂无要素节点" :image-size="48" />
+            <a-empty v-if="!elementNodes.length" description="暂无要素节点" :image-style="{ height: 48 }"  />
           </template>
-        </el-tab-pane>
-      </el-tabs>
+        </a-tab-pane>
+      </a-tabs>
     </aside>
 
     <main class="main">
       <div v-if="fromChat" class="chat-handoff-banner">
         <span>从对话进入：完善蓝本后返回对话继续。</span>
-        <el-button type="primary" link @click="returnToChat">返回对话</el-button>
+        <a-button @click="returnToChat" type="link">返回对话</a-button>
       </div>
       <header class="ay-hero main-hero">
         <div>
@@ -316,24 +306,24 @@
           </p>
         </div>
         <div class="head-actions">
-          <el-button v-if="fromChat" round @click="returnToChat">返回对话</el-button>
+          <a-button v-if="fromChat" @click="returnToChat" shape="round">返回对话</a-button>
           <template v-if="hasOutline">
-            <el-button v-if="outlineConfirmed" round @click="revokeOutline()">撤回确认</el-button>
-            <el-button type="primary" round :loading="busy" :disabled="outlineConfirmed" @click="confirmOutline()">
+            <a-button v-if="outlineConfirmed" @click="revokeOutline()" shape="round">撤回确认</a-button>
+            <a-button type="primary" :loading="busy" :disabled="outlineConfirmed" @click="confirmOutline()" shape="round">
               确认目录
-            </el-button>
+            </a-button>
           </template>
         </div>
       </header>
 
       <section v-if="!hasOutline" class="empty-stage">
-        <el-card shadow="never" class="empty-card">
-          <el-empty description="还没有目录大纲">
+        <a-card shadow="never" class="empty-card">
+          <a-empty description="还没有目录大纲">
             <div class="empty-actions">
-              <el-button type="primary" @click="openOutlineDialog('sample')">配置 / 生成大纲</el-button>
+              <a-button type="primary" @click="openOutlineDialog('sample')">配置 / 生成大纲</a-button>
             </div>
-          </el-empty>
-        </el-card>
+          </a-empty>
+        </a-card>
       </section>
 
       <OutlineWorkspace
@@ -371,12 +361,12 @@
       />
     </main>
 
-    <el-dialog v-model="outlineDialog" title="配置 / 生成目录大纲" width="680px" destroy-on-close>
-      <el-radio-group v-model="outlineMode" class="outline-mode">
-        <el-radio-button value="sample">蓝本样本</el-radio-button>
-        <el-radio-button value="upload">上传文件</el-radio-button>
-        <el-radio-button value="paste">粘贴文本</el-radio-button>
-      </el-radio-group>
+    <a-modal v-model:open="outlineDialog" title="配置 / 生成目录大纲" width="680px" destroy-on-close centered>
+      <a-radio-group v-model:value="outlineMode" class="outline-mode">
+        <a-radio-button value="sample">蓝本样本</a-radio-button>
+        <a-radio-button value="upload">上传文件</a-radio-button>
+        <a-radio-button value="paste">粘贴文本</a-radio-button>
+      </a-radio-group>
 
       <div v-if="outlineMode === 'sample'" class="outline-upload">
         <p class="hint">使用本蓝本已上传并 RAG 解析的样本，按文内标题/序号抽取目录。</p>
@@ -385,92 +375,88 @@
           <div class="sample-meta">已解析 {{ formatChars(currentTask.sample_chars) }}</div>
         </div>
         <p v-else class="hint">尚未上传样本，请先在左侧「蓝本样本」上传，或改用上传文件 / 粘贴文本。</p>
-        <el-checkbox v-model="outlineUseLlm" class="check">交由模型整理层级</el-checkbox>
+        <a-checkbox v-model:checked="outlineUseLlm" class="check">交由模型整理层级</a-checkbox>
       </div>
 
       <div v-else-if="outlineMode === 'upload'" class="outline-upload">
         <p class="hint">上传 Word / PDF，经 RAG 解析后自动抽取目录结构。</p>
-        <el-upload
-          drag
-          :auto-upload="false"
-          :limit="1"
-          :file-list="outlineDocList"
-          accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-          :on-change="onOutlineDoc"
-          :on-remove="clearOutlineDoc"
-        >
-          <div class="el-upload__text">将文件拖到此处，或<em>点击上传</em></div>
+        <a-upload-dragger
+ :before-upload="preventUpload"
+ :max-count="1"
+ :file-list="outlineDocList"
+ accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+ @change="onOutlineDoc"
+ @remove="clearOutlineDoc"
+ >
+          <div class="ant-upload-text">将文件拖到此处，或<em>点击上传</em></div>
           <template #tip>
-            <div class="el-upload__tip">支持 .doc / .docx / .pdf</div>
+            <div class="ant-upload-hint">支持 .doc / .docx / .pdf</div>
           </template>
-        </el-upload>
-        <el-checkbox v-model="outlineUseLlm" class="check">交由模型整理层级</el-checkbox>
+        </a-upload-dragger>
+        <a-checkbox v-model:checked="outlineUseLlm" class="check">交由模型整理层级</a-checkbox>
       </div>
 
       <div v-else>
         <p class="hint">粘贴 Word 目录或大纲文本，也可导入 JSON。</p>
-        <el-input
-          v-model="outlinePaste"
-          type="textarea"
+        <a-textarea
+          v-model:value="outlinePaste"
           :rows="12"
           placeholder="1 概述&#10;1.1 安全预评价目的&#10;2 工程概况"
         />
-        <el-checkbox v-model="outlineUseLlm" class="check">交由模型整理层级</el-checkbox>
+        <a-checkbox v-model:checked="outlineUseLlm" class="check">交由模型整理层级</a-checkbox>
       </div>
 
       <template #footer>
-        <el-upload
-          v-if="outlineMode === 'paste'"
-          :auto-upload="false"
-          :show-file-list="false"
-          accept="application/json,.json"
-          :on-change="onOutlineJson"
-        >
-          <el-button>导入 JSON</el-button>
-        </el-upload>
-        <el-button @click="outlineDialog = false">取消</el-button>
-        <el-button
-          v-if="outlineMode === 'sample'"
-          type="primary"
-          :loading="busy"
-          :disabled="!currentTask?.sample_ready"
-          @click="submitOutlineSample"
-        >
+        <a-upload
+ v-if="outlineMode === 'paste'"
+ :before-upload="preventUpload"
+ :show-file-list="false"
+ accept="application/json,.json"
+ @change="onOutlineJson"
+ >
+          <a-button>导入 JSON</a-button>
+        </a-upload>
+        <a-button @click="outlineDialog = false">取消</a-button>
+        <a-button
+ v-if="outlineMode === 'sample'"
+ type="primary"
+ :loading="busy"
+ :disabled="!currentTask?.sample_ready"
+ @click="submitOutlineSample"
+ >
           依据样本生成
-        </el-button>
-        <el-button
-          v-else-if="outlineMode === 'upload'"
-          type="primary"
-          :loading="busy"
-          :disabled="!outlineDocFile"
-          @click="submitOutlineFile"
-        >
+        </a-button>
+        <a-button
+ v-else-if="outlineMode === 'upload'"
+ type="primary"
+ :loading="busy"
+ :disabled="!outlineDocFile"
+ @click="submitOutlineFile"
+ >
           上传并分析
-        </el-button>
-        <el-button
-          v-else
-          type="primary"
-          :loading="busy"
-          :disabled="!outlinePaste.trim()"
-          @click="submitOutlinePaste"
-        >
+        </a-button>
+        <a-button
+ v-else
+ type="primary"
+ :loading="busy"
+ :disabled="!outlinePaste.trim()"
+ @click="submitOutlinePaste"
+ >
           生成大纲
-        </el-button>
+        </a-button>
       </template>
-    </el-dialog>
+    </a-modal>
 
-    <el-dialog v-model="exportVisible" title="已确认正文" width="720px">
+    <a-modal v-model:open="exportVisible" title="已确认正文" width="720px" destroy-on-close centered :footer="null">
       <pre class="draft export">{{ exportText }}</pre>
-    </el-dialog>
+    </a-modal>
 
-    <el-dialog
-      v-model="autoStudyDialog"
-      title="依据文档分析"
-      width="680px"
-      destroy-on-close
-      class="study-dialog"
-      align-center
-    >
+    <a-modal
+ v-model:open="autoStudyDialog"
+ title="依据文档分析"
+ width="680px"
+ class="study-dialog"
+ destroy-on-close centered>
       <div class="study-hero">
         <div class="study-hero-mark">析</div>
         <div>
@@ -520,40 +506,37 @@
       </div>
 
       <div v-else class="study-pane">
-        <el-upload
-          drag
-          :auto-upload="false"
-          :limit="1"
-          accept=".pdf,.doc,.docx"
-          :on-change="onAutoStudyFile"
-          :on-remove="clearAutoStudyFile"
-          :file-list="autoStudyFileList"
-          class="study-upload"
-        >
+        <a-upload-dragger
+ :before-upload="preventUpload"
+ :max-count="1"
+ accept=".pdf,.doc,.docx"
+ @change="onAutoStudyFile"
+ @remove="clearAutoStudyFile"
+ :file-list="autoStudyFileList"
+ class="study-upload"
+ >
           <div class="upload-inner">
             <div class="upload-ico">↑</div>
             <div class="upload-title">拖拽文件到此处，或点击选择</div>
             <div class="upload-desc">支持 PDF、DOC、DOCX</div>
           </div>
-        </el-upload>
+        </a-upload-dragger>
       </div>
 
       <template #footer>
-        <el-button @click="autoStudyDialog = false">取消</el-button>
-        <el-button type="primary" :loading="busy" :disabled="!canSubmitStudy" @click="submitAutoStudy">
+        <a-button @click="autoStudyDialog = false">取消</a-button>
+        <a-button type="primary" :loading="busy" :disabled="!canSubmitStudy" @click="submitAutoStudy">
           开始分析
-        </el-button>
+        </a-button>
       </template>
-    </el-dialog>
+    </a-modal>
 
-    <el-dialog
-      v-model="outlinePromptDialog"
-      title="目录不一致"
-      width="520px"
-      destroy-on-close
-      align-center
-      :close-on-click-modal="false"
-    >
+    <a-modal
+ v-model:open="outlinePromptDialog"
+ title="目录不一致"
+ width="520px"
+ :mask-closable="false"
+ destroy-on-close centered>
       <div class="tool-card">
         <div class="tool-card-head">
           <span class="tool-badge">Tool</span>
@@ -568,23 +551,22 @@
         </ul>
       </div>
       <template #footer>
-        <el-button :loading="busy" @click="skipOutlineAndStudy">不改目录，直接分析要点</el-button>
-        <el-button type="primary" @click="openOutlineEdit">编辑新目录并写入</el-button>
+        <a-button :loading="busy" @click="skipOutlineAndStudy">不改目录，直接分析要点</a-button>
+        <a-button type="primary" @click="openOutlineEdit">编辑新目录并写入</a-button>
       </template>
-    </el-dialog>
+    </a-modal>
 
-    <el-dialog
-      v-model="outlineEditDialog"
-      title="编辑新目录章节"
-      width="720px"
-      destroy-on-close
-      :close-on-click-modal="false"
-    >
+    <a-modal
+ v-model:open="outlineEditDialog"
+ title="编辑新目录章节"
+ width="720px"
+ :mask-closable="false"
+ destroy-on-close centered>
       <div class="tool-card compact">
         <div class="tool-card-head">
           <span class="tool-badge">Tool</span>
           <code>extract_outline_from_document</code>
-          <el-tag size="small" type="warning">确认后写入目录，再学要点</el-tag>
+          <a-tag size="small" color="warning">确认后写入目录，再学要点</a-tag>
         </div>
         <p class="tool-msg">{{ outlineToolMessage }}</p>
       </div>
@@ -592,34 +574,33 @@
       <div v-for="(item, index) in pendingOutlineDrafts" :key="item.chapter_key" class="study-draft">
         <div class="study-draft-head">
           <div class="study-draft-title">
-            <el-checkbox v-model="pendingOutlineDrafts[index].accepted" />
-            <el-tag size="small" type="warning">新增</el-tag>
+            <a-checkbox v-model:checked="pendingOutlineDrafts[index].accepted"  />
+            <a-tag size="small" color="warning">新增</a-tag>
             <strong>{{ item.sequence || "—" }} {{ item.title }}</strong>
           </div>
         </div>
         <div class="outline-edit-row" v-if="item.accepted !== false">
-          <el-input v-model="pendingOutlineDrafts[index].sequence" placeholder="序号 如 2.3.1" style="width: 120px" />
-          <el-input v-model="pendingOutlineDrafts[index].title" placeholder="章节标题" />
+          <a-input v-model:value="pendingOutlineDrafts[index].sequence" placeholder="序号 如 2.3.1" style="width: 120px" />
+          <a-input v-model:value="pendingOutlineDrafts[index].title" placeholder="章节标题" />
         </div>
       </div>
       <template #footer>
-        <el-button @click="outlineEditDialog = false">稍后</el-button>
-        <el-button type="primary" :loading="busy" @click="confirmOutlineThenStudy">
+        <a-button @click="outlineEditDialog = false">稍后</a-button>
+        <a-button type="primary" :loading="busy" @click="confirmOutlineThenStudy">
           确认目录并继续分析
-        </el-button>
+        </a-button>
       </template>
-    </el-dialog>
+    </a-modal>
 
-    <el-dialog
-      v-model="runProgressVisible"
-      title="正在运行章节"
-      width="520px"
-      :close-on-click-modal="false"
-      :close-on-press-escape="false"
-      :show-close="false"
-      align-center
-      class="study-progress-dialog"
-    >
+    <a-modal
+ v-model:open="runProgressVisible"
+ title="正在运行章节"
+ width="520px"
+ :mask-closable="false"
+ :close-on-press-escape="false"
+ :show-close="false"
+ class="study-progress-dialog"
+ destroy-on-close centered :footer="null">
       <div class="study-progress">
         <p class="study-progress-phase">{{ runProgress.phase || "处理中" }}</p>
         <p class="study-progress-current" v-if="runProgress.current">
@@ -642,18 +623,17 @@
         </ul>
         <p class="hint tiny">单章按 检索 → 写作 → 检查 推进，请勿刷新页面。</p>
       </div>
-    </el-dialog>
+    </a-modal>
 
-    <el-dialog
-      v-model="studyProgressVisible"
-      title="正在分析"
-      width="520px"
-      :close-on-click-modal="false"
-      :close-on-press-escape="false"
-      :show-close="false"
-      align-center
-      class="study-progress-dialog"
-    >
+    <a-modal
+ v-model:open="studyProgressVisible"
+ title="正在分析"
+ width="520px"
+ :mask-closable="false"
+ :close-on-press-escape="false"
+ :show-close="false"
+ class="study-progress-dialog"
+ destroy-on-close centered :footer="null">
       <div class="study-progress">
         <p class="study-progress-phase">{{ studyProgress.phase || "处理中" }}</p>
         <p class="study-progress-current" v-if="studyProgress.current">
@@ -662,12 +642,12 @@
             （{{ studyProgress.index || studyProgress.items.filter((i) => i.status === 'done').length }}/{{ studyProgress.total }}）
           </span>
         </p>
-        <el-progress
-          v-if="studyProgress.total"
-          :percentage="studyProgressPercent"
-          :stroke-width="10"
-          style="margin: 12px 0 16px"
-        />
+        <a-progress
+ v-if="studyProgress.total"
+ :percent="studyProgressPercent"
+ :stroke-width="10"
+ style="margin: 12px 0 16px"
+  />
         <ul class="study-progress-list">
           <li
             v-for="item in studyProgress.items"
@@ -682,20 +662,19 @@
         </ul>
         <p class="hint tiny">多章会逐个调用模型，请勿刷新页面。</p>
       </div>
-    </el-dialog>
+    </a-modal>
 
-    <el-dialog
-      v-model="studyConfirmDialog"
-      title="确认写作要点"
-      width="780px"
-      destroy-on-close
-      :close-on-click-modal="false"
-    >
+    <a-modal
+ v-model:open="studyConfirmDialog"
+ title="确认写作要点"
+ width="780px"
+ :mask-closable="false"
+ destroy-on-close centered>
       <div class="tool-card compact">
         <div class="tool-card-head">
           <span class="tool-badge">Tool</span>
           <code>study_from_document</code>
-          <el-tag size="small" type="info">仅写入要点</el-tag>
+          <a-tag size="small" color="default">仅写入要点</a-tag>
         </div>
         <p class="tool-msg">{{ studyToolMessage || "请确认写作要点后写入蓝本。" }}</p>
       </div>
@@ -705,46 +684,43 @@
           <div class="study-draft-title">
             <strong>{{ item.sequence || "—" }} {{ item.title }}</strong>
           </div>
-          <el-tag size="small" :type="item.matched ? 'success' : 'info'">
+          <a-tag size="small" :color="item.matched ? 'success' : 'default'">
             {{ item.matched ? "已匹配正文" : "未匹配到正文" }}
-          </el-tag>
-          <el-button
-            size="small"
-            type="primary"
-            plain
-            :loading="busy"
-            @click="confirmOneStudy(index)"
-          >
+          </a-tag>
+          <a-button
+ size="small"
+ type="primary"
+ :loading="busy"
+ @click="confirmOneStudy(index)"
+ >
             确认本章
-          </el-button>
+          </a-button>
         </div>
-        <el-input
+        <a-textarea
           v-if="item.describes"
-          v-model="pendingStudyDrafts[index].describes"
-          type="textarea"
+          v-model:value="pendingStudyDrafts[index].describes"
           :rows="2"
           class="study-describes"
           placeholder="本章简述"
         />
-        <el-input
-          v-model="pendingStudyDrafts[index].pointsText"
-          type="textarea"
+        <a-textarea
+          v-model:value="pendingStudyDrafts[index].pointsText"
           :rows="4"
           placeholder="写作要点，一行一条"
         />
       </div>
       <template #footer>
-        <el-button @click="deferStudyConfirm">稍后确认</el-button>
-        <el-button type="primary" :loading="busy" :disabled="!pendingStudyDrafts.length" @click="applyAutoStudy">
+        <a-button @click="deferStudyConfirm">稍后确认</a-button>
+        <a-button type="primary" :loading="busy" :disabled="!pendingStudyDrafts.length" @click="applyAutoStudy">
           全部确认并保存
-        </el-button>
+        </a-button>
       </template>
-    </el-dialog>
+    </a-modal>
   </div>
 </template>
 
 <script setup>
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessage, ElMessageBox } from "../ui.js";
 import { computed, inject, nextTick, onMounted, ref, watch } from "vue";
 
 import OutlineWorkspace from "../components/OutlineWorkspace.vue";
@@ -1096,8 +1072,25 @@ function openOutlineDialog(mode = "sample") {
   outlineDialog.value = true;
 }
 
-async function onBlueprintSample(file) {
-  const raw = file?.raw;
+function preventUpload() {
+  return false;
+}
+
+function uploadRaw(info) {
+  const file = info?.file || info;
+  return file?.originFileObj || file?.raw || (file instanceof File ? file : null);
+}
+
+function uploadList(info, fallback) {
+  const list = info?.fileList;
+  if (Array.isArray(list) && list.length) return list.slice(-1);
+  return fallback || [];
+}
+
+async function onBlueprintSample(info) {
+  const file = info?.file || info;
+  if (file?.status === "removed") return;
+  const raw = uploadRaw(info);
   if (!raw) return;
   sampleUploading.value = true;
   try {
@@ -1118,16 +1111,24 @@ async function removeBlueprintSample() {
   await clearBlueprintSample();
 }
 
-function onOutlineJson(file) {
-  if (file?.raw) {
-    importOutlineFile(file.raw);
+function onOutlineJson(info) {
+  const file = info?.file || info;
+  if (file?.status === "removed") return;
+  const raw = uploadRaw(info);
+  if (raw) {
+    importOutlineFile(raw);
     outlineDialog.value = false;
   }
 }
 
-function onOutlineDoc(file, files) {
-  outlineDocFile.value = file?.raw || null;
-  outlineDocList.value = (files || []).slice(-1);
+function onOutlineDoc(info) {
+  const file = info?.file || info;
+  if (file?.status === "removed") {
+    clearOutlineDoc();
+    return;
+  }
+  outlineDocFile.value = uploadRaw(info);
+  outlineDocList.value = uploadList(info, info?.fileList).slice(-1);
   if (outlineDocFile.value) {
     writing.templateFile.value = outlineDocFile.value;
   }
@@ -1319,9 +1320,14 @@ function openAutoStudy() {
   });
 }
 
-function onAutoStudyFile(file, files) {
-  autoStudyFile.value = file.raw;
-  autoStudyFileList.value = files.slice(-1);
+function onAutoStudyFile(info) {
+  const file = info?.file || info;
+  if (file?.status === "removed") {
+    clearAutoStudyFile();
+    return;
+  }
+  autoStudyFile.value = uploadRaw(info);
+  autoStudyFileList.value = uploadList(info, info?.fileList).slice(-1);
 }
 
 function clearAutoStudyFile() {
@@ -1793,7 +1799,7 @@ function elementKindLabel(kind) {
   width: 36px;
   height: 36px;
   border-radius: 10px;
-  background: var(--el-color-primary);
+  background: var(--ay-blue);
   color: #fff;
   font-weight: 700;
 }
@@ -1850,10 +1856,10 @@ function elementKindLabel(kind) {
   flex-direction: column;
   gap: 12px;
 }
-.outline-upload :deep(.el-upload-dragger) {
+.outline-upload :deep(.ant-upload-drag) {
   padding: 28px 16px;
 }
-.sample-upload :deep(.el-upload-dragger) {
+.sample-upload :deep(.ant-upload-drag) {
   padding: 18px 12px;
 }
 .sample-card {
@@ -1933,7 +1939,7 @@ function elementKindLabel(kind) {
 }
 .seq {
   min-width: 36px;
-  color: var(--el-text-color-secondary);
+  color: var(--ay-muted);
   font-size: 12px;
 }
 .node-kind {
@@ -1941,10 +1947,10 @@ function elementKindLabel(kind) {
   width: 100%;
   margin-bottom: 12px;
 }
-.node-kind :deep(.el-radio-button) {
+.node-kind :deep(.ant-radio-button-wrapper) {
   flex: 1;
 }
-.node-kind :deep(.el-radio-button__inner) {
+.node-kind :deep(.ant-radio-button-wrapper__inner) {
   width: 100%;
 }
 .chapter-toolbar {
@@ -2269,13 +2275,13 @@ function elementKindLabel(kind) {
   border-color: var(--ay-blue);
   box-shadow: 0 0 0 3px rgba(78, 110, 242, 0.12);
 }
-.study-upload :deep(.el-upload-dragger) {
+.study-upload :deep(.ant-upload-drag) {
   padding: 36px 20px;
   border-radius: 14px;
   border-color: #cbd5e1;
   background: #f8fafc;
 }
-.study-upload :deep(.el-upload-dragger:hover) {
+.study-upload :deep(.ant-upload-drag:hover) {
   border-color: var(--ay-blue);
 }
 .upload-inner {

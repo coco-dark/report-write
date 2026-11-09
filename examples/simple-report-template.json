@@ -1,0 +1,27 @@
+{
+  "id": "simple-work-report",
+  "version": "1",
+  "title": "工作汇报",
+  "chapters": [
+    {
+      "key": "overview",
+      "title": "概况",
+      "sequence": "1",
+      "level": 1,
+      "points": ["汇报目的", "时间范围"],
+      "keywords": ["概况"],
+      "sample_paragraphs": ["本汇报说明近期工作进展与下一阶段安排。"],
+      "depends_on": []
+    },
+    {
+      "key": "progress",
+      "title": "工作进展",
+      "sequence": "2",
+      "level": 1,
+      "points": ["已完成事项", "下一步计划"],
+      "keywords": ["进展"],
+      "sample_paragraphs": ["本阶段已完成主要任务，下一步按计划推进。"],
+      "depends_on": ["overview"]
+    }
+  ]
+}

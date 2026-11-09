@@ -1,106 +1,94 @@
 <template>
   <div v-if="model" class="element-config-fields">
-    <el-row v-if="showLibraryMeta" :gutter="12">
-      <el-col :span="12">
-        <el-form-item label="分类">
-          <el-autocomplete
+    <a-row v-if="showLibraryMeta" :gutter="12">
+      <a-col :span="12">
+        <a-form-item label="分类">
+          <UiAutoComplete
             v-model="model.category"
             :fetch-suggestions="queryCategory"
             clearable
             placeholder="如：个人信息（可选用已有）"
             style="width: 100%"
-            popper-class="rw-element-config-popper"
+            popup-class-name="rw-element-config-popper"
           />
-        </el-form-item>
-      </el-col>
-      <el-col :span="12">
-        <el-form-item label="标签">
-          <el-select
-            v-model="model.tags"
-            multiple
-            filterable
-            allow-create
-            default-first-option
-            teleported
-            style="width: 100%"
-            popper-class="rw-element-config-popper"
-          >
-            <el-option v-for="t in tagOptions" :key="t" :label="t" :value="t" />
-          </el-select>
-        </el-form-item>
-      </el-col>
-    </el-row>
-    <el-form-item v-if="showLibraryMeta" label="作用说明">
-      <el-input v-model="model.purpose" type="textarea" :rows="2" placeholder="这个要素在写作里解决什么问题" />
-    </el-form-item>
+        </a-form-item>
+      </a-col>
+      <a-col :span="12">
+        <a-form-item label="标签">
+          <a-select
+ v-model:value="model.tags"
+ style="width: 100%" popup-class-name="rw-element-config-popper"
+ mode="tags" show-search>
+            <a-select-option v-for="t in tagOptions" :key="t" :value="t">{{ t }}</a-select-option>
+          </a-select>
+        </a-form-item>
+      </a-col>
+    </a-row>
+    <a-form-item v-if="showLibraryMeta" label="作用说明">
+      <a-textarea v-model:value="model.purpose" :rows="2" placeholder="这个要素在写作里解决什么问题" />
+    </a-form-item>
 
-    <el-form-item label="名称">
-      <el-input v-model="model.name" placeholder="要素在拓扑上的显示名" />
-    </el-form-item>
-    <el-form-item label="类型">
-      <el-select
-        v-model="model.kind"
-        teleported
-        style="width: 100%"
-        popper-class="rw-element-config-popper"
-        @change="onKindChange"
-      >
-        <el-option label="键值对" value="kv" />
-        <el-option label="固定值" value="fixed" />
-        <el-option label="文件" value="file" />
-        <el-option label="引用槽位" value="file_slot" />
-        <el-option label="LLM 生成" value="llm_generate" />
-        <el-option label="图片" value="image" />
-        <el-option v-if="showNodeRef" label="引用结果" value="node_ref" />
-      </el-select>
-    </el-form-item>
+    <a-form-item label="名称">
+      <a-input v-model:value="model.name" placeholder="要素在拓扑上的显示名" />
+    </a-form-item>
+    <a-form-item label="类型">
+      <a-select
+ v-model:value="model.kind"
+ style="width: 100%" popup-class-name="rw-element-config-popper"
+ @change="onKindChange"
+ >
+        <a-select-option value="kv">键值对</a-select-option>
+        <a-select-option value="fixed">固定值</a-select-option>
+        <a-select-option value="file">文件</a-select-option>
+        <a-select-option value="file_slot">引用槽位</a-select-option>
+        <a-select-option value="llm_generate">LLM 生成</a-select-option>
+        <a-select-option value="image">图片</a-select-option>
+        <a-select-option v-if="showNodeRef" value="node_ref">引用结果</a-select-option>
+      </a-select>
+    </a-form-item>
 
-    <el-form-item v-if="model.kind === 'kv'" label="键值对列表" class="kv-form-item">
+    <a-form-item v-if="model.kind === 'kv'" label="键值对列表" class="kv-form-item">
       <p class="field-hint">每行一条；值支持多行大段文本，写作时合并为要素内容。</p>
       <div class="kv-list">
         <article v-for="(row, index) in model.kv_pairs" :key="index" class="kv-list-item">
           <header class="kv-list-item-head">
             <span class="kv-list-index">{{ index + 1 }}</span>
-            <el-button
-              text
-              type="danger"
-              size="small"
-              :disabled="model.kv_pairs.length <= 1"
-              @click="removeKvRow(index)"
-            >
+            <a-button
+ size="small"
+ :disabled="model.kv_pairs.length <= 1"
+ @click="removeKvRow(index)"
+ type="text" danger>
               删除
-            </el-button>
+            </a-button>
           </header>
           <div class="kv-list-item-body">
             <div class="kv-field">
               <label class="kv-field-label">键</label>
-              <el-input v-model="row.key" placeholder="如：个人简介" />
+              <a-input v-model:value="row.key" placeholder="如：个人简介" />
             </div>
             <div class="kv-field kv-field-value">
               <label class="kv-field-label">值</label>
-              <el-input
-                v-model="row.value"
-                type="textarea"
-                :autosize="{ minRows: 4, maxRows: 16 }"
+              <a-textarea
+                v-model:value="row.value"
+                :auto-size="{ minRows: 4, maxRows: 16 }"
                 placeholder="可粘贴长段落、列表说明等"
               />
             </div>
           </div>
         </article>
-        <el-button class="kv-list-add" plain type="primary" @click="addKvRow">+ 添加一行</el-button>
+        <a-button class="kv-list-add" type="primary" @click="addKvRow">+ 添加一行</a-button>
       </div>
-    </el-form-item>
+    </a-form-item>
 
     <template v-else-if="isFileKind">
-      <el-form-item label="检索语句（可选）">
-        <el-input
-          v-model="model.query"
-          type="textarea"
-          :autosize="{ minRows: 2, maxRows: 6 }"
+      <a-form-item label="检索语句（可选）">
+        <a-textarea
+          v-model:value="model.query"
+          :auto-size="{ minRows: 2, maxRows: 6 }"
           placeholder="写作时在已解析文件中检索；留空则取文首摘要"
         />
-      </el-form-item>
-      <el-form-item label="对应文件" class="kv-form-item">
+      </a-form-item>
+      <a-form-item label="对应文件" class="kv-form-item">
         <p class="field-hint warn">
           文件类型必须上传对应文件（可多份）。上传后不会自动解析；请点击「解析」，解析完成后才能读取相关内容。
         </p>
@@ -114,19 +102,18 @@
               <span v-if="row.parse_error" class="field-hint warn">{{ row.parse_error }}</span>
             </div>
             <div class="file-attach-actions">
-              <el-button
-                size="small"
-                type="primary"
-                plain
-                :loading="parsingId === row.file_id"
-                :disabled="!row.file_id || busy"
-                @click="parseOne(row)"
-              >
+              <a-button
+ size="small"
+ type="primary"
+ :loading="parsingId === row.file_id"
+ :disabled="!row.file_id || busy"
+ @click="parseOne(row)"
+ >
                 {{ row.parse_status === "parsed" ? "重新解析" : "解析" }}
-              </el-button>
-              <el-button size="small" text type="danger" :disabled="busy" @click="removeAttached(index)">
+              </a-button>
+              <a-button size="small" :disabled="busy" @click="removeAttached(index)" type="text" danger>
                 删除
-              </el-button>
+              </a-button>
             </div>
           </article>
         </div>
@@ -141,10 +128,10 @@
             @change="onUploadFiles"
           />
         </label>
-      </el-form-item>
+      </a-form-item>
     </template>
 
-    <el-form-item v-if="model.kind === 'file_slot'" label="引用槽位" class="kv-form-item">
+    <a-form-item v-if="model.kind === 'file_slot'" label="引用槽位" class="kv-form-item">
       <p class="field-hint">
         从资料包已规划的槽位中下拉选择，再填写检索词（写作时在该槽文件中检索取摘录）。槽位文件请在文档窗资料包区上传/解析。
       </p>
@@ -155,84 +142,75 @@
         <article v-for="(row, index) in model.file_slots || []" :key="`fs-${index}`" class="slot-ref-item">
           <header class="slot-ref-head">
             <span class="kv-list-index">引用 {{ index + 1 }}</span>
-            <el-button
-              text
-              type="danger"
-              size="small"
-              :disabled="(model.file_slots || []).length <= 1"
-              @click="removeFileSlotAt(index)"
-            >
+            <a-button
+ size="small"
+ :disabled="(model.file_slots || []).length <= 1"
+ @click="removeFileSlotAt(index)"
+ type="text" danger>
               删除
-            </el-button>
+            </a-button>
           </header>
           <div class="slot-ref-body">
             <div class="kv-field">
               <label class="kv-field-label">资料包槽位</label>
-              <el-select
-                :model-value="Number(row.no) > 0 ? Number(row.no) : undefined"
-                filterable
-                clearable
-                teleported
-                append-to-body
+              <a-select
+                :value="Number(row.no) > 0 ? Number(row.no) : undefined"
+                allow-clear
+                show-search
                 style="width: 100%"
                 placeholder="选择资料包槽位"
-                popper-class="rw-element-config-popper"
+                popup-class-name="rw-element-config-popper"
                 :disabled="!packSlotSelectOptions(index).length"
                 @change="(val) => onPickPackSlot(index, val)"
               >
-                <el-option
+                <a-select-option
                   v-for="opt in packSlotSelectOptions(index)"
                   :key="opt.no"
-                  :label="opt.label"
                   :value="opt.no"
-                  :disabled="opt.disabled"
-                />
-              </el-select>
+                  :disabled="opt.disabled">{{ opt.label }}</a-select-option>
+              </a-select>
             </div>
             <div class="kv-field kv-field-value">
               <label class="kv-field-label">检索词</label>
-              <el-input
-                :model-value="row.query"
-                type="textarea"
-                :autosize="{ minRows: 2, maxRows: 6 }"
+              <a-textarea
+                :value="row.query"
+                :auto-size="{ minRows: 2, maxRows: 6 }"
                 placeholder="写作时在该槽文件中检索"
-                @update:model-value="(v) => onSlotQueryInput(index, v)"
+                @update:value="(v) => onSlotQueryInput(index, v)"
               />
             </div>
           </div>
         </article>
-        <el-button
-          class="kv-list-add"
-          plain
-          type="primary"
-          :disabled="!canAddSlotRef"
-          @click="addFileSlot"
-        >
+        <a-button
+ class="kv-list-add"
+ type="primary"
+ :disabled="!canAddSlotRef"
+ @click="addFileSlot"
+ >
           + 添加引用
-        </el-button>
+        </a-button>
       </div>
-    </el-form-item>
+    </a-form-item>
 
-    <el-form-item v-else-if="model.kind === 'llm_generate'" label="生成提示词">
-      <el-input v-model="model.prompt" type="textarea" :rows="3" />
-    </el-form-item>
+    <a-form-item v-else-if="model.kind === 'llm_generate'" label="生成提示词">
+      <a-textarea v-model:value="model.prompt" :rows="3" />
+    </a-form-item>
 
     <template v-else-if="model.kind === 'image'">
-      <el-form-item label="图片来源">
-        <el-radio-group v-model="model.image_source">
-          <el-radio-button value="upload">上传固定图</el-radio-button>
-          <el-radio-button value="llm">文生图</el-radio-button>
-        </el-radio-group>
-      </el-form-item>
-      <el-form-item v-if="model.image_source === 'llm'" label="画面描述">
-        <el-input
-          v-model="model.prompt"
-          type="textarea"
-          :autosize="{ minRows: 3, maxRows: 8 }"
+      <a-form-item label="图片来源">
+        <a-radio-group v-model:value="model.image_source">
+          <a-radio-button value="upload">上传固定图</a-radio-button>
+          <a-radio-button value="llm">文生图</a-radio-button>
+        </a-radio-group>
+      </a-form-item>
+      <a-form-item v-if="model.image_source === 'llm'" label="画面描述">
+        <a-textarea
+          v-model:value="model.prompt"
+          :auto-size="{ minRows: 3, maxRows: 8 }"
           placeholder="描述要生成的插图内容、风格、构图等"
         />
-      </el-form-item>
-      <el-form-item label="图片文件">
+      </a-form-item>
+      <a-form-item label="图片文件">
         <p v-if="model.image_path" class="field-hint">已保存：{{ model.image_path }}</p>
         <div class="image-el-actions">
           <label v-if="model.image_source === 'upload'" class="file-upload-btn" :class="{ disabled: busy || !canPersistImage }">
@@ -245,16 +223,15 @@
               @change="onUploadImage"
             />
           </label>
-          <el-button
-            v-if="model.image_source === 'llm'"
-            type="primary"
-            plain
-            :loading="imageGenerating"
-            :disabled="busy || !canPersistImage || !String(model.prompt || '').trim()"
-            @click="onGenerateImage"
-          >
+          <a-button
+ v-if="model.image_source === 'llm'"
+ type="primary"
+ :loading="imageGenerating"
+ :disabled="busy || !canPersistImage || !String(model.prompt || '').trim()"
+ @click="onGenerateImage"
+ >
             生成并保存
-          </el-button>
+          </a-button>
           <img
             v-if="imagePreviewUrl"
             class="image-el-preview"
@@ -264,13 +241,13 @@
         </div>
         <p v-if="!canPersistImage" class="field-hint warn">请先保存要素以取得 id，再上传或文生图。</p>
         <p class="field-hint">写作时在正文中原样输出占位符 <code v-pre>{{img:要素id}}</code>，预览与 Word 会替换为图片。</p>
-      </el-form-item>
+      </a-form-item>
     </template>
 
-    <el-form-item v-else-if="model.kind === 'fixed'" label="固定值">
-      <el-input v-model="model.value" type="textarea" :autosize="{ minRows: 2, maxRows: 12 }" />
-    </el-form-item>
-    <el-form-item v-else-if="model.kind === 'node_ref' && showNodeRef" label="引用要素结果">
+    <a-form-item v-else-if="model.kind === 'fixed'" label="固定值">
+      <a-textarea v-model:value="model.value" :auto-size="{ minRows: 2, maxRows: 12 }" />
+    </a-form-item>
+    <a-form-item v-else-if="model.kind === 'node_ref' && showNodeRef" label="引用要素结果">
       <p class="field-hint">使用所选要素的写作结果（result）；若尚未产出，则按该要素类型解析内容。</p>
       <div
         v-for="(pick, pi) in model.ref_element_picks || []"
@@ -278,30 +255,27 @@
         class="folder-pick-block"
       >
         <p class="pick-title">要素「{{ pick.query }}」有多项匹配，请选择：</p>
-        <el-radio-group v-model="pick.selected_id" class="pick-radio" @change="() => onRefPickSelected(pick)">
-          <el-radio v-for="c in pick.candidates" :key="c.id" :value="c.id">
+        <a-radio-group v-model:value="pick.selected_id" class="pick-radio" @change="() => onRefPickSelected(pick)">
+          <a-radio v-for="c in pick.candidates" :key="c.id" :value="c.id">
             {{ c.label || c.name || c.id }}
-          </el-radio>
-        </el-radio-group>
+          </a-radio>
+        </a-radio-group>
       </div>
-      <el-select
-        v-model="model.ref_key"
-        filterable
-        clearable
-        teleported
-        style="width: 100%"
-        placeholder="选择本任务要素"
-        popper-class="rw-element-config-popper"
-      >
-        <el-option v-for="item in refTargetOptions" :key="item.value" :label="item.label" :value="item.value" />
-      </el-select>
-    </el-form-item>
+      <a-select
+ v-model:value="model.ref_key"
+ allow-clear
+ style="width: 100%"
+ placeholder="选择本任务要素" popup-class-name="rw-element-config-popper"
+ show-search>
+        <a-select-option v-for="item in refTargetOptions" :key="item.value" :value="item.value">{{ item.label }}</a-select-option>
+      </a-select>
+    </a-form-item>
   </div>
 </template>
 
 <script setup>
 import { computed, ref, watch } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage } from "../ui.js";
 
 import { authHeaders, request } from "../api";
 import { kvPairsFromElement } from "../elementUi";
@@ -655,12 +629,12 @@ function onRefPickSelected(pick) {
 .field-hint {
   margin: 0 0 8px;
   font-size: 12px;
-  color: var(--el-text-color-secondary);
+  color: var(--ay-muted);
 }
 .field-hint.warn {
-  color: var(--el-color-warning);
+  color: #d48806;
 }
-.kv-form-item :deep(.el-form-item__content) {
+.kv-form-item :deep(.ant-form-item-control) {
   width: 100%;
 }
 .kv-list {
@@ -670,7 +644,7 @@ function onRefPickSelected(pick) {
   gap: 10px;
 }
 .kv-list-item {
-  border: 1px solid var(--el-border-color-lighter);
+  border: 1px solid var(--ay-line);
   border-radius: 10px;
   background: #fafbfc;
   overflow: hidden;
@@ -681,12 +655,12 @@ function onRefPickSelected(pick) {
   justify-content: space-between;
   padding: 6px 12px;
   background: #f0f2f5;
-  border-bottom: 1px solid var(--el-border-color-extra-light);
+  border-bottom: 1px solid var(--ay-line);
 }
 .kv-list-index {
   font-size: 12px;
   font-weight: 600;
-  color: var(--el-text-color-secondary);
+  color: var(--ay-muted);
 }
 .kv-list-item-body {
   display: grid;
@@ -702,7 +676,7 @@ function onRefPickSelected(pick) {
   gap: 10px;
 }
 .slot-ref-item {
-  border: 1px solid var(--el-border-color-lighter);
+  border: 1px solid var(--ay-line);
   border-radius: 10px;
   background: #fafbfc;
   overflow: hidden;
@@ -713,7 +687,7 @@ function onRefPickSelected(pick) {
   justify-content: space-between;
   padding: 6px 12px;
   background: #f0f2f5;
-  border-bottom: 1px solid var(--el-border-color-extra-light);
+  border-bottom: 1px solid var(--ay-line);
 }
 .slot-ref-body {
   display: grid;
@@ -733,9 +707,9 @@ function onRefPickSelected(pick) {
 }
 .kv-field-label {
   font-size: 12px;
-  color: var(--el-text-color-secondary);
+  color: var(--ay-muted);
 }
-.kv-field-value :deep(.el-textarea__inner) {
+.kv-field-value :deep(.ant-input) {
   font-size: 13px;
   line-height: 1.55;
 }
@@ -748,7 +722,7 @@ function onRefPickSelected(pick) {
   padding: 10px 12px;
   border-radius: 8px;
   background: #f5f7fa;
-  border: 1px solid var(--el-border-color-extra-light);
+  border: 1px solid var(--ay-line);
 }
 .pick-title {
   margin: 0 0 8px;
@@ -772,7 +746,7 @@ function onRefPickSelected(pick) {
   justify-content: space-between;
   gap: 8px;
   padding: 10px 12px;
-  border: 1px solid var(--el-border-color-lighter);
+  border: 1px solid var(--ay-line);
   border-radius: 10px;
   background: #fafbfc;
 }
@@ -803,9 +777,9 @@ function onRefPickSelected(pick) {
   justify-content: center;
   width: 100%;
   padding: 8px 12px;
-  border: 1px dashed var(--el-border-color);
+  border: 1px dashed var(--ay-line);
   border-radius: 8px;
-  color: var(--el-color-primary);
+  color: var(--ay-blue);
   cursor: pointer;
   font-size: 13px;
 }
@@ -824,14 +798,14 @@ function onRefPickSelected(pick) {
   max-width: 240px;
   max-height: 180px;
   border-radius: 8px;
-  border: 1px solid var(--el-border-color-lighter);
+  border: 1px solid var(--ay-line);
   object-fit: contain;
 }
 </style>
 
 <!-- 下拉挂到 body，须高于「配置新要素」弹窗(5200)，否则类型选项被挡住点不到 -->
 <style>
-.rw-element-config-popper.el-popper,
+.rw-element-config-popper.ant-select-dropdown,
 .rw-element-config-popper {
   z-index: 5600 !important;
 }

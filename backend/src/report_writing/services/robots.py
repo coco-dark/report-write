@@ -23,17 +23,22 @@ _ID_SAFE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _schema_ready = False
 
 DEFAULT_CHAT_PROMPT = (
-    "你是智能文档协作助手，一位靠谱、好说话的协作搭档，帮用户写报告、函件、方案、说明等各类文档。"
-    "像真人同事聊天：语气自然、口语化一点，先接住对方意图，再给清晰下一步；"
-    "少用「请」「已」「当前」这类公文腔，也不要一上来甩术语或流程说明。"
-    "未选机器人时用通用能力帮忙；已选机器人时，仍保持这种说话方式，并遵循该机器人的职责与边界。"
-    "不要编造用户没给的真实项目数据或隐私；缺信息时用【占位】标出，并随口问一句。"
+    "# Role\n"
+    "你是智能文档协作助手，一位靠谱、好说话的协作搭档，帮用户写报告、函件、方案、说明等各类文档。\n"
+    "# Task\n"
+    "像真人同事聊天：先接住对方，再给清晰下一步。办事时调用已绑定能力，不要自己编章节正文。\n"
+    "# Rules\n"
+    "少用「请」「已」「当前」这类公文腔，也不要一上来甩术语或流程说明。\n"
+    "默认针对当前焦点文档；用户点名另一份时先切过去再动手。\n"
+    "未选机器人时用通用能力帮忙；已选机器人时，仍保持这种说话方式，并遵循该机器人的职责与边界。\n"
+    "不要编造用户没给的真实项目数据或隐私；缺信息时用【占位】标出，并随口问一句。\n"
+    "# Output\n"
     "结构可以清楚（短段落、列表），但读起来要像人在说话，不要像系统通知。"
 )
 
 # 叠加到任意机器人 chat_prompt 上的语气约束（不覆盖其角色，只约束说话方式）
 CHAT_TONE_HINT = (
-    "\n\n【说话方式】像身边懂行的同事：亲切、简短、有来有回；"
+    "\n\n## Tone\n像身边懂行的同事：亲切、简短、有来有回；"
     "先回应再指路；可用「我帮你」「咱们」「一会儿」；"
     "避免机械复读状态/任务号；需要操作时用一两句说清，并点出下方可点的按钮。"
 )
@@ -560,16 +565,18 @@ def match_blueprints_with_agent(
         )
 
     system = (
-        "你是帮用户挑蓝本的搭档。根据用户需求，从候选蓝本中选出最相关的若干份。\n"
-        "必须优先依据 description（用途说明），其次 title / category / tags。\n"
+        "# Role\n你是帮用户挑蓝本的搭档。\n"
+        "# Task\n根据用户需求，从候选蓝本中选出最相关的若干份。\n"
+        "# Inputs\n用户需求原文 + 候选蓝本 JSON。\n"
+        "# Rules\n必须优先依据 description（用途说明），其次 title / category / tags。\n"
         "例如用户要写「安全预评价报告」，应匹配 description 含「安全预评价」的蓝本。\n"
         "reply 要像真人说话：一两句、口语化，说明为什么推荐；"
         "无论一份还是多份，都请用户点「选用」确认，不要声称已经帮用户订上。\n"
         "不要公文腔，不要罗列字段名。\n"
-        "只返回 JSON 对象，不要 Markdown 代码块：\n"
-        '{"reply":"口语化推荐说明（请用户点选）","ids":["蓝本id按相关度排序"]}\n'
         "若都不合适：ids 必须为空数组，reply 固定为简短一句「没有特别对口的」，"
-        "【禁止】在 reply 中列举、暗示任何候选蓝本的标题或类型（用户界面不会展示未选中的蓝本）。"
+        "禁止在 reply 中列举、暗示任何候选蓝本的标题或类型。\n"
+        "# Output\n只返回 JSON 对象，不要 Markdown 代码块：\n"
+        '{"reply":"口语化推荐说明（请用户点选）","ids":["蓝本id按相关度排序"]}\n'
     )
     user = (
         f"用户需求：{(message or '').strip()[:2000]}\n\n"
@@ -632,11 +639,28 @@ def list_word_styles_for_robot(home: Path, robot_id: str):
     return scoped_word_styles(home, robot_id)
 
 
-def chat(home: Path, body: ChatRequest, *, invoke) -> ChatResponse:
+def chat(
+    home: Path,
+    body: ChatRequest,
+    *,
+    invoke,
+    model=None,
+    chat_model=None,
+    clarify_model=None,
+    stream_model=None,
+) -> ChatResponse:
     """兼容入口：委托有状态编排器。"""
-    from report_writing.chat_orchestrator import handle_chat
+    from report_writing.chat import handle_chat
 
-    return handle_chat(home, body, invoke=invoke)
+    return handle_chat(
+        home,
+        body,
+        invoke=invoke,
+        model=model,
+        chat_model=chat_model,
+        clarify_model=clarify_model,
+        stream_model=stream_model,
+    )
 
 
 def generate_prompts(body: GenerateRobotPromptsRequest, *, invoke) -> GenerateRobotPromptsResponse:
@@ -651,13 +675,21 @@ def generate_prompts(body: GenerateRobotPromptsRequest, *, invoke) -> GenerateRo
     description = (body.description or "").strip() or "（无）"
     want = ["chat", "study", "write"] if kind == "all" else [kind]
     system = (
-        "你是提示词工程师。根据用户对书写机器人的需求说明，生成可直接作为系统提示词的中文文本。\n"
-        "要求：具体可执行；面向报告书写场景；不要输出 Markdown 代码块或解释。\n"
-        "只返回 JSON 对象，字段仅包含需要的键：chat_prompt / study_prompt / write_prompt。\n"
-        "字段含义：\n"
-        "- chat_prompt：对话人格与边界；须写明「像真人同事、口语化、先接住再指路」，以及如何引用蓝本/知识库、禁止编造项目事实\n"
-        "- study_prompt：分析样板要点时的系统指令（如何精确归纳写法要点、表格列/固定项与可变项、检索词；禁止固化项目专名事实）\n"
-        "- write_prompt：写章节时的系统指令（如何组织 HTML 正文、表格版式）；须写明正文禁止（来源：…）/资料缺口/【待补】，证据用 evidence_ids，缺口只进 uncovered_points\n"
+        "# Role\n你是提示词工程师。\n"
+        "# Task\n根据用户对书写机器人的需求说明，生成可直接作为系统提示词的中文文本。\n"
+        "# Constraints\n具体可执行；面向报告书写场景。生成的每段提示词必须使用标准结构："
+        "用 Markdown 一级标题写出 Role / Task / Inputs / Rules / Output（可按职责增补 Strategy、Constraints）。\n"
+        "不要输出 Markdown 代码块或解释。\n"
+        "# Fields\n"
+        "- chat_prompt：对话人格与边界；须写明「像真人同事、口语化、先接住再指路」，以及如何引用蓝本/知识库、禁止编造项目事实；"
+        "禁止在 chat_prompt 中枚举 Tool/API 名称或工具对照表（平台已绑定 LangChain Tool description）\n"
+        "- study_prompt：分析样板。须写明：解剖组成部分→格式→怎么写→要点；"
+        "五种写作策略（source_only/template_fill/hybrid/auto_generate/fixed）；"
+        "points 一条对应一个组成块；describes 须 1. 2. 分点；reference_text 保留原文；禁止生成补充提示词。\n"
+        "- write_prompt：写章节。按 writing_strategy 成文；按 points 顺序组稿、按 describes 约束格式；"
+        "不要扩提纲、不要把要点句贴进正文；aux_prompt 仅用户手填时作为硬约束；"
+        "正文禁止（来源：…）/资料缺口/【待补】。\n"
+        "# Output\n只返回 JSON 对象，字段仅包含需要的键：chat_prompt / study_prompt / write_prompt。\n"
     )
     user = (
         f"机器人名称：{name}\n"
@@ -679,6 +711,11 @@ def generate_prompts(body: GenerateRobotPromptsRequest, *, invoke) -> GenerateRo
         result.chat_prompt = raw[:4000]
     elif kind != "all" and not getattr(result, f"{kind}_prompt"):
         setattr(result, f"{kind}_prompt", raw[:4000])
+    if result.chat_prompt:
+        from report_writing.chat.chat_prompt_lint import sanitize_chat_prompt
+
+        cleaned, _removed = sanitize_chat_prompt(result.chat_prompt)
+        result.chat_prompt = cleaned
     return result
 
 

@@ -142,7 +142,8 @@ def control_dialogue_turns() -> int:
     )
 
 
-def intent_max_tokens() -> int:
+def clarify_max_tokens() -> int:
+    """澄清小模型 max_tokens。yaml 键仍是 `intent.max_tokens`（配置契约）。"""
     return setting("intent", "max_tokens", default=768, env="REPORT_WRITING_INTENT_MAX_TOKENS", coerce=int)
 
 

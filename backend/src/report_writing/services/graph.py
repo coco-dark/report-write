@@ -13,7 +13,17 @@ from report_writing.agents.search import run_search
 from report_writing.agents.study import run_study
 from report_writing.agents.write import run_write
 from report_writing.services.corpus import Corpus, ReportTemplate
-from report_writing.domain.models import ChapterState, ChapterStatus, CheckAction, SampleChapter, SampleDocument, StudyRecord, WritingBrief
+from report_writing.domain.models import (
+    MAX_REVISIONS,
+    WRITE_SCORE_PASS,
+    ChapterState,
+    ChapterStatus,
+    CheckAction,
+    SampleChapter,
+    SampleDocument,
+    StudyRecord,
+    WritingBrief,
+)
 from report_writing.services.store import BriefCache
 
 
@@ -86,9 +96,11 @@ def build_pipeline(
             return {"route": "write"}
         chapter = ChapterState.from_dict(chapters[index])
         requirement = WritingBrief.from_dict(state["brief"]).chapter(chapter.key)
-        if not requirement.points:
+        from report_writing.domain.point_items_sync import chapter_has_writing_config
+
+        if not chapter_has_writing_config(requirement):
             chapter.status = ChapterStatus.NEEDS_HUMAN
-            chapter.human_note = "章节要点为空，未进入写作"
+            chapter.human_note = "本章没有配置写作要点或章节说明，未进入写作"
             chapters[index] = chapter.to_dict()
             emit("search", "skipped", chapter.key, chapter.title, {"note": chapter.human_note})
             return {"chapters": chapters, "route": "advance"}
@@ -102,15 +114,44 @@ def build_pipeline(
         chapter = ChapterState.from_dict(chapters[index])
         brief = WritingBrief.from_dict(state["brief"])
         requirement = brief.chapter(chapter.key)
+        from report_writing.agents.check import revision_feedback_from_checks
+
+        kept_defects = revision_feedback_from_checks(chapter.checks)
         chapter.draft = None
-        chapter.checks = []
+        chapter.checks = (
+            [c for c in (chapter.checks or []) if c.action != CheckAction.ACCEPT][-1:]
+            if kept_defects
+            else []
+        )
         chapter.revision_count = 0
         chapter.official_text = ""
         emit("search", "running", chapter.key, chapter.title)
         chapter.evidence = run_search(corpus, requirement, model)
         adopted = chapter.adopted_evidence()
+        from report_writing.domain.chapter_compose import (
+            COMPOSE_AUTO_GENERATE,
+            COMPOSE_SOURCE_ONLY,
+            MATERIALS_HANDOFF_NOTE,
+            compose_mode,
+        )
+
+        if not adopted and compose_mode(requirement) == COMPOSE_SOURCE_ONLY:
+            chapter.status = ChapterStatus.NEEDS_HUMAN
+            chapter.human_note = MATERIALS_HANDOFF_NOTE
+            emit(
+                "search",
+                "skipped",
+                chapter.key,
+                chapter.title,
+                {"note": chapter.human_note, "handoff": True, "adopted": 0},
+            )
+            chapters[index] = chapter.to_dict()
+            return {"chapters": chapters, "route": "advance"}
         fallback = not adopted
-        note = "" if adopted else "知识库未检索到可采纳的证据，将按章节要点由模型撰写（具体数据须后续核对）"
+        if not adopted and compose_mode(requirement) == COMPOSE_AUTO_GENERATE:
+            note = "不依赖资料，按要点自动成文"
+        else:
+            note = "" if adopted else "知识库未检索到可采纳的证据，将据实写相关部分，主题无关转人工"
         emit(
             "search",
             "done",
@@ -135,21 +176,34 @@ def build_pipeline(
         chapter = ChapterState.from_dict(chapters[index])
         brief = WritingBrief.from_dict(state["brief"])
         requirement = brief.chapter(chapter.key)
-        comments = []
-        if chapter.checks and chapter.checks[-1].action == CheckAction.REVISE:
-            comments = chapter.checks[-1].comments
+        from report_writing.agents.check import revision_feedback_from_checks
+
+        comments = revision_feedback_from_checks(chapter.checks)
         chapter.status = ChapterStatus.WRITING
-        emit("write", "running", chapter.key, chapter.title)
+        write_payload: dict[str, Any] = {
+            "note": (
+                f"按上一轮检查 {len(comments)} 条缺陷改写"
+                if comments
+                else "撰写本章"
+            ),
+        }
+        if comments:
+            write_payload["check_defects"] = [
+                {"index": int(c.index), "message": (c.message or "")[:160]}
+                for c in comments[:8]
+            ]
+        emit("write", "running", chapter.key, chapter.title, write_payload)
         knowledge_fallback = not chapter.adopted_evidence()
         chapter.draft = run_write(
             requirement,
             brief.paragraph_format,
             chapter.evidence,
             comments=comments,
-            previous=chapter.draft,
+            previous=chapter.draft if comments else None,
             prior_summary=_prior_summary(chapters, requirement.depends_on),
             model=model,
             knowledge_fallback=knowledge_fallback,
+            doc_category=str(getattr(brief, "category", "") or ""),
         )
         emit(
             "write",
@@ -178,17 +232,6 @@ def build_pipeline(
             knowledge_fallback=not chapter.adopted_evidence(),
         )
         chapter.checks.append(result)
-        emit(
-            "check",
-            "done",
-            chapter.key,
-            chapter.title,
-            {
-                "action": result.action.value,
-                "reason": result.reason,
-                "comments": [item.to_dict() for item in result.comments],
-            },
-        )
         if result.action == CheckAction.REVISE:
             chapter.revision_count += 1
             chapter.status = ChapterStatus.WRITING
@@ -206,6 +249,22 @@ def build_pipeline(
                 chapter.status = ChapterStatus.NEEDS_HUMAN
                 chapter.human_note = result.reason or "没有可保存的正文"
                 route = "finish" if state.get("mode") == "revise" else "advance"
+        emit(
+            "check",
+            "done",
+            chapter.key,
+            chapter.title,
+            {
+                "action": result.action.value,
+                "reason": result.reason,
+                "score": int(getattr(result, "score", 0) or 0),
+                "below_threshold": bool(getattr(result, "below_threshold", False)),
+                "revision_count": int(chapter.revision_count or 0),
+                "max_revisions": int(MAX_REVISIONS),
+                "write_score_pass": int(WRITE_SCORE_PASS),
+                "comments": [item.to_dict() for item in result.comments],
+            },
+        )
         chapters[index] = chapter.to_dict()
         return {"chapters": chapters, "route": route}
 

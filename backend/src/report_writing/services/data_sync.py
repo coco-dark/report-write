@@ -34,12 +34,14 @@ def sync_all_users_local_data(data_home: Path) -> dict[str, dict[str, int]]:
     from report_writing.services.users import (
         reset_current_user_id,
         set_current_user_id,
+        sync_users_from_disk,
         user_workspace,
         users_root,
         _load_index,
     )
 
     home = Path(data_home)
+    sync_users_from_disk(home)
     index = _load_index(users_root(home))
     user_ids = sorted(set(index.values()) | {"default"})
     results: dict[str, dict[str, int]] = {}

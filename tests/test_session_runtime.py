@@ -7,6 +7,10 @@ from pathlib import Path
 from report_writing.chat.session_runtime import (
     WORKFLOW_BLUEPRINT,
     WORKFLOW_WRITING,
+    arm_study_kick_this_turn,
+    attach_turn_study_kick,
+    clear_leftover_study_triggers,
+    disarm_study_kick_this_turn,
     migrate_legacy_freeform,
     reconcile_chat_session,
     runtime_public_view,
@@ -49,7 +53,9 @@ def test_reconcile_blueprint_step_from_task(tmp_path: Path):
         freeform={"blueprint_wizard": {"blueprint_id": bid, "step": "done"}},
     )
     reconcile_chat_session(tmp_path, session)
-    assert workflow_get(session, WORKFLOW_BLUEPRINT)["step"] == "outline_confirm"
+    # 历史 step=done 归一到 study；未确认目录时任务侧仍可再拉回 outline_confirm
+    step = workflow_get(session, WORKFLOW_BLUEPRINT)["step"]
+    assert step in {"outline_confirm", "study"}
 
 
 def test_reconcile_clears_wizard_on_freeform_path(tmp_path: Path):
@@ -160,3 +166,124 @@ def test_derive_writing_workflow_in_runtime(tmp_path: Path):
     assert wf["active"] is True
     assert wf["pace"] == "batch"
     assert wf["chapter_keys"] == ["c1"]
+
+
+def test_public_runtime_strips_study_kick_done_event_keeps_it():
+    session = ChatSession(
+        id="cs_study_kick",
+        freeform={
+            "blueprint_wizard": {
+                "blueprint_id": "bp_k",
+                "working_task_id": "w_k",
+                "step": "study",
+                "study_method": "sample",
+                "trigger_chapter_study": ["c1.1"],
+                "chapter_study_keys": ["c1.1"],
+            }
+        },
+    )
+    view = runtime_public_view(session)
+    public = dict(view.get("blueprint_wizard") or {})
+    assert "trigger_chapter_study" not in public
+    assert "chapter_study_keys" not in public
+    live = dict((session.freeform or {}).get("blueprint_wizard") or {})
+    disarm_study_kick_this_turn()
+    leftover = attach_turn_study_kick(public, live)
+    assert "trigger_chapter_study" not in leftover
+    # ContextVar 丢失时仍认 wizard 上的本轮标记
+    live_armed = {**live, "_arm_study_kick": True}
+    via_flag = attach_turn_study_kick(public, live_armed)
+    assert via_flag["trigger_chapter_study"] == ["c1.1"]
+    arm_study_kick_this_turn()
+    done = attach_turn_study_kick(public, live)
+    assert done["trigger_chapter_study"] == ["c1.1"]
+    assert done["chapter_study_keys"] == ["c1.1"]
+    assert done["working_task_id"] == "w_k"
+    assert done["step"] == "study"
+    disarm_study_kick_this_turn()
+
+
+def test_clear_leftover_study_triggers_drops_arm_flag():
+    session = ChatSession(
+        id="cs_clear_arm",
+        freeform={
+            "blueprint_wizard": {
+                "blueprint_id": "bp_k",
+                "step": "study",
+                "trigger_chapter_study": ["c1.1"],
+                "chapter_study_keys": ["c1.1"],
+                "_arm_study_kick": True,
+            }
+        },
+    )
+    clear_leftover_study_triggers(session)
+    wiz = dict((session.freeform or {}).get("blueprint_wizard") or {})
+    assert "trigger_chapter_study" not in wiz
+    assert "chapter_study_keys" not in wiz
+    assert "_arm_study_kick" not in wiz
+    public = dict(runtime_public_view(session).get("blueprint_wizard") or {})
+    leftover = attach_turn_study_kick(public, wiz)
+    assert "trigger_chapter_study" not in leftover
+
+
+def test_clear_leftover_also_strips_workflow_and_migrate_does_not_revive():
+    """关联要素等非分析回合：workflow 残留 trigger 不得经 migrate 复活后再贴进 SSE done。"""
+    session = ChatSession(
+        id="cs_clear_wf",
+        freeform={
+            "blueprint_wizard": {
+                "blueprint_id": "bp_k",
+                "step": "study",
+                "trigger_chapter_study": ["c1.3"],
+                "chapter_study_keys": ["c1.3"],
+                "_arm_study_kick": True,
+            },
+            "runtime": {
+                "version": 1,
+                "workflows": {
+                    WORKFLOW_BLUEPRINT: {
+                        "blueprint_id": "bp_k",
+                        "step": "study",
+                        "trigger_chapter_study": ["c1.3"],
+                        "chapter_study_keys": ["c1.3"],
+                        "_arm_study_kick": True,
+                    }
+                },
+            },
+        },
+    )
+    clear_leftover_study_triggers(session)
+    wiz = dict((session.freeform or {}).get("blueprint_wizard") or {})
+    wf = workflow_get(session, WORKFLOW_BLUEPRINT)
+    assert "trigger_chapter_study" not in wiz
+    assert "_arm_study_kick" not in wiz
+    assert "trigger_chapter_study" not in wf
+    assert "_arm_study_kick" not in wf
+
+    # 模拟 workflow 里仍有旧残留、freeform 已清：migrate 不得把 trigger 写回 freeform
+    session.freeform = {
+        **(session.freeform or {}),
+        "blueprint_wizard": {
+            "blueprint_id": "bp_k",
+            "step": "study",
+        },
+        "runtime": {
+            "version": 1,
+            "workflows": {
+                WORKFLOW_BLUEPRINT: {
+                    "blueprint_id": "bp_k",
+                    "step": "study",
+                    "trigger_chapter_study": ["c1.3"],
+                    "_arm_study_kick": True,
+                }
+            },
+        },
+    }
+    migrate_legacy_freeform(session)
+    merged = dict((session.freeform or {}).get("blueprint_wizard") or {})
+    assert "trigger_chapter_study" not in merged
+    assert "_arm_study_kick" not in merged
+    disarm_study_kick_this_turn()
+    public = dict(runtime_public_view(session).get("blueprint_wizard") or {})
+    leftover = attach_turn_study_kick(public, merged)
+    assert "trigger_chapter_study" not in leftover

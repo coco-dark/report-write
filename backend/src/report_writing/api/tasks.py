@@ -26,6 +26,7 @@ from report_writing.api.deps import (
     sse_response,
     task_dir,
     task_root,
+    writing_model,
 )
 from report_writing.controller import (
     _best_chapter_excerpt,
@@ -78,6 +79,7 @@ from report_writing.domain.models import (
     SpecMetaRequest,
     StudiedTemplate,
     StudyRecord,
+    GenerateBoilerplateRequest,
     UpdatePointsRequest,
     UseStudyRequest,
     WritingTask,
@@ -109,6 +111,7 @@ def create_task(body: CreateTaskRequest) -> WritingTask:
         task_root() / "cache",
         material_type,
         body.force_study,
+        model=writing_model(),
     )
 
 
@@ -197,6 +200,7 @@ def stream_task(body: CreateTaskRequest) -> StreamingResponse:
             material_type,
             body.force_study,
             emit,
+            model=writing_model(),
         )
         emit({"type": "task", "task": task.to_dict()})
 
@@ -231,6 +235,7 @@ async def analyze_stream(
             material_type,
             learn_again,
             emit,
+            model=writing_model(),
         )
         emit({"type": "task", "task": task.to_dict()})
 
@@ -272,6 +277,7 @@ async def outline_generate_stream(
                     task_dir(task_id),
                     use_llm=bool(use_llm),
                     on_event=emit,
+                    model=writing_model(),
                 )
             else:
                 task = generate_outline(
@@ -281,6 +287,7 @@ async def outline_generate_stream(
                     version=version,
                     use_llm=bool(use_llm),
                     on_event=emit,
+                    model=writing_model(),
                 )
             emit({"type": "task", "task": task.to_dict()})
         except Exception as error:
@@ -411,8 +418,13 @@ def post_parse_points(task_id: str, body: ParsePointsRequest) -> dict:
             )
             if matched and excerpt.strip():
                 source = excerpt
-        points, keywords, describes, content_blocks, reference_text, structure_only, _slots = parse_points_and_keywords(
-            source, title=body.title, sequence=body.sequence
+        points, keywords, describes, content_blocks, reference_text, structure_only, _slots, presence, compose = parse_points_and_keywords(
+            source,
+            title=body.title,
+            sequence=body.sequence,
+            model=writing_model(),
+            compose=str(getattr(body, "compose", "") or ""),
+            presence=str(getattr(body, "presence", "") or ""),
         )
         # 参考正文固定为切章结果（或原文），防止模型串到同名其它章
         if (body.sequence or "").strip():
@@ -428,12 +440,14 @@ def post_parse_points(task_id: str, body: ParsePointsRequest) -> dict:
         "content_blocks": content_blocks,
         "reference_text": reference_text,
         "structure_only": structure_only,
+        "presence": presence,
+        "compose": compose,
     }
 
 
 @router.post("/api/writing/tasks/{task_id}/outline/meta-from-points")
 def post_meta_from_points(task_id: str, body: MetaFromPointsRequest) -> dict:
-    """根据 point_items 生成 describes / aux_prompt（文档窗编辑要点后同步）。"""
+    """根据要点/原文生成章节说明；补充提示词不生成。"""
     task = load_task(task_id)
     chapter_key = str(body.chapter_key or "").strip()
     title = str(body.title or "").strip()
@@ -458,13 +472,28 @@ def post_meta_from_points(task_id: str, body: MetaFromPointsRequest) -> dict:
             items = list(getattr(node, "point_items", None) or [])
     from report_writing.domain.chapter_meta_from_points import derive_chapter_meta_from_points
 
-    category = str(getattr(task, "category", "") or "报告").strip() or "报告"
+    from report_writing.domain.doc_genre import category_from_task
+
+    category = category_from_task(task)
+    compose = str(body.compose or "").strip()
+    presence = str(body.presence or "").strip()
+    if chapter_key and task.outline:
+        hit = next((n for n in task.outline.chapters if n.key == chapter_key), None)
+        if hit is not None:
+            if not compose:
+                compose = str(getattr(hit, "compose", "") or "")
+            if not presence:
+                presence = str(getattr(hit, "presence", "") or "")
     describes, aux_prompt = derive_chapter_meta_from_points(
         title=title or chapter_key or "本章",
         sequence=sequence,
         category=category,
         parent_title=parent_title,
         point_items=items,
+        model=writing_model(),
+        compose=compose,
+        presence=presence,
+        reference_text=str(getattr(body, "reference_text", "") or ""),
     )
     return {"describes": describes, "aux_prompt": aux_prompt}
 
@@ -488,7 +517,9 @@ def post_element_draft_from_point(task_id: str, body: ElementDraftFromPointReque
                 describes = str(getattr(node, "describes", "") or "").strip()
     from report_writing.domain.element_draft_from_point import derive_element_draft_from_point
 
-    category = str(getattr(task, "category", "") or "报告").strip() or "报告"
+    from report_writing.domain.doc_genre import category_from_task
+
+    category = category_from_task(task)
     draft, from_llm = derive_element_draft_from_point(
         chapter_title=title or chapter_key or "本章",
         sequence=sequence,
@@ -497,6 +528,7 @@ def post_element_draft_from_point(task_id: str, body: ElementDraftFromPointReque
         point_text=str(body.point_text or "").strip(),
         slot=str(body.slot or "").strip(),
         task_elements=list(task.element_nodes or []),
+        model=writing_model(),
     )
     return {"draft": draft, "from_llm": from_llm}
 
@@ -533,6 +565,7 @@ def study_from_outline_stream(task_id: str, force_study: bool = False) -> Stream
                 task_root() / "cache",
                 force_study=force_study,
                 on_event=emit,
+                model=writing_model(),
             )
         except RuntimeError as error:
             emit({"type": "error", "detail": str(error)})
@@ -570,7 +603,9 @@ def stream_write(task_id: str) -> StreamingResponse:
 
     def worker(emit) -> None:
         try:
-            updated = write_from_study(task_dir(task_id), dataset, emit)
+            updated = write_from_study(
+                task_dir(task_id), dataset, emit, model=writing_model()
+            )
         except RuntimeError as error:
             emit({"type": "error", "detail": str(error)})
             return
@@ -591,6 +626,10 @@ def get_draft_preview(
     task_id: str,
     written_only: bool = Query(True, description="仅包含已有正文的章节"),
     confirmed_only: bool = Query(False, description="仅已确认章节（默认含草稿）"),
+    writing_task_id: str = Query(
+        "",
+        description="请求库蓝本 bp* 时指定本会话绑定的写作副本 w*",
+    ),
 ) -> dict:
     """全文预览：按大纲顺序拼接本章写作正文为 HTML；按 task_id 隔离，不串其它文档。
 
@@ -602,14 +641,14 @@ def get_draft_preview(
     )
     from report_writing.services.writing_task_catalog import (
         is_writing_task_id,
-        latest_writing_task_id_for_blueprint,
         load_writing_task,
+        resolve_writing_task_id_for_blueprint_view,
     )
 
     tid = (task_id or "").strip()
     preview_task = None
     if tid and not is_writing_task_id(tid):
-        wid = latest_writing_task_id_for_blueprint(tid)
+        wid = resolve_writing_task_id_for_blueprint_view(tid, writing_task_id)
         if wid:
             preview_task = load_writing_task(wid)
             if preview_task is None:
@@ -619,6 +658,7 @@ def get_draft_preview(
                     preview_task = None
     if preview_task is None:
         preview_task = load_task(tid)
+    # 按章补正文：其它章已有稿时，刚写完、只在章节表里的章仍要进预览
     preview_task = _hydrate_chapters_from_db(preview_task)
     # 蓝本大纲顺序 + clone 正文：若预览落在 clone 且大纲为子集，合并蓝本大纲结构
     if (
@@ -655,21 +695,15 @@ def get_draft_preview(
 def get_doc_outline(
     task_id: str,
     fresh: bool = Query(False, description="为 true 时跳过缓存，直读落库真值"),
+    writing_task_id: str = Query(
+        "",
+        description="请求库蓝本 bp* 时指定本会话绑定的写作副本 w*，避免误用全局最近一次",
+    ),
 ) -> dict:
-    """文档窗轻量目录：不含 steps/写作正文等大字段；命中内存/Redis 缓存则不再读整包 MySQL。"""
-    from report_writing.services.doc_outline_cache import (
-        get_doc_outline_cached,
-        set_doc_outline_cached,
-    )
-    from report_writing.services.users import current_user_id, owns_user_resource
+    """文档窗轻量目录：不含 steps/写作正文等大字段。一律直读落库，避免目录/插槽与写作不同步。"""
+    from report_writing.services.users import current_user_id
 
-    if not fresh:
-        cached = get_doc_outline_cached(task_id)
-        if isinstance(cached, dict) and cached.get("id"):
-            owner = str(cached.get("_owner_user_id") or "")
-            if owns_user_resource(current_user_id(), owner):
-                out = {k: v for k, v in cached.items() if not str(k).startswith("_")}
-                return out
+    _ = fresh  # 保留查询参数兼容；不再走内存/Redis 目录缓存
 
     task = load_task(task_id)
     task = maybe_restore_outline_from_source_blueprint(task_dir(task_id), task)
@@ -677,8 +711,8 @@ def get_doc_outline(
     from report_writing.domain.models import ChapterStatus
     from report_writing.services.writing_task_catalog import (
         is_writing_task_id,
-        latest_writing_task_id_for_blueprint,
         load_writing_task,
+        resolve_writing_task_id_for_blueprint_view,
     )
 
     state_by_key = {
@@ -686,7 +720,7 @@ def get_doc_outline(
     }
     writing = None
     if not is_writing_task_id(task_id):
-        wid = latest_writing_task_id_for_blueprint(task_id)
+        wid = resolve_writing_task_id_for_blueprint_view(task_id, writing_task_id)
         writing = load_writing_task(wid) if wid else None
         if writing is None and wid:
             try:
@@ -720,15 +754,74 @@ def get_doc_outline(
                 }
                 if next_st in written or (next_st and prev_st not in written):
                     state_by_key[key] = item
+    writing_outline_by_key: dict = {}
+    if writing is not None and getattr(writing, "outline", None) is not None:
+        writing_outline_by_key = {
+            str(getattr(n, "key", "") or "").strip(): n
+            for n in list(writing.outline.chapters or [])
+            if str(getattr(n, "key", "") or "").strip()
+        }
+    from report_writing.domain.elements import union_element_ids
+
     elements_by_id: dict = {}
-    for item in task.element_nodes or []:
-        eid = str(getattr(item, "id", "") or "").strip()
-        if eid:
-            elements_by_id[eid] = item
+    for src in (task, writing):
+        if src is None:
+            continue
+        for item in list(getattr(src, "element_nodes", None) or []):
+            eid = str(getattr(item, "id", "") or "").strip()
+            if eid:
+                elements_by_id[eid] = item
     from report_writing.domain.point_items_sync import chapter_point_items_from_payload
+
+    def _content_score(n) -> tuple[int, int, int, int]:
+        if n is None:
+            return (0, 0, 0, 0)
+        pts = sum(1 for p in list(getattr(n, "points", None) or []) if str(p or "").strip())
+        links = sum(
+            1
+            for row in list(getattr(n, "point_items", None) or [])
+            if isinstance(row, dict) and str(row.get("element_id") or "").strip()
+        )
+        desc = 1 if str(getattr(n, "describes", "") or "").strip() else 0
+        eids = len(union_element_ids(getattr(n, "element_ids", None)))
+        return (pts, links, desc, eids)
 
     chapters: list[dict] = []
     for node in list((task.outline.chapters if task.outline else None) or []):
+        bp_node = node
+        wnode = writing_outline_by_key.get(str(node.key or "").strip())
+        # 分析/配置落在写作副本时：目录接口若打到库蓝本，仍返回副本上的要点与写作策略
+        overlay_items = None
+        if wnode is not None:
+            w_items = list(getattr(wnode, "point_items", None) or [])
+            b_items = list(getattr(bp_node, "point_items", None) or [])
+            w_links = sum(
+                1
+                for row in w_items
+                if isinstance(row, dict) and str(row.get("element_id") or "").strip()
+            )
+            b_links = sum(
+                1
+                for row in b_items
+                if isinstance(row, dict) and str(row.get("element_id") or "").strip()
+            )
+            w_eids = len(union_element_ids(getattr(wnode, "element_ids", None)))
+            b_eids = len(union_element_ids(getattr(bp_node, "element_ids", None)))
+            if b_links > w_links:
+                overlay_items = b_items
+            # 写作副本存在时配置以副本为准；勿因要点行数少就回退蓝本（仅配要素时常见）
+            if (
+                _content_score(wnode) >= _content_score(bp_node)
+                or w_eids >= b_eids
+                or w_links >= b_links
+                or bool(w_items)
+            ):
+                node = wnode
+        merged_element_ids = union_element_ids(
+            getattr(bp_node, "element_ids", None),
+            getattr(wnode, "element_ids", None) if wnode is not None else None,
+            getattr(node, "element_ids", None),
+        )
         state = state_by_key.get(str(node.key or "").strip())
         status = ""
         has_draft = False
@@ -766,8 +859,13 @@ def get_doc_outline(
                 "point_items": chapter_point_items_from_payload(
                     {
                         "points": list(node.points or []),
-                        "point_items": list(getattr(node, "point_items", None) or []),
-                        "element_ids": list(getattr(node, "element_ids", None) or []),
+                        "point_items": list(
+                            overlay_items
+                            if overlay_items is not None
+                            else getattr(node, "point_items", None)
+                            or []
+                        ),
+                        "element_ids": merged_element_ids,
                     },
                     elements_by_id=elements_by_id,
                 ),
@@ -777,7 +875,9 @@ def get_doc_outline(
                 "reference_text": getattr(node, "reference_text", "") or "",
                 "structure_only": bool(getattr(node, "structure_only", False)),
                 "fixed_output": bool(getattr(node, "fixed_output", False)),
-                "element_ids": list(getattr(node, "element_ids", None) or []),
+                "presence": str(getattr(node, "presence", "") or "always"),
+                "compose": str(getattr(node, "compose", "") or "hybrid"),
+                "element_ids": merged_element_ids,
                 "material_files": list(getattr(node, "material_files", None) or []),
                 "knowledge_folder_ids": list(getattr(node, "knowledge_folder_ids", None) or []),
                 "status": status,
@@ -785,7 +885,18 @@ def get_doc_outline(
             }
         )
     elements = []
-    for item in task.element_nodes or []:
+    element_src = []
+    seen_el: set[str] = set()
+    for src in (writing, task):
+        if src is None:
+            continue
+        for item in list(getattr(src, "element_nodes", None) or []):
+            eid = str(getattr(item, "id", "") or "").strip()
+            if not eid or eid in seen_el:
+                continue
+            seen_el.add(eid)
+            element_src.append(item)
+    for item in element_src:
         if hasattr(item, "model_dump"):
             elements.append(item.model_dump())
         elif hasattr(item, "dict"):
@@ -821,14 +932,13 @@ def get_doc_outline(
         "materials_pack_id": materials_pack_id,
         "_owner_user_id": (getattr(task, "user_id", "") or "").strip() or current_user_id(),
     }
-    set_doc_outline_cached(task_id, payload)
     return {k: v for k, v in payload.items() if not str(k).startswith("_")}
 
 
 @router.get("/api/writing/tasks/{task_id}/chapter-picker")
 def get_chapter_picker(task_id: str) -> dict:
     """对话勾选树：按蓝本/任务返回可写章节扁平列表（前端组树）。"""
-    from report_writing.chat_orchestrator import (
+    from report_writing.chat import (
         _chapter_picker_payload,
         _outline_chapter_picker_items,
         partition_blueprint_chapters,
@@ -861,6 +971,21 @@ def put_points(task_id: str, chapter_key: str, body: UpdatePointsRequest) -> Wri
 def put_elements(task_id: str, body: SaveElementsRequest) -> WritingTask:
     load_task(task_id)
     return save_element_nodes(task_dir(task_id), body.elements)
+
+
+@router.delete("/api/writing/tasks/{task_id}/chapters/{chapter_key}/elements/{element_id}")
+def delete_chapter_element_link(task_id: str, chapter_key: str, element_id: str) -> dict:
+    """取消某章与要素的关联（含要点级）；不删除要素节点。空 element_ids 的目录 PUT 不再当取消关联。"""
+    from report_writing.chat.writing import _apply_dissociate_chapter_element
+    from report_writing.services.store import TaskStore
+
+    task = load_task(task_id)
+    try:
+        label = _apply_dissociate_chapter_element(task, chapter_key, element_id)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    TaskStore(task_dir(task_id)).save(task)
+    return {"ok": True, "chapter_label": label, "chapter_key": chapter_key, "element_id": element_id}
 
 
 
@@ -946,6 +1071,7 @@ async def stream_extract_outline(
                     task_dir(task_id),
                     use_llm=True,
                     on_event=emit,
+                    model=writing_model(),
                 )
             elif use_sample_flag:
                 updated = extract_outline_from_document(
@@ -1023,6 +1149,7 @@ def stream_extract_outline_text(task_id: str, body: AutoStudyTextRequest) -> Str
                     task_dir(task_id),
                     use_llm=bool(body.use_llm),
                     on_event=emit,
+                    model=writing_model(),
                 )
                 emit({"type": "task", "task": updated.to_dict()})
                 return
@@ -1107,6 +1234,7 @@ async def stream_study_points(
                 selected,
                 template_path=stored,
                 on_event=emit,
+                model=writing_model(),
             )
         except RuntimeError as error:
             emit({"type": "error", "detail": str(error)})
@@ -1135,6 +1263,7 @@ def stream_study_points_text(task_id: str, body: AutoStudyTextRequest) -> Stream
                 selected,
                 source_text=source,
                 on_event=emit,
+                model=writing_model(),
             )
         except RuntimeError as error:
             emit({"type": "error", "detail": str(error)})
@@ -1162,6 +1291,7 @@ async def post_auto_study(
             task_dir(task_id),
             selected,
             template_path=stored,
+            model=writing_model(),
         )
     except RuntimeError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -1204,6 +1334,7 @@ def post_run_chapters(task_id: str, body: RunChaptersRequest) -> WritingTask:
             include_children=body.include_children,
             chapter_keys=body.chapter_keys or None,
             robot_id=body.robot_id or "",
+            model=writing_model(),
         )
     except RuntimeError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -1223,6 +1354,7 @@ def stream_run_chapters(task_id: str, body: RunChaptersRequest) -> StreamingResp
                 chapter_keys=body.chapter_keys or None,
                 robot_id=body.robot_id or "",
                 on_event=emit,
+                model=writing_model(),
             )
         except RuntimeError as error:
             emit({"type": "error", "detail": str(error)})
@@ -1237,7 +1369,9 @@ def stream_run_chapters(task_id: str, body: RunChaptersRequest) -> StreamingResp
 def post_rerun(task_id: str) -> WritingTask:
     task = load_task(task_id)
     dataset = Path(task.dataset_dir) if task.dataset_dir else None
-    return rerun_chapter(task_dir(task_id), Path(task.template_path), dataset)
+    return rerun_chapter(
+        task_dir(task_id), Path(task.template_path), dataset, model=writing_model()
+    )
 
 
 
@@ -1247,11 +1381,40 @@ def stream_rerun(task_id: str) -> StreamingResponse:
     dataset = Path(task.dataset_dir) if task.dataset_dir else None
 
     def worker(emit) -> None:
-        updated = rerun_chapter(task_dir(task_id), Path(task.template_path), dataset, emit)
+        updated = rerun_chapter(
+            task_dir(task_id), Path(task.template_path), dataset, emit, model=writing_model()
+        )
         emit({"type": "task", "task": updated.to_dict()})
 
     return sse_response(worker)
 
+
+
+@router.post("/api/writing/tasks/{task_id}/chapters/{chapter_key}/boilerplate")
+def post_chapter_boilerplate(
+    task_id: str, chapter_key: str, body: GenerateBoilerplateRequest | None = None
+) -> dict:
+    from report_writing.chat.actions import apply_chapter_boilerplate
+    from report_writing.services.doc_outline_cache import invalidate_doc_outline_cache
+
+    req = body or GenerateBoilerplateRequest()
+    task = load_task(task_id)
+    store = TaskStore(task_dir(task_id))
+    try:
+        result = apply_chapter_boilerplate(
+            task,
+            chapter_key,
+            req.source_text,
+            model=writing_model(),
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    store.save(task)
+    invalidate_doc_outline_cache(task_id)
+    source_bp = str(getattr(task, "source_blueprint_id", "") or "").strip()
+    if source_bp:
+        invalidate_doc_outline_cache(source_bp)
+    return result
 
 
 @router.post("/api/writing/tasks/{task_id}/chapters/{chapter_key}/confirm", response_model=WritingTask)

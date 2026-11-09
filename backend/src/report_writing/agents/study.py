@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 import logging
 import re
+from typing import Annotated
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
-from langchain_core.tools import tool
+from langchain.tools import tool
+from pydantic import Field
 
 from report_writing.agents.react import run_react, tool_result
 from report_writing.agents.scripted import ScriptedChatModel, tool_payloads
@@ -20,25 +22,37 @@ from report_writing.domain.models import ChapterRequirement, ContentBlock, Extra
 _log = logging.getLogger("uvicorn.error")
 _SAMPLE_LIMIT = CHAPTER_EXCERPT_MAX_CHARS
 
-INSTRUCTIONS = """你是报告章节配置助手（对齐 anyuan V2 章节分析）。只阅读已经写过的样板正文，不要阅读本次项目材料，不要写新报告。
-先 list_chapters，再对每一章 read_chapter，最后 submit_writing_brief。
-submit_writing_brief 的参数包含 voice、layout、paragraph_format、chapters。
+INSTRUCTIONS = """# Role
+你是资深文档写作专家。文档类型由样板/任务的 category 决定（函件、方案、说明书、纪要、合同、述职、报告等）。不要默认按研究报告拆章。
 
-分两层：固定层=版式与写法；元数据层=随项目而变的名称/型号/数值等 → 只进 extracts，不进 generate。
+# Task
+只阅读已经写过的样板正文，提取可跨项目复用的书写要求。不要读本次项目材料，不要另写一篇新文档。
 
-chapters 每一项都要写清：
+# Inputs
+通过 Tool 读取样板：先 list_chapters，再逐章 read_chapter。
+
+# Procedure
+1. 列出章节
+2. 逐章精读：组成部分 → 格式 → 怎么写 → 写作要点（不是摘要原文）
+3. 一次性 submit_writing_brief（voice、layout、paragraph_format、chapters）
+
+# Constraints
+- 不要生成 aux_prompt / 补充提示词。
+- 忠于样板：禁止按行业常识补全原文没有的评价单元、子单元、表格行或相邻专题。章名只作锚点，配置须对应该章实际所写内容。
+- 固定层=版式与写法；元数据层=随项目而变的名称/型号/数值 → 只进 extracts，不进 generate/describes。
+
+# Chapter fields
 - key、title、sequence、level、parent：沿用样板编号与层级，不要改。
-- describes：章节说明（功能+结构）；有表格时点明固定栏目与可变填报；禁止样板实例。
-- extracts：本章须从本项目资料取值的元数据（name/kind/hint/required/style）；
-  name 用信息类型（工程名称、设备型号…），禁止填样板里的实例值。
-- generate / points：写法指引（结构、语气、须覆盖的信息类型）；表格写清列/行与固定 vs 按项目填；
-  禁止工程名、设备型号、投资额、日期等样板实例。
-- keywords：可跨项目复用的检索词；禁止工程专名与型号串。
-- reference_text：样板原文摘录（可含具体信息，仅供格式对照）。
-- content_blocks：文字/表格/图片；表格含 headers、column_roles、fixed_items（栏目名/单位/套话）、
-  variable_items（信息类型）。
-- paragraph_format：正文输出完整 HTML（p/table/figure），标签成对闭合。
-- boundary、depends_on。"""
+- describes：怎么写与什么格式，必须 1. 2. 分点（换行），覆盖写作风格、写作特点（组成块先后）、描述方式、排版格式、写作注意事项；禁止一段话、内容提纲（提纲放 points）、样板实例。
+- extracts：name 用信息类型，禁止填样板实例值。
+- generate / points：一条对应原文一个组成部分，句式「【组成部分】怎么写；版式：…；须覆盖：信息类型」；能在样板找到依据；禁止样板实例。compose=fixed 时 points/generate/describes 留空。
+- keywords：可跨项目复用的主题术语，不用于章节级检索。
+- reference_text：保留原文语句与语序。source_only/template_fill/hybrid 仅把实例换成 {{槽名}}；auto_generate/fixed 原文原样。
+- content_blocks：表格行/列不得超出原文。
+- compose：source_only | template_fill | hybrid | auto_generate | fixed。
+- paragraph_format：完整 HTML（p/table/figure），标签成对闭合。
+- boundary、depends_on。
+"""
 
 
 class StudyScriptModel(ScriptedChatModel):
@@ -61,14 +75,17 @@ class StudyScriptModel(ScriptedChatModel):
 def run_study(template: ReportTemplate, model: BaseChatModel | None = None, *, robot=None) -> WritingBrief:
     if model is not None and not isinstance(model, StudyScriptModel):
         return _study_with_model(template, model, robot=robot)
+    from report_writing.domain.compose_analysis import analysis_strategy_block
     from report_writing.services.robots import resolve_prompt
 
     tools = _tools(template)
     chosen = model or StudyScriptModel(template_json=json.dumps(_template_payload(template), ensure_ascii=False))
+    study_prompt = resolve_prompt("study", robot, default=INSTRUCTIONS)
+    study_prompt = f"{study_prompt.rstrip()}\n\n{analysis_strategy_block()}"
     result = run_react(
         chosen,
         tools,
-        resolve_prompt("study", robot, default=INSTRUCTIONS),
+        study_prompt,
         "请分析这份报告模板并提交书写要求。",
         "study",
         rounds=len(template.chapters) + 3,
@@ -79,17 +96,28 @@ def run_study(template: ReportTemplate, model: BaseChatModel | None = None, *, r
 def _tools(template: ReportTemplate):
     payload = _template_payload(template)
 
-    @tool
+    @tool(
+        "list_chapters",
+        description=(
+            "何时：分析开始，先列出样板章节 key/标题/层级。"
+            "不要：跳过直接 submit_writing_brief；读正文用 read_chapter。"
+        ),
+    )
     def list_chapters() -> str:
-        """列出模板中的章节键、标题和层级。"""
         return json.dumps(
             [{"key": item["key"], "sequence": item.get("sequence") or "", "title": item["title"], "level": item["level"]} for item in payload["chapters"]],
             ensure_ascii=False,
         )
 
-    @tool
-    def read_chapter(key: str) -> str:
-        """阅读某一章的范文段落和已有要点。"""
+    @tool(
+        "read_chapter",
+        description=(
+            "何时：list_chapters 之后阅读一章样板正文与已有要点，每一章调用一次。"
+            "缺了：用 list_chapters 返回的 key，不要猜。"
+            "不要：读项目材料、写新报告；全部读完再 submit_writing_brief。"
+        ),
+    )
+    def read_chapter(key: Annotated[str, Field(description="必填。章节 key，来自 list_chapters。")]) -> str:
         title = next((item["title"] for item in payload["chapters"] if item["key"] == key), key)
         _log.info("模型正在阅读 %s %s", key, title)
         for item in payload["chapters"]:
@@ -97,14 +125,19 @@ def _tools(template: ReportTemplate):
                 return json.dumps(item, ensure_ascii=False)
         return json.dumps({"error": f"未知章节 {key}"}, ensure_ascii=False)
 
-    @tool
+    @tool(
+        "submit_writing_brief",
+        description=(
+            "何时：已 list_chapters 且读完每一章，提交整份书写要求。分析结束动作。"
+            "不要：用 read_chapter 代替提交；未读完不要交。"
+        ),
+    )
     def submit_writing_brief(
-        voice: str,
-        layout: str,
-        paragraph_format: str,
-        chapters: list[dict],
+        voice: Annotated[str, Field(description="必填。文风。")],
+        layout: Annotated[str, Field(description="必填。版式。")],
+        paragraph_format: Annotated[str, Field(description="必填。段落格式说明。")],
+        chapters: Annotated[list[dict], Field(description="必填。各章书写要求列表。")],
     ) -> str:
-        """提交整份书写要求。这是分析要点阶段的结束动作。"""
         brief = _assemble(template, voice, layout, paragraph_format, chapters)
         return json.dumps(brief.to_dict(), ensure_ascii=False)
 
@@ -114,25 +147,37 @@ def _tools(template: ReportTemplate):
 _BATCH = 6
 _MAX_BATCHES = 5
 
-_BATCH_INSTRUCTIONS = """你是报告章节配置助手。根据每章「sample」原文节选，提取可跨项目复用的写作配置（不要写新报告）。
+_BATCH_INSTRUCTIONS = """# Role
+你是资深文档写作专家。须匹配文档类型体裁，不要默认套研究报告口径。
+
+# Task
+根据每章 sample 原文节选，提取可跨项目复用的写作施工图。不要另写新文档。
+
+# Inputs
+JSON 数组，每项含 key、sequence、title、sample。
+
+# Procedure
+精读顺序：组成部分 → 格式 → 怎么写 → 要点。
 按输入数组顺序返回等长 JSON 数组；key、sequence 原样照抄。
 
-分两层，不要混：
-A. 固定层：版式、栏目名、单位、写法顺序、跨项目套话 → describes / writing_style / generate / content_blocks。
-B. 元数据层：随项目而变的工程名、站名、公司、设备型号规格、电压/容量/投资/坐标/日期/文号等
-  → 一律放 extracts（name=信息类型，hint=怎么填），禁止写进 generate/describes/keywords/fixed_items。
-样板里的具体值只是示例。仅 reference_text 可保留原文摘录。
+# Constraints
+- 不要输出 aux_prompt / 补充提示词。
+- describes/generate/content_blocks/keywords/extracts 必须服务章节标题主题。
+- 禁止按行业常识补全原文没有的评价单元、子单元、表格行或相邻专题；半截表保持半截。
+- 与章名无关的旁白、串章写法、杂质专题一律忽略。
+- 固定层（版式、栏目名、单位、写法、套话）→ writing_style / generate / content_blocks。
+- 元数据层（工程名、型号、投资、日期等）→ extracts；禁止写进 generate/describes/keywords/fixed_items。样板具体值只是示例。
 
-每项字段：
-- describes（80～280 字）：功能与组织；固定栏目 vs 项目填报；不写样板实例。
-- writing_style：2～5 条写法特点。
-- extracts：本章须从本项目资料取值的元数据清单（name/kind/hint/required/style）；
-  name 用类型名（工程名称、主变型号…），不要填样板实例值。
-- generate：5～12 条写法要点；提信息类型，不写工程名/型号/数值实例。
-- keywords：5～10 个（2～12 字）通用术语；禁止专名与型号串。
-- reference_text：摘自 sample（400～3000 字，可含原文具体信息）。
-- content_blocks：表格含 headers、column_roles、fixed_items（栏目名/单位/套话）、
-  variable_items（信息类型）、cells_sample（××占位）。"""
+# Fields
+- describes：1. 2. 分点（3～8 条），只写怎么写与格式；不要一段话、内容提纲、样板实例。
+- writing_style：2～5 条。
+- extracts：name=信息类型，不要填样板实例值。
+- generate：5～12 条，句式「【组成部分】怎么写；版式：…；须覆盖：信息类型」。compose=fixed 时留空。
+- keywords：5～10 个主题术语，不用于章节检索。
+- reference_text：摘自 sample，保留原文语句与语序。填槽策略只换 {{槽名}}；auto_generate/fixed 原样。
+- content_blocks：行/列不得超出 sample。
+- compose：source_only | template_fill | hybrid | auto_generate | fixed。
+"""
 
 
 def _study_with_model(template: ReportTemplate, model: BaseChatModel, *, robot=None) -> WritingBrief:
@@ -231,10 +276,13 @@ def _study_with_model(template: ReportTemplate, model: BaseChatModel, *, robot=N
             merged["content_blocks"] = normalize_content_blocks(extra.get("content_blocks"))
         if str(extra.get("reference_text") or "").strip():
             merged["reference_text"] = str(extra["reference_text"]).strip()[:8000]
+        if extra.get("presence"):
+            merged["presence"] = extra["presence"]
+        if extra.get("compose"):
+            merged["compose"] = extra["compose"]
         if merged.get("generate"):
             merged["points"] = [line.strip() for line in str(merged["generate"]).splitlines() if line.strip()]
         from report_writing.controller.points import (
-            _fold_project_slots,
             _normalize_project_slots,
             audit_chapter_analysis_with_model,
         )
@@ -265,10 +313,11 @@ def _study_with_model(template: ReportTemplate, model: BaseChatModel, *, robot=N
                 }
                 for s in slots
             ]
-        desc = _fold_project_slots(desc, slots)
+        from report_writing.domain.compose_analysis import format_describes_as_points
+
         merged["points"] = pts
         merged["keywords"] = kws
-        merged["describes"] = desc
+        merged["describes"] = format_describes_as_points(desc)
         merged["content_blocks"] = blocks
         if pts:
             merged["generate"] = "\n".join(pts)
@@ -280,7 +329,10 @@ def _study_with_model(template: ReportTemplate, model: BaseChatModel, *, robot=N
 def _ask_batch(model: BaseChatModel, batch: list[dict], *, robot=None) -> dict[str, dict]:
     from report_writing.services.robots import resolve_prompt
 
+    from report_writing.domain.compose_analysis import analysis_strategy_block
+
     instructions = resolve_prompt("study", robot, default=_BATCH_INSTRUCTIONS)
+    instructions = f"{instructions.rstrip()}\n\n{analysis_strategy_block()}"
     response = model.invoke(
         [
             SystemMessage(content=instructions),
@@ -371,12 +423,9 @@ def _extract_item(item: dict) -> ExtractItem:
 
 
 def _describes(title: str, paragraphs: list[str]) -> str:
-    text = next((item.strip() for item in paragraphs if item.strip()), "")
-    if not text:
-        return f"说明{title}。"
-    if len(text) > 80:
-        text = text[:80] + "…"
-    return text
+    from report_writing.domain.compose_analysis import fallback_describes
+
+    return fallback_describes(title, [])
 
 
 _NUMBER = re.compile(r"投资|容量|噪声|限值|面积|长度|电压")
@@ -461,6 +510,8 @@ def _assemble(template: ReportTemplate, voice: str, layout: str, paragraph_forma
                 points=points,
                 content_blocks=content_blocks,
                 reference_text=reference_text,
+                presence=str(extra.get("presence") or "always"),
+                compose=str(extra.get("compose") or "hybrid"),
                 boundary=extra.get("boundary") or source.boundary or f"只写{source.title}。禁止写入：{others}",
                 depends_on=list(extra.get("depends_on") or source.depends_on),
             )

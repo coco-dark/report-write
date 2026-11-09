@@ -1,12 +1,15 @@
-"""会话写作目标：口语信号走意图模型（与 session_goal 存储/合并逻辑分离）。"""
+"""会话写作目标：结构行 / 记住短语。口语记住目标归总控 remember_writing_goal。"""
 
 from __future__ import annotations
 
+import re
 from typing import Any, Callable
 
 from report_writing.domain.models import ChatSession
 
 InvokeFn = Callable[[str, str], str]
+
+_REMEMBER_RE = re.compile(r"(记住|记下来|今后按|后面都按|别忘了)")
 
 
 def is_explicit_remember_goal_message(
@@ -15,15 +18,13 @@ def is_explicit_remember_goal_message(
     invoke: InvokeFn | None = None,
     session: ChatSession | None = None,
 ) -> bool:
-    from report_writing.chat.intent_context import pack_classifier_context
-    from report_writing.chat.intent_llm import classify_explicit_remember_goal_llm
-
-    ctx = pack_classifier_context(session) if session is not None else {}
-    return classify_explicit_remember_goal_llm(
-        message,
-        dialogue_tail=list(ctx.get("dialogue_tail") or []) or None,
-        invoke=invoke,
-    )
+    _ = (invoke, session)
+    text = (message or "").strip()
+    if not text:
+        return False
+    if "｜" in text or "|" in text:
+        return False
+    return bool(_REMEMBER_RE.search(text))
 
 
 def doc_meta_patch_from_message(
@@ -33,27 +34,8 @@ def doc_meta_patch_from_message(
     session: ChatSession | None = None,
     context: dict[str, Any] | None = None,
 ) -> dict[str, str]:
-    from report_writing.chat.intent_context import pack_classifier_context
-    from report_writing.chat.intent_llm import classify_doc_meta_line_llm
+    """只认「类型｜标题」结构行；口语定名归总控 set_session_meta。"""
+    _ = (invoke, session, context)
+    from report_writing.chat.session_goal import _parse_meta_line_structural
 
-    ctx = dict(context or {})
-    if session is not None and not ctx:
-        ctx = pack_classifier_context(session)
-    return classify_doc_meta_line_llm(
-        message,
-        dialogue_tail=list(ctx.get("dialogue_tail") or []) or None,
-        focus_document_brief=str(ctx.get("focus_document_brief") or ""),
-        invoke=invoke,
-    )
-
-
-def prefer_react_over_freeform_dispatch(
-    message: str,
-    *,
-    phase: str = "",
-    invoke: InvokeFn | None = None,
-) -> bool:
-    from report_writing.chat.intent_llm import classify_freeform_dispatch_route_llm
-
-    # 无 session 时仅用 phase；有上下文的调用方走 session_goal.prefer_*
-    return classify_freeform_dispatch_route_llm(message, phase=phase, invoke=invoke) == "react"
+    return _parse_meta_line_structural(message)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from report_writing.chat_orchestrator import _writing_chapter_keys, handle_chat
+from report_writing.chat import _writing_chapter_keys, handle_chat
 from report_writing.controller import ensure_task
 from report_writing.domain.models import (
     ChapterState,
@@ -251,33 +251,34 @@ def _bind_robot_blueprints(home: Path, robot_id: str, *blueprint_ids: str) -> No
     update_robot(home, robot_id, data)
 
 
-def test_step_mode_progress_shows_focus_chapter_only():
-    from report_writing.chat_orchestrator import WRITING_PACE_STEP, _visible_progress_chapters
+def test_step_mode_progress_shows_written_chapters_only():
+    from report_writing.chat import WRITING_PACE_STEP, _visible_progress_chapters
 
     rows = [
         {"key": "c1", "status": "awaiting_confirm", "has_draft": True, "steps": []},
         *[{"key": f"c{i}", "status": "pending", "has_draft": False, "steps": []} for i in range(2, 112)],
     ]
     visible, collapsed = _visible_progress_chapters(rows, pace=WRITING_PACE_STEP)
-    assert [r["key"] for r in visible] == ["c1", "c2"]
-    assert visible[1].get("is_next") is True
-    assert collapsed == 109
+    assert [r["key"] for r in visible] == ["c1"]
+    assert collapsed == 110
 
 
-def test_batch_mode_progress_lists_all_chapters():
-    from report_writing.chat_orchestrator import WRITING_PACE_BATCH, _visible_progress_chapters
+def test_batch_mode_progress_hides_unwritten_chapters():
+    from report_writing.chat import WRITING_PACE_BATCH, _visible_progress_chapters
 
     rows = [
         {"key": "c1", "status": "awaiting_confirm", "has_draft": True, "steps": []},
         {"key": "c2", "status": "pending", "has_draft": False, "steps": []},
+        {"key": "c3", "status": "writing", "has_draft": False, "steps": [{"step": "write"}], "is_running": True},
+        {"key": "c4", "status": "confirmed", "has_draft": False, "steps": []},  # 无正文不算已写
     ]
     visible, collapsed = _visible_progress_chapters(rows, pace=WRITING_PACE_BATCH)
-    assert len(visible) == 2
-    assert collapsed == 0
+    assert [r["key"] for r in visible] == ["c1", "c3"]
+    assert collapsed == 2
 
 
 def test_filter_outline_keeps_ancestors_only():
-    from report_writing.chat_orchestrator import _filter_outline_by_selected_keys
+    from report_writing.chat import _filter_outline_by_selected_keys
 
     nodes = [
         OutlineNode(key="p", sequence="1", title="父", structure_only=True),
@@ -364,7 +365,7 @@ def test_match_does_not_auto_bind_without_explicit_select(tmp_path: Path):
     assert session is not None
     assert not (session.blueprint_id or "").strip()
     confirm_writing_document_name(session, "安全预评价报告", message="写一份安全预评价报告")
-    from report_writing.chat.intent_clarify import clear_pending
+    from report_writing.chat.clarify_flow import clear_pending
 
     clear_pending(session)
     save_session(tmp_path, session)
@@ -386,7 +387,7 @@ def test_match_does_not_auto_bind_without_explicit_select(tmp_path: Path):
 
 
 def test_explicit_select_can_bind_matched_blueprint(tmp_path: Path):
-    from report_writing.chat.intent_clarify import clear_pending
+    from report_writing.chat.clarify_flow import clear_pending
     from report_writing.chat.session_documents import confirm_writing_document_name
     from report_writing.controller import ensure_task
     from report_writing.domain.models import OutlineNode, OutlineTree
@@ -430,7 +431,7 @@ def test_explicit_select_can_bind_matched_blueprint(tmp_path: Path):
     )
     session = get_session(tmp_path, resp.session_id)
     assert session is not None
-    # 显式「就用」允许自动订上唯一对口候选
+    # 显式「就用」：match 只出候选，总控再调 select_blueprint
     assert (session.blueprint_id or "").strip() == "bp_only"
 
 
@@ -677,7 +678,7 @@ def test_writing_chapter_keys_follow_outline_order():
 
 def test_analysis_choice_cards_survive_handoff_overwrite(tmp_path: Path):
     """选蓝本后即使 Agent 再调 handoff，仍应保留「仅写已分析」。"""
-    from report_writing.chat_orchestrator import _ensure_analysis_choice_cards
+    from report_writing.chat import _ensure_analysis_choice_cards
     from report_writing.domain.models import ChatCard
 
     path = tmp_path / "tasks" / "bp_keep"

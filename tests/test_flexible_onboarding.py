@@ -108,7 +108,7 @@ def test_session_goal_isolated_per_lane(tmp_path: Path):
 
 
 def test_handle_chat_write_intent_no_name_card(tmp_path: Path):
-    from report_writing.chat_orchestrator import handle_chat
+    from report_writing.chat import handle_chat
     from report_writing.domain.models import ChatRequest
     from report_writing.services.robots import create_robot
 

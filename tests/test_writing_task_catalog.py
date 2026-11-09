@@ -28,3 +28,31 @@ def test_task_store_roundtrip_local(tmp_path: Path):
 
 def test_load_writing_task_without_db(tmp_path: Path):
     assert load_writing_task("wnodb") is None
+
+
+def test_task_store_prefers_mysql_over_stale_disk(tmp_path: Path, monkeypatch):
+    path = tmp_path / "tasks" / "wmysql01"
+    ensure_task(path)
+    task = TaskStore(path).load()
+    task.id = "wmysql01"
+    task.title = "磁盘旧稿无插槽"
+    TaskStore(path).save(task)
+
+    mysql_doc = task.to_dict()
+    mysql_doc["title"] = "库里已配插槽"
+    mysql_doc["element_nodes"] = [
+        {
+            "id": "el1",
+            "name": "批复",
+            "kind": "file_slot",
+            "file_slots": [{"no": 1, "name": "批复文件", "query": "建设规模"}],
+        }
+    ]
+
+    monkeypatch.setattr(
+        "report_writing.services.writing_task_catalog.load_writing_task_document",
+        lambda tid: mysql_doc if tid == "wmysql01" else None,
+    )
+    again = TaskStore(path).load()
+    assert again.title == "库里已配插槽"
+    assert again.element_nodes[0].file_slots[0].query == "建设规模"

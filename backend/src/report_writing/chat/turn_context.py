@@ -6,7 +6,29 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from report_writing.domain.models import ChatSession
+from report_writing.domain.models import ChatSession, SessionGoal
+
+
+def _turn_context_revision(session: ChatSession, home: Path | None = None) -> str:
+    from report_writing.chat.session_config_revision import session_config_revision
+    from report_writing.chat.session_documents import focus_document_meta
+
+    focus = focus_document_meta(session)
+    fwid = str(
+        focus.get("writing_task_id") or focus.get("task_id") or session.task_id or ""
+    ).strip()
+    saved = ""
+    if home is not None and fwid:
+        from report_writing.chat.helpers import _load_task
+
+        task = _load_task(home, fwid)
+        if task is not None:
+            try:
+                saved = str((task.to_dict() or {}).get("_saved_at") or "").strip()
+            except Exception:
+                saved = ""
+    cfg = session_config_revision(session)
+    return f"{session.phase}:{fwid}:{cfg}:{saved}"
 
 
 @dataclass
@@ -18,7 +40,7 @@ class WritingTurnContext:
     expanded_message: str = ""
     dialogue_tail: list[dict[str, str]] = field(default_factory=list)
     session_snapshot: dict[str, Any] = field(default_factory=dict)
-    session_goal: dict[str, Any] = field(default_factory=dict)
+    session_goal: SessionGoal = field(default_factory=SessionGoal)
     session_goal_brief: str = ""
     writing_task: dict[str, Any] = field(default_factory=dict)
     focus_document: dict[str, Any] = field(default_factory=dict)
@@ -30,7 +52,7 @@ class WritingTurnContext:
             "expanded_message": self.expanded_message,
             "dialogue_tail": self.dialogue_tail,
             "session_snapshot": self.session_snapshot,
-            "session_goal": self.session_goal,
+            "session_goal": self.session_goal.to_dict(),
             "session_goal_brief": self.session_goal_brief,
             "writing_task": self.writing_task,
             "focus_document": self.focus_document,
@@ -53,7 +75,7 @@ def build_writing_turn_context(
     if sid and raw:
         from report_writing.infra.redis_cache import cache_get_json, turn_context_cache_key
 
-        rev = f"{session.phase}:{session.task_id}"
+        rev = _turn_context_revision(session, home)
         hit = cache_get_json(turn_context_cache_key(sid, raw, revision=rev))
         if isinstance(hit, dict) and hit.get("user_message") == raw:
             return WritingTurnContext(
@@ -62,7 +84,7 @@ def build_writing_turn_context(
                 expanded_message=str(hit.get("expanded_message") or ""),
                 dialogue_tail=list(hit.get("dialogue_tail") or []),
                 session_snapshot=dict(hit.get("session_snapshot") or {}),
-                session_goal=dict(hit.get("session_goal") or {}),
+                session_goal=SessionGoal.model_validate(hit.get("session_goal") or {}),
                 session_goal_brief=str(hit.get("session_goal_brief") or ""),
                 writing_task=dict(hit.get("writing_task") or {}),
                 focus_document=dict(hit.get("focus_document") or {}),
@@ -79,22 +101,22 @@ def build_writing_turn_context(
         expanded_message=expanded,
         dialogue_tail=format_full_dialogue(session, max_turns=8, focus_only=True),
         session_snapshot=dict(session_turn_snapshot(session)),
-        session_goal=dict(goal),
+        session_goal=goal,
         session_goal_brief=session_goal_brief(session),
         focus_document=dict(focus_doc),
     )
 
     tid = (session.task_id or "").strip() or str(focus_doc.get("writing_task_id") or focus_doc.get("task_id") or "").strip()
     if not tid or home is None:
-        _cache_turn_context(session, ctx, raw)
+        _cache_turn_context(session, ctx, raw, home=home)
         return ctx
 
     from report_writing.chat.helpers import _load_task
-    from report_writing.chat.intent_chapter import pick_focus_chapter_key_extended
+    from report_writing.chat.chapter_resolve import pick_focus_chapter_key_extended
 
     task = _load_task(home, tid)
     if task is None:
-        _cache_turn_context(session, ctx, raw)
+        _cache_turn_context(session, ctx, raw, home=home)
         return ctx
 
     focus_key = pick_focus_chapter_key_extended(session, task, expanded)
@@ -111,17 +133,19 @@ def build_writing_turn_context(
         ),
         "document_key": str(focus_doc.get("registry_key") or ""),
     }
-    _cache_turn_context(session, ctx, raw)
+    _cache_turn_context(session, ctx, raw, home=home)
     return ctx
 
 
-def _cache_turn_context(session: ChatSession, ctx: WritingTurnContext, raw: str) -> None:
+def _cache_turn_context(
+    session: ChatSession, ctx: WritingTurnContext, raw: str, *, home: Path | None = None
+) -> None:
     sid = (session.id or "").strip()
     if not sid or not raw:
         return
     from report_writing.infra.redis_cache import cache_set_json, turn_context_cache_key
 
-    rev = f"{session.phase}:{session.task_id}"
+    rev = _turn_context_revision(session, home)
     cache_set_json(turn_context_cache_key(sid, raw, revision=rev), ctx.to_dict(), ttl_seconds=600)
 
 
@@ -182,7 +206,7 @@ def merge_turn_context_into_agent_body(body: dict[str, Any], ctx: WritingTurnCon
     if ctx.dialogue_tail and "dialogue_full" not in body:
         body["dialogue_full"] = ctx.dialogue_tail
     if ctx.session_goal_brief and "session_goal" not in body:
-        body["session_goal"] = ctx.session_goal
+        body["session_goal"] = ctx.session_goal.to_dict()
 
 
 def persist_turn_snapshot(session: ChatSession, ctx: WritingTurnContext | None) -> bool:

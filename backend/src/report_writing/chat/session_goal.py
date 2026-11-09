@@ -7,29 +7,32 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from report_writing.domain.models import ChatSession
+from report_writing.domain.models import ChatSession, SessionGoal
 
 InvokeFn = Callable[[str, str], str]
 
 _META_SPLIT_RE = re.compile(r"[｜|]")
 _GOAL_AUX_MARKER = "【会话写作背景】"
+_GOAL_REMEMBER_RE = re.compile(r"(记住|记下来|今后按|后面都按)")
+_GOAL_RENAME_RE = re.compile(r"(改名|改叫|名字叫|标题改|起名|文档叫|题目叫)")
 
 
-def get_session_goal(session: ChatSession) -> dict[str, Any]:
+def get_session_goal(session: ChatSession) -> SessionGoal:
     raw = dict((session.freeform or {}).get("session_goal") or {})
-    return {
-        "summary": str(raw.get("summary") or "").strip(),
-        "doc_category": str(raw.get("doc_category") or "").strip(),
-        "doc_title": str(raw.get("doc_title") or "").strip(),
-        "project": str(raw.get("project") or "").strip(),
-        "notes": str(raw.get("notes") or "").strip(),
-        "updated_at": str(raw.get("updated_at") or "").strip(),
-    }
+    return SessionGoal(
+        summary=str(raw.get("summary") or "").strip(),
+        doc_category=str(raw.get("doc_category") or "").strip(),
+        doc_title=str(raw.get("doc_title") or "").strip(),
+        project=str(raw.get("project") or "").strip(),
+        notes=str(raw.get("notes") or "").strip(),
+        updated_at=str(raw.get("updated_at") or "").strip(),
+    )
 
 
-def merge_session_goal(session: ChatSession, patch: dict[str, Any]) -> dict[str, Any]:
-    goal = get_session_goal(session)
-    for key, value in (patch or {}).items():
+def merge_session_goal(session: ChatSession, patch: dict[str, Any] | SessionGoal) -> SessionGoal:
+    goal = get_session_goal(session).to_dict()
+    patch_data = patch.to_dict() if isinstance(patch, SessionGoal) else dict(patch or {})
+    for key, value in patch_data.items():
         if value is None:
             continue
         text = str(value).strip()
@@ -55,7 +58,7 @@ def merge_session_goal(session: ChatSession, patch: dict[str, Any]) -> dict[str,
             session.freeform = {**(session.freeform or {}), "session_documents": docs}
     except Exception:
         pass
-    from report_writing.chat.intent_router import touch_session_plan
+    from report_writing.chat.session_state import touch_session_plan
 
     touch_session_plan(
         session,
@@ -63,7 +66,7 @@ def merge_session_goal(session: ChatSession, patch: dict[str, Any]) -> dict[str,
         doc_category=goal.get("doc_category") or "",
         doc_title=goal.get("doc_title") or "",
     )
-    return goal
+    return SessionGoal.model_validate(goal)
 
 
 def session_goal_brief(session: ChatSession) -> str:
@@ -121,21 +124,29 @@ def _parse_meta_line_structural(message: str) -> dict[str, str]:
     return patch
 
 
+def message_looks_like_goal_update(message: str) -> bool:
+    """本句才可能改文档类型/标题/记住背景；章节分析、开写等不算。"""
+    text = (message or "").strip()
+    if not text:
+        return False
+    if _META_SPLIT_RE.search(text):
+        return True
+    if _GOAL_REMEMBER_RE.search(text) or _GOAL_RENAME_RE.search(text):
+        return True
+    return False
+
+
 def parse_goal_patch_from_message(
     message: str,
     *,
     invoke: InvokeFn | None = None,
     session: ChatSession | None = None,
 ) -> dict[str, str]:
+    """只解析「类型｜标题」结构行；口语定名归总控 set_session_meta。"""
+    _ = (invoke, session)
     text = (message or "").strip()
     if not text:
         return {}
-    from report_writing.chat.session_goal_intent import doc_meta_patch_from_message
-
-    if invoke is not None:
-        hit = doc_meta_patch_from_message(text, invoke=invoke, session=session)
-        if hit:
-            return {k: v for k, v in hit.items() if v}
     return _parse_meta_line_structural(text)
 
 
@@ -325,12 +336,16 @@ def ingest_user_message_goal(
     text = (message or "").strip()
     if not text:
         return False
-    patch = parse_goal_patch_from_message(text, invoke=invoke)
+    patch = parse_goal_patch_from_message(text, invoke=invoke, session=session)
     if patch.get("doc_category") or patch.get("doc_title"):
         merge_session_goal(session, patch)
         sync_goal_into_freeform(session)
         return True
-    if invoke is not None and len(text) >= 4:
+    if (
+        invoke is not None
+        and len(text) >= 4
+        and _GOAL_REMEMBER_RE.search(text)
+    ):
         extra = _llm_extract_goal_patch(session, text, invoke=invoke)
         if extra:
             patch = {**patch, **{k: v for k, v in extra.items() if v}}
@@ -367,16 +382,17 @@ def _llm_extract_goal_patch(
     from report_writing.chat.dialogue import format_full_dialogue
 
     system = (
-        "你是写作会话目标提取器。结合 dialogue 与当前 message，理解用户真正要写的文档。"
-        "若本轮只是「不用蓝本/跳过蓝本」等路径选择，应保留对话里更早的写作题目，不要清空。"
-        "只返回 JSON："
-        '{"summary":"","doc_category":"","doc_title":"","project":"","notes":""} '
-        "doc_category 为简短类型（如技术方案、工作说明），doc_title 为具体题目；缺项留空，不要编造。"
+        "# Role\n你是写作会话目标提取器。\n"
+        "# Task\n结合 dialogue 与当前 message，理解用户真正要写的文档。"
+        "若本轮只是「不用蓝本/跳过蓝本」等路径选择，应保留对话里更早的写作题目，不要清空。\n"
+        "# Constraints\ndoc_category 为简短类型（如技术方案、工作说明），doc_title 为具体题目；缺项留空，不要编造。\n"
+        "# Output\n只返回 JSON："
+        '{"summary":"","doc_category":"","doc_title":"","project":"","notes":""}'
     )
     payload = {
         "dialogue": format_full_dialogue(session, max_turns=10),
         "message": message[:1500],
-        "existing": get_session_goal(session),
+        "existing": get_session_goal(session).to_dict(),
     }
     try:
         raw = str(invoke(system, json.dumps(payload, ensure_ascii=False)) or "").strip()
@@ -405,36 +421,3 @@ def _llm_extract_goal_patch(
     return out or None
 
 
-def should_prefer_react_over_freeform_dispatch(
-    session: ChatSession,
-    message: str,
-    *,
-    invoke: InvokeFn | None = None,
-) -> bool:
-    """无蓝本快车道：复杂句交给总控 ReAct。
-
-    有模型时交给 dispatch 路由分类器（可识别「生成目录 + 看要素库」等复合句）；
-    不再用单动作 wants_* 抢先锁死 freeform。
-    """
-    text = (message or "").strip()
-    if not text:
-        return False
-    if is_session_goal_message(text, invoke=invoke, session=session) and not _META_SPLIT_RE.search(
-        text
-    ):
-        return False
-    if invoke is None:
-        return False
-    from report_writing.chat.intent_context import pack_classifier_context
-    from report_writing.chat.intent_llm import classify_freeform_dispatch_route_llm
-
-    phase = str(session.phase or "")
-    ctx = pack_classifier_context(session)
-    route = classify_freeform_dispatch_route_llm(
-        text,
-        phase=phase or str(ctx.get("phase") or ""),
-        dialogue_tail=list(ctx.get("dialogue_tail") or []),
-        focus_document_brief=str(ctx.get("focus_document_brief") or ""),
-        invoke=invoke,
-    )
-    return route == "react"

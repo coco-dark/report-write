@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from report_writing.domain.models import ChatCard, ChatPhase, ChatSession
+from report_writing.domain.models import ChatActionPayload, ChatCard, ChatPayload, ChatPhase, ChatSession
 from report_writing.services.robots import get_robot, update_robot
 
 
@@ -26,12 +26,12 @@ def _bind_robot_id(home: Path, session: ChatSession, field: str, item_id: str) -
 
 
 def _wizard_working_task_id(
-    session: ChatSession, blueprint_id: str = "", payload: dict | None = None
+    session: ChatSession, blueprint_id: str = "", payload: ChatPayload = None
 ) -> str:
     """向导落盘目标：优先文档副本 w*（无蓝本·样本 / 选用即 clone）。学习/写作禁止回落到库蓝本章节。"""
     from report_writing.services.task_ids import is_writing_task_id
 
-    body = dict(payload or {})
+    body = ChatActionPayload.parse(payload).as_dict()
     for key in ("working_task_id", "writing_task_id", "writingTaskId"):
         cand = str(body.get(key) or "").strip()
         if cand and is_writing_task_id(cand):
@@ -78,7 +78,10 @@ def _create_freeform_sample_document(
     上传/提取向导进行中不要 lock writing_path=freeform：前端会按「无蓝本」吞掉向导卡。
     收录前以 mode=freeform_sample 标识；真正开写无蓝本大纲时再锁路径。
     """
-    from report_writing.chat.intent_router import WRITING_PATH_FREEFORM, get_writing_path
+    from report_writing.chat.session_state import (
+        WRITING_PATH_FREEFORM,
+        get_writing_path,
+    )
     from report_writing.chat.session_documents import (
         confirm_writing_document_name,
         flush_lane,
@@ -201,7 +204,7 @@ def _create_freeform_sample_document(
     stamp_document_thread_messages(session, reg_key)
     session.phase = ChatPhase.CREATE_HANDOFF.value
     workflow_set(session, WORKFLOW_BLUEPRINT, dict(wizard))
-    from report_writing.chat.intent_router import touch_session_plan
+    from report_writing.chat.session_state import touch_session_plan
 
     touch_session_plan(session, goal="template_wizard", step="wizard_upload")
     mark_focus_entry_path(session, "template")
@@ -375,7 +378,7 @@ def _prompt_confirm_outline_before_study(
         title=_wizard_card_title("outline_confirm", mode=mode),
         extra={"chapters": preview, **wizard},
     )
-    from report_writing.chat.intent_clarify import begin_clarify
+    from report_writing.chat.clarify_flow import begin_clarify
 
     question = (
         f"目录还没确认（共 {len(chapters)} 章），还不能{want}。"
@@ -425,7 +428,7 @@ def _continue_active_wizard_reply(
 ) -> tuple[str, list[ChatCard]] | None:
     """已有进行中的向导时不再重置为 meta，避免重复「填写名称」卡片。"""
     from report_writing.chat.cards import _blueprint_wizard_card
-    from report_writing.chat.intent_router import active_blueprint_wizard
+    from report_writing.chat.session_state import active_blueprint_wizard
     from report_writing.chat.wizard_state import (
         _wizard_card_title,
         refresh_latest_wizard_card_in_session,
@@ -486,7 +489,7 @@ def _begin_blueprint_wizard(
     invoke=None,
 ) -> tuple[str, list[ChatCard]]:
     from report_writing.chat.cards import _blueprint_wizard_card
-    from report_writing.chat.intent_router import touch_session_plan
+    from report_writing.chat.session_state import touch_session_plan
     from report_writing.chat.session_runtime import WORKFLOW_BLUEPRINT, workflow_set
 
     hint = (title_hint or "").strip()
@@ -611,7 +614,10 @@ def _begin_blueprint_wizard(
 
     session.phase = ChatPhase.CREATE_HANDOFF.value
     from report_writing.chat.wizard_state import WIZARD_MODE_CREATE
-    from report_writing.chat.intent_router import WRITING_PATH_FREEFORM, get_writing_path
+    from report_writing.chat.session_state import (
+        WRITING_PATH_FREEFORM,
+        get_writing_path,
+    )
 
     # 用户改口「我有样本 / 创建蓝本」：必须退出无蓝本锁，否则前端会按 freeform 吞掉向导卡
     ff_unlock = {**(session.freeform or {})}
@@ -661,7 +667,7 @@ def _begin_blueprint_wizard(
 def _action_resource_choice(
     home: Path,
     session: ChatSession,
-    payload: dict[str, Any],
+    payload: ChatPayload,
     *,
     invoke=None,
     emit=None,
@@ -669,6 +675,7 @@ def _action_resource_choice(
     from report_writing.chat.actions import _action_skip_blueprint
     from report_writing.chat.cards import _blueprint_wizard_card, _template_wizard_card
 
+    payload = ChatActionPayload.parse(payload)
     resource = str(payload.get("resource") or "").strip()
     accept = bool(payload.get("accept"))
     if not accept:
@@ -719,7 +726,7 @@ def execute_wizard_command(
     invoke=None,
 ) -> tuple[str, list[ChatCard]]:
     """子 Agent 工具统一入口：wizard_command → 卡片与回复。"""
-    from report_writing.chat.intent_router import active_blueprint_wizard
+    from report_writing.chat.session_state import active_blueprint_wizard
     from report_writing.chat.wizard_state import (
         CREATE_ONLY_WIZARD_COMMANDS,
         is_selected_wizard_mode,
@@ -733,6 +740,31 @@ def execute_wizard_command(
     cmd = (command or "").strip()
     if not cmd:
         raise ValueError("未指定向导操作")
+    if cmd in {"go_study", "re_study_chapters"}:
+        from report_writing.chat.write_chapter_intent import (
+            reroute_if_write_not_study,
+            utterance_requests_study,
+        )
+
+        probe = str(study_message or "").strip()
+        write_hit = reroute_if_write_not_study(
+            home, session, probe, invoke=invoke
+        )
+        if write_hit is not None:
+            reply, cards, _events = write_hit
+            return reply, list(cards or [])
+        if cmd == "re_study_chapters":
+            keys_in = [str(k).strip() for k in (chapter_keys or []) if str(k).strip()]
+            checkbox = str(study_scope or "").strip() == "selected" and bool(keys_in)
+            if (
+                not utterance_requests_study(probe)
+                and not checkbox
+                and not probe.startswith("已选")
+            ):
+                return (
+                    "这句我不按分析章节来。要分析请说「分析第×章」，或在右侧文档窗勾选后点分析。",
+                    [],
+                )
     if not blueprint_id and cmd not in {"re_upload_sample"}:
         raise ValueError("还没有打开依据模版向导，请先填写文档名称")
     # 选用路径若会话向导被清空，按任务进度重新种 selected ops
@@ -766,7 +798,17 @@ def execute_wizard_command(
         if keys:
             body["chapter_keys"] = keys
         if invoke is not None:
-            body["_intent_invoke"] = invoke
+            body["_clarify_invoke"] = invoke
+    elif cmd == "go_study":
+        if str(study_method or "").strip():
+            body["study_method"] = str(study_method).strip()
+        if str(study_message or "").strip():
+            body["study_message"] = str(study_message).strip()
+        if str(study_text or "").strip():
+            body["study_text"] = str(study_text)
+        keys = [str(k).strip() for k in (chapter_keys or []) if str(k).strip()]
+        if keys:
+            body["chapter_keys"] = keys
     return _action_blueprint_wizard(home, session, body)
 
 
@@ -774,12 +816,13 @@ def _resolve_meta_existing_blueprint(
     home: Path,
     session: ChatSession,
     wizard: dict[str, Any],
-    payload: dict[str, Any],
+    payload: ChatPayload,
 ) -> str:
     """meta 步是否沿用已有 task id；新文档/标题冲突时返回空以触发新建。"""
     from report_writing.chat.helpers import _load_task
     from report_writing.chat.session_documents import _titles_conflict, focus_document_meta
 
+    payload = ChatActionPayload.parse(payload)
     requested = str(payload.get("title") or wizard.get("title") or "").strip()
     wizard_bid = str(wizard.get("blueprint_id") or "").strip()
     session_bid = str(session.blueprint_id or "").strip()
@@ -810,7 +853,7 @@ def _resolve_meta_existing_blueprint(
 def _action_blueprint_wizard(
     home: Path,
     session: ChatSession,
-    payload: dict[str, Any],
+    payload: ChatPayload,
 ) -> tuple[str, list[ChatCard]]:
     from report_writing.chat.cards import _blueprint_wizard_card, _handoff_card
     from report_writing.chat.gates import is_blueprint_valid
@@ -829,6 +872,7 @@ def _action_blueprint_wizard(
     from report_writing.chat.wizard_state import WIZARD_MODE_FREEFORM_SAMPLE
     from report_writing.services.task_ids import is_writing_task_id
 
+    payload = ChatActionPayload.parse(payload)
     wizard = dict((session.freeform or {}).get("blueprint_wizard") or {})
     step = str(payload.get("step") or wizard.get("step") or "meta").strip()
     payload_bid = str(payload.get("blueprint_id") or "").strip()
@@ -838,9 +882,10 @@ def _action_blueprint_wizard(
     ).strip()
     if is_selected_wizard_mode(wizard):
         if wizard_command_early in CREATE_ONLY_WIZARD_COMMANDS:
-            raise ValueError(
+            return (
                 "当前是选用已有蓝本，不用走创建向导（上传样板/提取目录）。"
-                "可以说「确认目录」「开始分析」或「帮我写已分析的章节」。"
+                "可以说「确认目录」「开始分析」或「帮我写已分析的章节」。",
+                [],
             )
         if step in CREATE_ONLY_WIZARD_STEPS:
             step = "outline_confirm"
@@ -1011,19 +1056,14 @@ def _action_blueprint_wizard(
                     )
                 ],
             )
-        # 主动回退到确认目录：若已确认则解开，便于再核对（不重提目录）
+        # 目录已确认：勿解开再拽回确认步，交给分析
         if task and bool(getattr(task, "outline_confirmed", False)):
-            try:
-                from report_writing.services.store import TaskStore
-
-                store = TaskStore(home / "tasks" / blueprint_id)
-                if store.path.is_dir():
-                    t2 = store.load()
-                    t2.outline_confirmed = False
-                    store.save(t2)
-                    task = t2
-            except Exception:
-                pass
+            return execute_wizard_command(
+                home,
+                session,
+                "go_study",
+                invoke=payload.get("_clarify_invoke"),
+            )
         wizard["step"] = "outline_confirm"
         wizard["outline_confirmed"] = False
         wizard["chapters"] = chapters
@@ -1062,6 +1102,7 @@ def _action_blueprint_wizard(
         if blocked:
             return blocked
         from report_writing.chat.helpers import _load_task
+        from report_writing.chat.study_chapter_resolve import infer_study_method
         from report_writing.chat.wizard_state import partition_wizard_study
 
         wizard["step"] = "study"
@@ -1081,29 +1122,141 @@ def _action_blueprint_wizard(
             if str(getattr(n, "key", "") or "").strip()
         ]
         analyzed_n = len(parts.get("analyzed") or [])
+        if analyzed_n > 0 and not remain_keys:
+            wizard.pop("trigger_begin_study", None)
+            wizard.pop("trigger_chapter_study", None)
+            session.freeform = {**(session.freeform or {}), "blueprint_wizard": wizard}
+            session.phase = ChatPhase.CREATE_HANDOFF.value
+            from report_writing.chat.wizard_state import (
+                WIZARD_MODE_SELECTED,
+                _wizard_card_title,
+                is_selected_wizard_mode,
+            )
+
+            mode = WIZARD_MODE_SELECTED if is_selected_wizard_mode(wizard) else ""
+            return (
+                "各章要点其实都齐了。若要整本重分析可以说「重新分析」；"
+                "要开写可以说「帮我写已分析的章节」或点卡片里的开写。",
+                [
+                    _blueprint_wizard_card(
+                        blueprint_id=blueprint_id,
+                        step="study",
+                        title=_wizard_card_title("study", mode=mode),
+                        extra=wizard,
+                    )
+                ],
+            )
+        study_keys = remain_keys or [
+            str(getattr(n, "key", "") or "").strip()
+            for n in list(getattr(getattr(task, "outline", None), "chapters", None) or [])
+            if str(getattr(n, "key", "") or "").strip()
+            and not bool(getattr(n, "structure_only", False))
+        ]
+        method = infer_study_method(
+            str(payload.get("study_method") or payload.get("study_source") or ""),
+            str(payload.get("study_message") or payload.get("message") or ""),
+        )
+        has_sample = bool(getattr(task, "sample_ready", False))
+        if method not in {"source", "sample", "auto"}:
+            from report_writing.chat.clarify_flow import build_study_method_clarify
+
+            session.freeform = {**(session.freeform or {}), "blueprint_wizard": wizard}
+            chapter_label = (
+                f"还没完成的 {len(study_keys)} 章"
+                if analyzed_n > 0 and remain_keys
+                else f"全部 {len(study_keys)} 章"
+            )
+            return build_study_method_clarify(
+                session,
+                chapter_keys=study_keys,
+                chapter_sequences=[],
+                study_message=str(
+                    payload.get("study_message") or payload.get("message") or "开始分析各章要点"
+                ).strip(),
+                study_scope="whole",
+                chapter_label=chapter_label,
+                has_sample=has_sample,
+            )
+        if method == "sample" and not has_sample:
+            method = "auto"
+        if method == "auto":
+            from report_writing.chat.actions import _action_generate_freeform_points
+
+            ff = dict(session.freeform or {})
+            ff.pop("study_source_pending", None)
+            session.freeform = ff
+            if work_id:
+                session.task_id = work_id
+            return _action_generate_freeform_points(
+                home,
+                session,
+                {
+                    "task_id": work_id,
+                    "chapter_keys": study_keys,
+                    "focus_chapter_key": study_keys[0] if study_keys else "",
+                },
+            )
+        if method == "source":
+            study_text = str(payload.get("study_text") or payload.get("text") or "").strip()
+            if not study_text:
+                pending = {
+                    "chapter_keys": study_keys,
+                    "chapter_sequences": [],
+                    "study_scope": "whole",
+                    "study_message": str(
+                        payload.get("study_message") or "开始分析各章要点"
+                    ).strip(),
+                    "chapter_label": (
+                        f"还没完成的 {len(study_keys)} 章"
+                        if analyzed_n > 0 and remain_keys
+                        else f"全部 {len(study_keys)} 章"
+                    ),
+                    "task_id": work_id,
+                    "blueprint_id": blueprint_id,
+                    "working_task_id": work_id,
+                }
+                session.freeform = {
+                    **(session.freeform or {}),
+                    "study_source_pending": pending,
+                    "blueprint_wizard": wizard,
+                }
+                return (
+                    f"好，按原文分析「{pending['chapter_label']}」。"
+                    "请把原文粘贴到下方文本框，再点「开始分析」。",
+                    [
+                        ChatCard(
+                            type="study_source_paste",
+                            title="根据原文内容分析",
+                            payload=pending,
+                        )
+                    ],
+                )
         # 已有学过的章：只触发未学章，避免重进会话/再说「开始学习」把已学内容整模板重跑
+        wizard["study_method"] = method
+        from report_writing.chat.session_runtime import arm_study_kick_this_turn
+
         if analyzed_n > 0 and remain_keys:
             wizard.pop("trigger_begin_study", None)
             wizard["trigger_chapter_study"] = remain_keys
+            arm_study_kick_this_turn(session, wizard)
+            from report_writing.chat.write_chapter_intent import remember_last_study_chapter_keys
+
+            remember_last_study_chapter_keys(session, remain_keys)
             tip = (
                 f"好，接着学还没完成的 {len(remain_keys)} 章（已学 {analyzed_n} 章会保留）。"
                 "章节进度请在右侧文档窗口查看；也可以先说「帮我写已分析的章节」开写。"
-            )
-        elif analyzed_n > 0 and not remain_keys:
-            wizard.pop("trigger_begin_study", None)
-            wizard.pop("trigger_chapter_study", None)
-            tip = (
-                "各章要点其实都齐了。若要整本重分析可以说「重新分析」；"
-                "要开写可以说「帮我写已分析的章节」或点卡片里的开写。"
             )
         else:
             # 用户明确说「开始学习 / 全部学习」才自动开跑；指定章节走 re_study_chapters
             wizard["trigger_begin_study"] = True
             wizard.pop("trigger_chapter_study", None)
+            arm_study_kick_this_turn(session, wizard)
             tip = (
                 "好，那我按当前目录开始学全部章节的写作要点，进度请在右侧文档窗口查看。"
                 "下次要是只想分析一部分，直接说「分析第1到3章」或「只分析概述」就行。"
             )
+        method_hint = "按原文" if method == "source" else "依据样本"
+        tip = f"收到，我先{method_hint}来学。" + tip
         session.freeform = {**(session.freeform or {}), "blueprint_wizard": wizard}
         session.phase = ChatPhase.CREATE_HANDOFF.value
         from report_writing.chat.wizard_state import WIZARD_MODE_SELECTED, _wizard_card_title, is_selected_wizard_mode
@@ -1116,7 +1269,7 @@ def _action_blueprint_wizard(
                     blueprint_id=blueprint_id,
                     step="study",
                     title=_wizard_card_title("study", mode=mode),
-                    extra=wizard,
+                    extra={**wizard, "study_method": method},
                 )
             ],
         )
@@ -1124,9 +1277,8 @@ def _action_blueprint_wizard(
     if wizard_command == "re_study_chapters":
         if not blueprint_id:
             raise ValueError("还没有蓝本")
-        intent_invoke = payload.pop("_intent_invoke", None)
+        clarify_invoke = payload.pop("_clarify_invoke", None)
         from report_writing.chat.helpers import _load_task
-        from report_writing.chat.study_chapter_resolve import resolve_study_chapter_keys
 
         blocked = _prompt_confirm_outline_before_study(
             home, session, blueprint_id, want="分析指定章节"
@@ -1143,53 +1295,73 @@ def _action_blueprint_wizard(
             raise ValueError(f"文档副本不存在：{work_id}")
         keys = [str(k).strip() for k in (payload.get("chapter_keys") or []) if str(k).strip()]
         msg = str(payload.get("study_message") or "").strip()
-        seqs = list(payload.get("chapter_sequences") or [])
+        seqs = [
+            str(s).strip().replace("．", ".")
+            for s in list(payload.get("chapter_sequences") or [])
+            if str(s).strip()
+        ]
         resolved_scope = str(payload.get("study_scope") or "").strip()
-        if not keys:
-            from report_writing.chat.intent_clarify import (
+        # 文档窗勾选：chapter_keys 即要学的章，不再问整章/下属、不用序号扩圈
+        selected_exact = bool(keys) and (
+            resolved_scope == "selected"
+            or str(msg).startswith("已选")
+        )
+        if not selected_exact:
+            from report_writing.chat.clarify_flow import (
                 build_study_scope_clarify,
                 study_scope_needs_clarify,
             )
-            from report_writing.chat.study_chapter_resolve import parse_study_sequences_from_message
-
-            tops = [str(s).strip() for s in seqs if str(s).strip()] or parse_study_sequences_from_message(
-                msg
+            from report_writing.chat.study_chapter_resolve import (
+                STUDY_SCOPES,
+                parse_study_sequences_from_message,
+                resolve_study_chapter_keys,
             )
-            from report_writing.chat.study_chapter_resolve import STUDY_SCOPES
 
+            tops = list(seqs) or parse_study_sequences_from_message(msg)
             if (
                 resolved_scope not in STUDY_SCOPES
-                and intent_invoke is not None
+                and clarify_invoke is not None
                 and study_scope_needs_clarify(task, msg, tops, resolved_scope=resolved_scope)
             ):
-                from report_writing.chat.intent_context import pack_classifier_context
-                from report_writing.chat.intent_llm import classify_study_scope_llm
+                from report_writing.chat.classifier_context import pack_classifier_context
+                from report_writing.chat.clarify_llm import classify_study_scope_llm
 
                 ctx = pack_classifier_context(session)
                 judged = classify_study_scope_llm(
                     msg,
                     dialogue_tail=list(ctx.get("dialogue_tail") or []),
                     focus_document_brief=str(ctx.get("focus_document_brief") or ""),
-                    invoke=intent_invoke,
+                    invoke=clarify_invoke,
                 )
                 if judged in STUDY_SCOPES:
                     resolved_scope = judged
             if resolved_scope in STUDY_SCOPES:
-                from report_writing.chat.intent_clarify import merge_study_message_with_scope
+                from report_writing.chat.clarify_flow import merge_study_message_with_scope
 
                 msg = merge_study_message_with_scope(msg, resolved_scope)
             elif tops and study_scope_needs_clarify(
                 task, msg, tops, resolved_scope=resolved_scope
             ):
                 return build_study_scope_clarify(
-                    session, sequences=tops, study_message=msg or f"分析第{tops[0]}章"
+                    session,
+                    sequences=tops,
+                    study_message=msg or f"分析第{tops[0]}章",
+                    task=task,
                 )
-            keys = resolve_study_chapter_keys(
+            resolved_keys = resolve_study_chapter_keys(
                 task,
                 msg,
-                llm_sequences=seqs,
+                llm_sequences=tops,
                 scope=resolved_scope or "whole",
             )
+            # 工具常带「焦点章 key + 多章序号」：若只信单个 key 会漏掉其余章
+            if not keys:
+                keys = resolved_keys
+            elif resolved_keys and (
+                len(resolved_keys) > len(keys)
+                or (len(tops) > 1 and len(keys) == 1)
+            ):
+                keys = resolved_keys
         if not keys:
             from report_writing.chat.action_slots import build_action_slot_clarify
 
@@ -1228,7 +1400,7 @@ def _action_blueprint_wizard(
         elif keys:
             chapter_label = f"已选 {len(keys)} 章"
         if method not in {"source", "sample", "auto"}:
-            from report_writing.chat.intent_clarify import build_study_method_clarify
+            from report_writing.chat.clarify_flow import build_study_method_clarify
 
             return build_study_method_clarify(
                 session,
@@ -1289,6 +1461,12 @@ def _action_blueprint_wizard(
         wizard["step"] = "study"
         wizard["study_method"] = method
         wizard["trigger_chapter_study"] = keys
+        from report_writing.chat.session_runtime import arm_study_kick_this_turn
+        from report_writing.chat.write_chapter_intent import remember_last_study_chapter_keys
+
+        arm_study_kick_this_turn(session, wizard)
+
+        remember_last_study_chapter_keys(session, keys)
         session.freeform = {**(session.freeform or {}), "blueprint_wizard": wizard}
         session.blueprint_id = blueprint_id
         ff_clear = dict(session.freeform or {})
@@ -1766,11 +1944,12 @@ def open_template_wizard_choose(
 
 def _action_template_wizard(
     session: ChatSession,
-    payload: dict[str, Any],
+    payload: ChatPayload,
 ) -> tuple[str, list[ChatCard]]:
     from report_writing.chat.cards import _template_wizard_card
     from report_writing.chat.session_runtime import workflow_touch_template
 
+    payload = ChatActionPayload.parse(payload)
     resource = str(payload.get("resource") or "").strip()
     step = str(payload.get("step") or "choose").strip()
     item_id = str(payload.get("item_id") or "").strip()

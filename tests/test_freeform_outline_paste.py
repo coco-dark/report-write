@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from report_writing.chat.actions import _collect_freeform_outline, _collect_freeform_points
+from report_writing.chat.actions import _collect_freeform_outline
 from report_writing.chat.freeform_outline import looks_like_outline_directory, normalize_pasted_outline
 from report_writing.controller import confirm_outline, ensure_task, save_outline, save_spec_meta
 from report_writing.domain.models import ChatPhase, ChatSession, OutlineNode
@@ -44,7 +44,11 @@ def test_paste_in_points_phase_goes_to_outline_editor(tmp_path: Path):
 1 述职概述
 2 全年主要工作完成情况
 3 结语"""
-    reply, cards = _collect_freeform_points(tmp_path, session, pasted)
+    from report_writing.chat.freeform_intent import suggest_tool_instead_of_submit_points_freeform
+
+    hit = suggest_tool_instead_of_submit_points_freeform(pasted, session=session, invoke=None)
+    assert hit and hit.get("tool") == "submit_outline"
+    reply, cards = _collect_freeform_outline(tmp_path, session, pasted)
     assert session.phase == ChatPhase.FREEFORM_OUTLINE.value
     preview = next(c for c in cards if c.type == "outline_preview")
     assert preview.payload.get("editable") is True

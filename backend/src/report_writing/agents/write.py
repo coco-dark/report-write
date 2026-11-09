@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
+from typing import Annotated
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage
-from langchain_core.tools import tool
+from langchain.tools import tool
+from pydantic import Field
 
 from report_writing.agents.react import run_react, tool_result
 from report_writing.agents.scripted import ScriptedChatModel, human_payload, tool_payloads
@@ -15,52 +18,88 @@ from report_writing.domain.content_blocks import ensure_html_fragment
 from report_writing.domain.point_items_sync import SUPPLEMENT_TODO_RE, text_needs_supplement
 from report_writing.domain.models import ChapterDraft, ChapterRequirement, EvidenceCard, Paragraph, ParagraphComment
 
-INSTRUCTIONS = """你是报告章节写作员。只写当前章节。
-按 sequence 标出的章节序号组织标题，按 describes 理解本章在写什么，按 generate / points 生成需要的内容。
+_log = logging.getLogger("uvicorn.error")
+_LLM_LOG_CHUNK = 12000
 
-【严禁照搬原文】——全章硬约束（fixed_output=true 除外）：
-- 样板/参考正文（reference_text）以及证据摘录中的成段原文，严禁整段、整句原样照抄进正文。
-- 原文与样板只作「写作特点与格式」参考：语气、句式节奏、段落展开顺序、小标题/条目习惯、表格与图注形态、单位与数值呈现方式。
-- 具体事实（专名、地址、投资额、日期、规模、设备型号、结论表述等）只能来自已采纳证据，并用自己的话按样板写法重写。
-- 禁止把样板项目的实例值写进本章；证据不足时写入 uncovered_points，正文用规范表述或「（待补充）」，不要贴原文凑字。
 
-【最高优先级】aux_prompt（补充/辅助提示词）：
-- 若 payload 中 aux_prompt 非空，它是本章写作的硬约束，优先级高于 describes / points / generate / reference_text / content_blocks / paragraph_format。
-- 必须逐条遵守；与其它字段冲突时，以 aux_prompt 为准。
-- aux_prompt 应是写法/体裁/篇幅等约束，不应当作项目元数据来源；其中若误含工程名、站名、投资额、地址等实例，不得当事实写入正文（事实仍只认已采纳证据）。
-- 例：写「只输出表格」或「仅表格、不要文字」时：paragraphs 只能含完整 <table>…</table>，禁止任何 <p> 导语、结语、解释、标题复述或列表；不要为凑要点而加叙述段。
-- 例：写「不要开头总结」时：不得输出概括性首段。
-- 未写明禁止的内容，仍按下方一般规则与证据写作。
+def _log_write_llm_payload(*, key: str, title: str, instructions: str, user_text: str) -> None:
+    """把送给写作模型的系统提示 + 用户材料打到后台日志，便于核对要素与章节配置。"""
+    sys_text = str(instructions or "")
+    user = str(user_text or "")
+    _log.info(
+        "write-llm chapter=%s title=%s system_chars=%s user_chars=%s",
+        key,
+        title,
+        len(sys_text),
+        len(user),
+    )
+    _log_chunks("write-llm system_prompt", sys_text)
+    _log_chunks("write-llm user_payload", user)
 
-关于 reference_text（参考正文）——只学「怎么写 / 什么格式」，不学「写什么」：
-- 必须重点模仿：描述方式、句式节奏、语气正式度、段落展开顺序、小标题/条目习惯、表格与图注形态、单位与数值的呈现格式。
-- 禁止当作事实来源：不得照搬其中的专名、地址、投资额、日期、规模、结论等具体内容；这些只能来自已采纳证据。
-- 禁止整段、整句抄写参考正文；应用同一套写法，把证据里的事实重新写成本章。
-- 若同时有 content_blocks，版式以 content_blocks 为准，文风仍优先对齐 reference_text；若 aux_prompt 限制了体裁（如仅表格），则只保留被允许的块。
 
-若 fixed_output 为 true：本章为固定内容。必须把 reference_text 忠实整理为 HTML 输出，不得增删改写事实与措辞，不得编造；evidence_ids 一律为空；uncovered_points 为空。可将纯文本拆成多个 <p>，表格保持为完整 <table>。
-按 content_blocks 组织版式：text 用 <p>；table 必须按给出的 rows/cols/headers/merges 写成完整 <table>…</table>（含正确的 rowspan/colspan）；image 只输出占位
-<figure class="image-placeholder"><figcaption>图片占位</figcaption></figure>，不要编造图片地址。
-名称、数值和日期必须来自已采纳证据（fixed_output 除外）；在内部用 evidence_ids 关联证据，正文 HTML 中不要出现 [ev-1] 这类可见标记。
-覆盖不了的要点放入 uncovered_points，不要编造（若 aux_prompt 要求仅表格，未写入表格的要点可放入 uncovered_points，仍不要另写叙述段）。
-如果给了检查意见，只改被点名的段落。
+def _log_chunks(label: str, text: str) -> None:
+    raw = str(text or "")
+    if not raw:
+        _log.info("%s: (empty)", label)
+        return
+    total = max(1, (len(raw) + _LLM_LOG_CHUNK - 1) // _LLM_LOG_CHUNK)
+    for i in range(total):
+        piece = raw[i * _LLM_LOG_CHUNK : (i + 1) * _LLM_LOG_CHUNK]
+        _log.info("%s [%s/%s]\n%s", label, i + 1, total, piece)
 
-输出格式（强制）：
-- paragraphs[].text 一律为 HTML 片段，标签必须开始与结束完整，禁止 Markdown。
-- 纯文字段落用 <p>…</p>；表格用完整 <table><thead>…</thead><tbody>…</tbody></table>。
-- 禁止输出残缺标签、半截表格或未闭合的 p/table/tr/td。
-- 禁止在可见正文中输出 [ev-数字] 引用标记。
-- 禁止在可见正文中写（来源：…）、文件名引用、「资料缺口」小节、【待补：…】；正文只保留书写内容，缺口只进 uncovered_points。
+INSTRUCTIONS = """# Role
+你是资深文档写作专家。文档类型由 payload.doc_category 指定（函件、方案、说明书、纪要、合同、述职、报告等）。未指定时不要默认写成研究报告。称谓、结构、语气须匹配该类型。
 
-用 submit_chapter 提交，参数含 title、paragraphs、uncovered_points。
-paragraphs 每项含 text（HTML）和 evidence_ids。"""
+# Task
+只撰写当前这一章的正式正文。完成后调用工具 submit_chapter 交稿。
+禁止检索，禁止审稿，禁止一次写多章。
 
-_BODY_VISIBILITY = """
-======== 正文可见性硬约束（必须遵守）========
-- 可见正文只写章节内容，禁止出现：（来源：…）、(来源：…)、文件名.docx 引用、「资料缺口」小节标题与列表、【待补：…】。
-- 证据关联只用 paragraphs[].evidence_ids；资料不足项只写入 uncovered_points。
-======== 约束结束 ========
-""".strip()
+# Inputs
+用户消息为 JSON。优先阅读 `writing_materials`（已按标准标签组织的本章材料），再对照同名字段。
+
+| 字段 | 作用 | 用法 |
+| describes | 章节说明 | 约束风格、组成顺序、描述方式、排版、邻章边界。其中「如：…」是通例，不是正文用词。禁止把本段贴进正文。 |
+| points / point_write_plan | 写作要点 | 按顺序逐条覆盖。有 element_value 时写入该块事实。不要把要点原文当小标题。 |
+| element_results | 章节要素 | 配置窗填写的事实来源。原文可能已按本章要点摘录；只使用材料中出现的内容，不要补全未给出的原文。 |
+| content_basis / dialogue_content_basis | 对话内容依据 | 用户在对话里直接说明的原文。与要素同为事实来源；不要据此新建或改写要素槽。 |
+| aux_prompt | 补充提示词 | 仅当用户手填且非空时生效，是写法/体裁硬约束。 |
+| reference_text | 参考正文 | 学写法与版式；fixed 则原文输出。禁止把样板实例当本项目事实。 |
+| content_blocks | 版式块 | 学表头、列名与版式。表格用完整 <table>，文字用 <p>，图片只占位。行名以 describes 与要点为准。 |
+| evidence | 已采纳证据 | 专名、数值、日期、结论的事实来源。嵌进对应组成块，不要单开「资料摘录」节。 |
+| comments / previous | 改稿上下文 | 有则在上一稿上按意见修改。 |
+| sequence | 章号 | 只作章号，不要另起目录。 |
+
+# Priority
+从高到低执行，后者不得推翻前者：
+1. aux_prompt（写法硬约束。其中的工程名、投资额等不当事实）
+2. comments（上一轮检查缺陷必须改掉）
+3. describes + points / point_write_plan
+4. element_value、dialogue_content_basis 与已采纳 evidence（事实）
+5. reference_text 与 content_blocks（写法与版式）
+
+# Strategy
+以 payload.writing_strategy 为准，五种不可混用：source_only / template_fill / hybrid / auto_generate / fixed。细则见随后策略段。
+- fixed：按 reference_text 原文输出，不改写。
+- template_fill：只替换 {{槽}}，骨架不改，缺槽留空。
+- source_only / hybrid：骨架只学写法；事实只来自证据、要素或对话内容依据。
+- auto_generate：对照写法与版式，严禁整段照抄；无证据也要写完整章。
+
+# Constraints
+- 某组成块写不了：放入 uncovered_points，其余块照常写完。aux_prompt 要求仅表格时，未入表要点进 uncovered_points，不要另写叙述段。
+- comments.index≥0 改对应段落；index=-1 按 message 修正全章结构。有 previous 时在上一稿上改，不要跑题重写。
+- 可见正文禁止：[ev-数字]、（来源：…）、文件名引用、「资料缺口」、【待补：…】。证据只用 paragraphs[].evidence_ids。
+- 禁止编造证据中没有的专名、数值、日期（fixed / auto_generate 无证据时除外）。
+
+# Output
+调用 submit_chapter，参数：
+- title: string
+- paragraphs: [{ "text": HTML片段, "evidence_ids": string[] }]
+- uncovered_points: string[]
+
+HTML 规则：
+- 段落用 <p>…</p>；表格用完整 <table><thead>…</thead><tbody>…</tbody></table>。
+- 标签必须开闭完整。禁止 Markdown、半截表格、未闭合标签。
+"""
 
 _CITE = re.compile(r"\[(ev-\d+)\]")
 # （来源：…）或 (来源：…)；允许嵌套较短括号
@@ -95,14 +134,18 @@ class WriteScriptModel(ScriptedChatModel):
 
 
 _FALLBACK_WRITE = """
-======== 知识库无采纳证据（fallback 模式）========
-本章未检索到可采纳证据，但仍须 submit_chapter，且 paragraphs 至少 2 段、不得为空。
-- paragraphs[].evidence_ids 一律留空。
-- 正文须按 points 逐条展开：先总述本章作用，再分条写清应交代的信息类型与叙述结构（可引用规范表述）。
-- 禁止编造具体项目名称、地址、投资额、设备型号数量、批复文号等可核验事实；此类内容在正文中用「（待补充）」占位，并同步写入 uncovered_points。
-- 禁止只提交 title 与 uncovered_points 而无 paragraphs。
-- 文风仍可对齐 reference_text（仅模仿写法与格式，严禁照搬原文句子或样板项目实例）。
-======== fallback 结束 ========
+## Fallback（无已采纳证据）
+仍须调用 submit_chapter，paragraphs 至少 2 段且不得为空。
+- evidence_ids 留空。
+- 按 points 顺序与 describes 格式成文；不要另起提纲，不要把要点句贴进正文。
+- 禁止编造专名、地址、投资额、设备型号、批复文号；缺事实写入 uncovered_points，正文用概括表述，不要写「（待补充）」。
+- 参考正文只模仿写法与格式，禁止照搬样板实例。
+""".strip()
+
+_AUTO_GENERATE_NO_EVIDENCE = """
+## Fallback（auto_generate 且无项目资料）
+必须写出完整章节。按 points 顺序、describes 约束成文。
+禁止整章转人工、只列缺口、「（待补充）」、把要点列表当正文、照抄 reference_text 句子。
 """.strip()
 
 
@@ -117,20 +160,42 @@ def run_write(
     *,
     robot=None,
     knowledge_fallback: bool = False,
+    doc_category: str = "",
 ) -> ChapterDraft:
     adopted = [card for card in evidence if card.adopted]
     if knowledge_fallback:
         adopted = []
     known = {card.id for card in adopted}
+    from report_writing.domain.chapter_compose import (
+        COMPOSE_AUTO_GENERATE,
+        COMPOSE_FIXED,
+        COMPOSE_TEMPLATE_FILL,
+        compose_mode,
+        try_compose_draft,
+    )
+    from report_writing.domain.compose_analysis import reference_usage_hint, write_strategy_block
+
+    composed = try_compose_draft(requirement, adopted)
+    if composed is not None:
+        return composed
     write_points_preview = list(requirement.points or [])
     aux_preview = (getattr(requirement, "aux_prompt", None) or "").strip()
     forbid_supplement_placeholders = not any(
         text_needs_supplement(p) for p in write_points_preview
     ) and ("【建议补充资料】" not in aux_preview)
 
-    @tool
-    def submit_chapter(title: str, paragraphs: list[dict], uncovered_points: list[str]) -> str:
-        """提交本章草稿（HTML）。这是写作阶段的结束动作。"""
+    @tool(
+        "submit_chapter",
+        description=(
+            "何时：本章已写完，提交 HTML 草稿。写作结束动作。"
+            "不要：检索、再调其它工具；证据编号写在 paragraphs[].evidence_ids。"
+        ),
+    )
+    def submit_chapter(
+        title: Annotated[str, Field(description="必填。本章标题。")],
+        paragraphs: Annotated[list[dict], Field(description="必填。每项含 text（HTML）和 evidence_ids。")],
+        uncovered_points: Annotated[list[str], Field(description="可选。覆盖不了的要点，不要编造。")],
+    ) -> str:
         stored = []
         extracted_gaps: list[str] = []
         for index, item in enumerate(paragraphs):
@@ -157,29 +222,72 @@ def run_write(
         for item in (getattr(requirement, "content_blocks", None) or [])
     ]
     fixed_output = bool(getattr(requirement, "fixed_output", False))
-    reference_text = (getattr(requirement, "reference_text", None) or "").strip()[:8000]
+    reference_text = (getattr(requirement, "reference_text", None) or "").strip()
     aux_prompt = aux_preview
     write_points = write_points_preview
+    from report_writing.domain.doc_genre import instructions_with_genre, normalize_doc_category, writer_persona
+    from report_writing.domain.point_items_sync import build_point_write_plan
+    from report_writing.domain.write_materials import (
+        assemble_write_materials,
+        pack_element_rows,
+        pack_evidence_dicts,
+        pack_point_write_plan,
+        queries_for_write,
+        excerpt_by_queries,
+        WRITE_REF_BUDGET,
+    )
+
+    point_write_plan = [] if fixed_output else build_point_write_plan(
+        getattr(requirement, "point_items", None),
+        getattr(requirement, "element_results", None),
+        points=write_points,
+    )
+    doc_cat = normalize_doc_category(doc_category)
+    queries = queries_for_write(requirement, extra=list(write_points or []))
+    packed_elements = pack_element_rows(
+        list(requirement.element_results or []),
+        queries=queries,
+        prefer_ids={
+            str(row.get("element_id") or "").strip()
+            for row in point_write_plan
+            if str(row.get("element_id") or "").strip()
+        },
+    )
+    packed_plan = pack_point_write_plan(point_write_plan, queries=queries, packed_elements=packed_elements)
+    packed_basis = [
+        str(x).strip()
+        for x in (getattr(requirement, "content_basis", None) or [])
+        if str(x).strip()
+    ]
+    ref_for_model, _ = excerpt_by_queries(reference_text, queries, WRITE_REF_BUDGET)
+    writing_materials = assemble_write_materials(
+        requirement,
+        point_write_plan=packed_plan,
+        reference_text=ref_for_model,
+        aux_prompt=aux_prompt,
+        element_results=packed_elements,
+        content_basis=packed_basis,
+    )
     payload = {
+        "doc_category": doc_cat,
+        "writer_role": writer_persona(doc_cat),
         "sequence": requirement.sequence,
         "title": requirement.title,
+        "writing_materials": writing_materials,
         "describes": requirement.describes,
         "generate": requirement.generate,
         "aux_prompt": aux_prompt,
         "aux_prompt_priority": "hard_override" if aux_prompt else "",
         "forbid_supplement_placeholders": forbid_supplement_placeholders,
-        "reference_text": reference_text,
-        "reference_usage": (
-            "fixed_copy"
-            if fixed_output
-            else (
-                "style_format_only：高权重模仿描述方式、写作特点与格式；禁止采用其中的事实内容"
-                if reference_text
-                else ""
-            )
+        "reference_text": ref_for_model,
+        "writing_strategy": compose_mode(requirement),
+        "reference_usage": reference_usage_hint(
+            compose_mode(requirement), has_reference=bool(reference_text)
         ),
         "fixed_output": fixed_output,
-        "element_results": list(requirement.element_results or []),
+        "element_results": packed_elements,
+        "content_basis": packed_basis,
+        "point_write_plan": packed_plan,
         "points": [] if fixed_output else requirement.points,
         "content_blocks": [] if fixed_output else content_blocks,
         "boundary": requirement.boundary,
@@ -187,7 +295,9 @@ def run_write(
         or "输出完整 HTML：文字用 <p>，表格用完整 <table>，插图位置须原样输出要素给出的 {{img:要素id}} 占位符（可包在 <figure><p>图题</p></figure> 中）。",
         "output_format": "html",
         "prior_summary": prior_summary,
-        "evidence": [] if fixed_output else [card.to_dict() for card in adopted],
+        "evidence": []
+        if fixed_output
+        else pack_evidence_dicts([card.to_dict() for card in adopted], queries=queries),
         "comments": [item.to_dict() for item in comments or []],
         "previous": previous.to_dict() if previous else None,
         "knowledge_fallback": bool(knowledge_fallback),
@@ -196,39 +306,66 @@ def run_write(
     from report_writing.services.robots import resolve_prompt
 
     instructions = resolve_prompt("write", robot, default=INSTRUCTIONS)
-    instructions = f"{instructions}\n\n{_BODY_VISIBILITY}"
-    if knowledge_fallback:
+    instructions = instructions_with_genre(instructions, doc_cat)
+    strategy = compose_mode(requirement)
+    instructions = f"{instructions}\n\n{write_strategy_block(compose=strategy)}"
+    if knowledge_fallback and strategy == COMPOSE_AUTO_GENERATE:
+        instructions = f"{instructions}\n\n{_AUTO_GENERATE_NO_EVIDENCE}"
+    elif knowledge_fallback and strategy not in {COMPOSE_FIXED, COMPOSE_TEMPLATE_FILL}:
         instructions = f"{instructions}\n\n{_FALLBACK_WRITE}"
     if aux_prompt:
         instructions = (
             f"{instructions}\n\n"
-            "======== 本章补充提示词（硬约束，必须遵守）========\n"
-            f"{aux_prompt}\n"
-            "说明：以上仅为写法/体裁约束；严禁把其中的项目元数据或样板实例当事实照搬。"
-            "事实只来自已采纳证据，原文只作格式与文风参考。\n"
-            "======== 以上补充提示词结束 ========"
+            "## Chapter extra_prompt\n"
+            "以下为用户手填的写法硬约束，优先于 describes / points / reference_text。"
+            "其中的项目元数据或样板实例不当事实；事实只来自已采纳证据或要素取值。\n"
+            f"<extra_prompt>\n{aux_prompt}\n</extra_prompt>"
         )
+    if comments:
+        defect_lines = []
+        for item in comments:
+            idx = int(getattr(item, "index", -1) or -1)
+            msg = str(getattr(item, "message", "") or "").strip()
+            if not msg:
+                continue
+            defect_lines.append(
+                f"- 第 {idx + 1} 段：{msg}" if idx >= 0 else f"- 整章：{msg}"
+            )
+        if defect_lines:
+            instructions = (
+                f"{instructions}\n\n"
+                "## Review comments (must fix before submit)\n"
+                + "\n".join(defect_lines[:12])
+            )
     if forbid_supplement_placeholders:
         instructions = (
             f"{instructions}\n\n"
-            "======== 待补充占位禁止 ========\n"
-            "本章写作要点均已配置完毕，无待补资料项。"
-            "可见正文中禁止出现「（待补充：…）」「（待填写）」「待补充：」等占位表述；"
-            "缺具体数值时用要素结果或已采纳证据填写，否则用概括性表述，不要留待补括号。\n"
-            "======== 禁止占位结束 ========"
+            "## Placeholder ban\n"
+            "本章写作要点已配置完毕。可见正文禁止「（待补充：…）」「（待填写）」「待补充：」。"
+            "缺具体数值时用要素结果或已采纳证据填写，否则用概括性表述。"
         )
+    user_text = json.dumps(payload, ensure_ascii=False)
+    _log_write_llm_payload(
+        key=str(requirement.key or ""),
+        title=str(requirement.title or ""),
+        instructions=instructions,
+        user_text=user_text,
+    )
     result = run_react(
         chosen,
         [submit_chapter],
         instructions,
-        json.dumps(payload, ensure_ascii=False),
+        user_text,
         f"write-{requirement.key}",
     )
     draft = ChapterDraft.from_dict(tool_result(result["messages"], "submit_chapter"))
     draft = _sanitize_draft_body(draft, strip_supplement_markers=forbid_supplement_placeholders)
     draft = _apply_aux_output_constraints(draft, aux_prompt)
-    # 模型未产出可见段落时一律落骨架，避免进度里「已跑完」但正文为空。
-    draft = _ensure_fallback_draft_body(requirement, draft, forbid_supplement_placeholders)
+    # 混合策略：模型若只列缺口不交正文，用要点生成可编辑骨架。资料驱动无资料不凑正文。
+    from report_writing.domain.chapter_compose import COMPOSE_SOURCE_ONLY, compose_mode as _cm
+
+    if _cm(requirement) != COMPOSE_SOURCE_ONLY:
+        draft = _ensure_fallback_draft_body(requirement, draft, forbid_supplement_placeholders)
     return draft
 
 
@@ -243,37 +380,45 @@ def _ensure_fallback_draft_body(
         return draft
     title = (requirement.title or draft.title or "本章").strip()
     points = [str(p).strip() for p in (requirement.points or []) if str(p).strip()]
-    describes = (requirement.describes or "").strip()
     paragraphs: list[Paragraph] = []
-    if describes:
+    uncovered = list(draft.uncovered_points or [])
+
+    def _block_label(point: str) -> str:
+        m = re.match(r"【([^】]+)】", point)
+        if m:
+            return m.group(1).strip()
+        head = re.split(r"[；;]", point, 1)[0].strip()
+        return head[:24] if head else "本节"
+
+    def _block_body(point: str) -> str:
+        text = point
+        if forbid_supplement_placeholders:
+            text = SUPPLEMENT_TODO_RE.sub("", text).strip()
+        text = re.sub(r"^【[^】]+】", "", text).strip()
+        text = re.sub(r"版式\s*[:：][^；;]*[；;]?", "", text)
+        text = re.sub(r"须覆盖\s*[:：]", "", text).strip(" ；;。")
+        return text or point
+
+    if not points:
         paragraphs.append(
             Paragraph(
                 index=0,
-                text=ensure_html_fragment(f"<p>{describes}</p>"),
+                text=ensure_html_fragment(f"<p>「{title}」按本章既定结构撰写，具体内容结合项目资料补充。</p>"),
                 evidence_ids=[],
             )
         )
-    intro = (
-        f"<p>本节「{title}」应依据项目立项、可研及设计文件，交代工程组成、建设规模与主要技术方案。"
-        f"当前知识库未检索到可采纳证据，下列内容以报告体例与行业惯例组织，具体参数须据实补充。</p>"
-    )
-    paragraphs.append(Paragraph(index=len(paragraphs), text=ensure_html_fragment(intro), evidence_ids=[]))
-    uncovered = list(draft.uncovered_points or [])
     for point in points[:12]:
-        clean_point = point
-        if forbid_supplement_placeholders:
-            clean_point = SUPPLEMENT_TODO_RE.sub("", point).strip()
+        label = _block_label(point)
+        body = _block_body(point)
+        hint = (
+            "具体参数结合项目资料与关联要素据实填写。"
+            if forbid_supplement_placeholders
+            else "具体名称、数值与规格待项目资料齐备后写入。"
+        )
         paragraphs.append(
             Paragraph(
                 index=len(paragraphs),
-                text=ensure_html_fragment(
-                    f"<p><strong>{clean_point}</strong>：应在本节说明与之相关的工程内容、技术原则及数据来源。"
-                    + (
-                        "具体参数结合项目资料与关联要素填写。</p>"
-                        if forbid_supplement_placeholders
-                        else "具体数值、名称与规格型号等待补充项目资料后填写（待补充）。</p>"
-                    )
-                ),
+                text=ensure_html_fragment(f"<p>{label}方面，{body}。{hint}</p>"),
                 evidence_ids=[],
             )
         )

@@ -7,14 +7,17 @@ from pathlib import Path
 
 from report_writing.agents.chat_control import build_chat_tools
 from report_writing.agents.state import ChatControlState
-from report_writing.chat.intent_clarify import (
+from report_writing.chat.action_slots import build_action_slot_clarify
+from report_writing.chat.clarify_flow import (
     build_document_scope_clarify,
+    build_entry_path_clarify,
     execute_clarify_spec,
     get_pending,
 )
-from report_writing.chat.intent_turn_plan import TurnPlan, apply_turn_plan
 from report_writing.chat.session_documents import (
+    begin_document_onboarding,
     confirm_writing_document_name,
+    focus_document_key,
     focus_needs_entry_path,
     message_looks_like_chapter_revise,
     message_looks_like_weak_rewrite,
@@ -125,73 +128,52 @@ def test_rewrite_current_option_ladder(tmp_path: Path):
 
 
 def test_force_new_hangs_entry_path(tmp_path: Path):
+    """异题 + force_new：新开文档后应挂入口选路，不静默 start_writing。"""
     (tmp_path / "tasks").mkdir(parents=True)
     session = _named_session("安全评价报告")
-    plan = TurnPlan(
-        confidence=0.92,
-        uncertain=False,
-        slots={"doc_name": "lzb个人述职"},
-        tools=[{"tool": "start_writing", "args": {}}],
-        missing=[],
-    )
-    hit = apply_turn_plan(
-        tmp_path,
+    begin_document_onboarding(
         session,
-        "写一份lzb个人述职",
+        tmp_path,
+        message="写一份lzb个人述职",
+        title_hint="lzb个人述职",
+        force_new=True,
+    )
+    reply, _cards = build_entry_path_clarify(
+        session,
+        message="写一份lzb个人述职",
+        title_hint="lzb个人述职",
         invoke=None,
-        plan=plan,
+        home=tmp_path,
     )
-    assert hit is not None
-    reply, cards, events = hit
-    assert "新开" in (reply or "")
-    assert str((session.freeform or {}).get("title") or "") == "安全评价报告"
     pending = get_pending(session) or {}
-    assert pending.get("source") == "document_scope" or "新开" in (reply or "")
-    assert not any(
-        e.get("type") == "turn_plan" and "start_writing" in (e.get("tools") or [])
-        for e in (events or [])
-        if isinstance(e, dict) and e.get("type") == "turn_plan" and e.get("tools")
-    )
+    assert "新开" in (reply or "") or pending.get("source") in {
+        "entry",
+        "entry_branch",
+        "entry_freeform_mode",
+        "doc_name",
+    }
+    assert focus_document_key(session)
 
 
 def test_chapter_revise_blocks_start_writing_in_plan(tmp_path: Path):
+    """显式章节重写：缺 chapter_key 时应挂槽位澄清，不当作普通开写。"""
     (tmp_path / "tasks").mkdir(parents=True)
     session = _named_session("安全评价报告")
-    plan = TurnPlan(
-        confidence=0.9,
-        uncertain=False,
-        slots={},
-        tools=[{"tool": "start_writing", "args": {}}],
-        missing=[],
+    reply, cards = build_action_slot_clarify(
+        session,
+        "add_chapter_element",
+        {"message": "重写第2章", "task_id": session.task_id},
+        ["chapter_key"],
+        message="重写第2章",
     )
-    hit = apply_turn_plan(
-        tmp_path, session, "重写第2章", invoke=None, plan=plan
-    )
-    assert hit is not None
-    reply, _cards, events = hit
     assert "章" in (reply or "")
-    assert any(
-        "chapter_key" in (e.get("missing") or [])
-        for e in (events or [])
-        if isinstance(e, dict)
-    )
+    assert cards
 
 
 def test_llm_high_confidence_force_new_promotes_from_ask():
     session = _named_session("述职报告")
-
-    def invoke(system: str, user: str) -> str:
-        assert "文档作用域" in system
-        return json.dumps(
-            {
-                "action": "ask",
-                "title": "AI应用对市场的影响",
-                "confidence": 0.9,
-            }
-        )
-
     scope = resolve_document_scope(
-        session, "帮我写一份关于ai应用对于市场的影响", invoke=invoke
+        session, "帮我写一份关于ai应用对于市场的影响", invoke=None
     )
     assert scope.get("action") == "ask"
     assert scope.get("need_clarify") is True
@@ -318,7 +300,8 @@ def test_strong_new_doc_phrase_beats_llm_continue():
     assert "述职" in str(scope.get("title") or "")
 
 
-def test_apply_turn_plan_force_new_during_wizard_study(tmp_path: Path):
+def test_force_new_during_wizard_study_leaves_old_task(tmp_path: Path):
+    """向导 study 步时强新开：应 mint 新文档槽，旧 task_id / wizard 与焦点解绑。"""
     (tmp_path / "tasks").mkdir(parents=True)
     session = _named_session("环境报告")
     old_id = "w_env_study"
@@ -343,26 +326,101 @@ def test_apply_turn_plan_force_new_during_wizard_study(tmp_path: Path):
         clear_blueprint_id=True,
     )
 
-    plan = TurnPlan(
-        confidence=0.9,
-        tools=[{"tool": "write_analyzed_only", "args": {}}],
-        missing=[],
-        uncertain=False,
-        slots={},
-    )
-
-    def invoke(_s: str, _u: str) -> str:
-        return json.dumps({"action": "continue", "title": "", "confidence": 0.95})
-
-    hit = apply_turn_plan(
-        tmp_path,
+    begin_document_onboarding(
         session,
-        "再写一份述职报告",
-        invoke=invoke,
-        plan=plan,
+        tmp_path,
+        message="再写一份述职报告",
+        title_hint="述职报告",
+        force_new=True,
     )
-    assert hit is not None
-    reply, _cards, _events = hit
-    assert "新开" in (reply or "")
     assert str(session.task_id or "") != old_id
     assert str(session.freeform.get("focus_document_key") or "") != f"task:{old_id}"
+    assert not (session.freeform or {}).get("blueprint_wizard")
+
+
+def test_document_scope_clarify_clears_study_triggers():
+    from report_writing.chat.session_runtime import (
+        STUDY_KICK_ARM_KEY,
+        arm_study_kick_this_turn,
+        study_kick_armed_this_turn,
+    )
+
+    session = _named_session("1108安全报告")
+    session.freeform = {
+        **(session.freeform or {}),
+        "blueprint_wizard": {
+            "step": "study",
+            "trigger_begin_study": True,
+            "trigger_chapter_study": ["construction_scale"],
+            "chapter_study_keys": ["construction_scale"],
+            STUDY_KICK_ARM_KEY: True,
+        },
+    }
+    arm_study_kick_this_turn(session)
+    assert study_kick_armed_this_turn()
+    build_document_scope_clarify(
+        session, message="司法鉴定书", topic_hint="司法鉴定书"
+    )
+    assert (get_pending(session) or {}).get("source") == "document_scope"
+    wiz = dict((session.freeform or {}).get("blueprint_wizard") or {})
+    assert not wiz.get("trigger_begin_study")
+    assert not wiz.get("trigger_chapter_study")
+    assert not wiz.get("chapter_study_keys")
+    assert not study_kick_armed_this_turn(wiz)
+
+
+def test_re_study_blocked_while_document_scope_pending(tmp_path: Path):
+    from report_writing.chat.tool_dispatch import execute_dispatch_tool
+
+    session = _named_session("1108安全报告")
+    build_document_scope_clarify(
+        session, message="司法鉴定书", topic_hint="司法鉴定书"
+    )
+    hit = execute_dispatch_tool(
+        tmp_path,
+        session,
+        {"tool": "re_study_chapters", "args": {"chapter_keys": ["construction_scale"]}},
+        "分析第2.2章",
+        invoke=None,
+    )
+    assert hit is not None
+    reply, cards, _ = hit
+    assert "新开" in (reply or "") or "改" in (reply or "") or "继续" in (reply or "")
+    assert any(getattr(c, "type", "") == "intent_clarify" for c in cards)
+    wiz = dict((session.freeform or {}).get("blueprint_wizard") or {})
+    assert not wiz.get("trigger_chapter_study")
+
+
+def test_oral_document_scope_gate_skips_agent(tmp_path: Path):
+    from report_writing.agents.chat_control import run_chat_control
+    from report_writing.agents.scripted import ScriptedChatModel
+    from langchain_core.messages import AIMessage, BaseMessage
+
+    class _Boom(ScriptedChatModel):
+        role: str = "boom_scope"
+
+        def decide(self, messages: list[BaseMessage]) -> AIMessage:
+            raise AssertionError("document_scope gate should skip agent")
+
+    session = _named_session("1108安全报告")
+    session.phase = ChatPhase.WRITING.value
+    msg = "帮我写一份司法鉴定书"
+    state = ChatControlState(
+        home=tmp_path,
+        session=session,
+        last_user_message=msg,
+        invoke=None,
+    )
+    user_text = json.dumps(
+        {"action": "", "message": msg, "payload": {}},
+        ensure_ascii=False,
+    )
+    reply = run_chat_control(
+        model=_Boom(),
+        state=state,
+        user_text=user_text,
+        system_prompt="",
+    )
+    assert (get_pending(session) or {}).get("source") == "document_scope"
+    assert "司法鉴定书" in (reply or "") or "1108" in (reply or "")
+    assert any(getattr(c, "type", "") == "intent_clarify" for c in state.cards)

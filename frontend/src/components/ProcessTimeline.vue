@@ -1,16 +1,14 @@
 <template>
-  <el-timeline v-if="steps.length">
-    <el-timeline-item
-      v-for="(item, index) in steps"
-      :key="`${item.key || item.step}-${index}`"
-      :type="item.status === 'done' ? 'success' : item.status === 'running' ? 'warning' : 'info'"
-      :timestamp="statusText(item.status)"
-      placement="top"
-    >
+  <a-timeline v-if="steps.length">
+    <a-timeline-item
+ v-for="(item, index) in steps"
+ :key="`${item.key || item.step}-${index}`"
+ :label="statusText(item.status)"
+ >
       <div class="step-title">
         <strong>{{ stepName(item.step) }}</strong>
         <span v-if="item.title">{{ item.title }}</span>
-        <el-tag v-if="item.chapter" size="small">{{ item.chapter }}</el-tag>
+        <a-tag v-if="item.chapter" size="small">{{ item.chapter }}</a-tag>
       </div>
       <div class="step-body">
         <template v-if="item.step === 'upload'">
@@ -48,8 +46,8 @@
         </p>
         <p v-else-if="item.result?.note">{{ item.result.note }}</p>
       </div>
-    </el-timeline-item>
-  </el-timeline>
+    </a-timeline-item>
+  </a-timeline>
 </template>
 
 <script setup>
@@ -86,7 +84,7 @@ function hideEvidenceMarks(html) {
   align-items: center;
 }
 .step-body {
-  color: var(--el-text-color-regular);
+  color: var(--ay-ink);
   font-size: 13px;
 }
 .draft {
@@ -104,14 +102,14 @@ function hideEvidenceMarks(html) {
 }
 .html-draft :deep(th),
 .html-draft :deep(td) {
-  border: 1px solid var(--el-border-color);
+  border: 1px solid var(--ay-line);
   padding: 4px 8px;
 }
 .html-draft :deep(.image-placeholder) {
   margin: 8px 0;
   padding: 12px;
-  border: 1px dashed var(--el-border-color);
-  color: var(--el-text-color-secondary);
+  border: 1px dashed var(--ay-line);
+  color: var(--ay-muted);
   text-align: center;
 }
 .clip {

@@ -45,55 +45,51 @@
         <div v-show="mode === 'login'" class="form-block">
           <h2>欢迎回来</h2>
           <p class="form-hint">使用账号密码登录系统</p>
-          <el-form label-position="top" size="large" @submit.prevent="submitLogin">
-            <el-form-item label="用户名">
-              <el-input
-                v-model="loginForm.username"
+          <a-form layout="vertical" size="large" @submit.prevent="submitLogin">
+            <a-form-item label="用户名">
+              <a-input
+                v-model:value="loginForm.username"
                 placeholder="3–32 位字母、数字或下划线"
                 autocomplete="username"
               />
-            </el-form-item>
-            <el-form-item label="密码">
-              <el-input
-                v-model="loginForm.password"
-                type="password"
-                show-password
+            </a-form-item>
+            <a-form-item label="密码">
+              <a-input-password
+                v-model:value="loginForm.password"
                 autocomplete="current-password"
                 @keyup.enter="submitLogin"
               />
-            </el-form-item>
-            <el-button type="primary" class="auth-submit" :loading="busy" native-type="submit">登录</el-button>
-          </el-form>
+            </a-form-item>
+            <a-button type="primary" class="auth-submit" :loading="busy" html-type="submit">登录</a-button>
+          </a-form>
         </div>
 
         <div v-show="mode === 'register'" class="form-block">
           <h2>创建账号</h2>
           <p class="form-hint">注册即拥有独立工作区与默认样式</p>
-          <el-form label-position="top" size="large" @submit.prevent="submitRegister">
-            <el-form-item label="用户名">
-              <el-input
-                v-model="regForm.username"
+          <a-form layout="vertical" size="large" @submit.prevent="submitRegister">
+            <a-form-item label="用户名">
+              <a-input
+                v-model:value="regForm.username"
                 placeholder="3–32 位字母、数字或下划线"
                 autocomplete="username"
               />
-            </el-form-item>
-            <el-form-item label="显示名称（可选）">
-              <el-input v-model="regForm.display_name" placeholder="在侧栏与界面中展示" />
-            </el-form-item>
-            <el-form-item label="密码">
-              <el-input v-model="regForm.password" type="password" show-password autocomplete="new-password" />
-            </el-form-item>
-            <el-form-item label="确认密码">
-              <el-input
-                v-model="regForm.password2"
-                type="password"
-                show-password
+            </a-form-item>
+            <a-form-item label="显示名称（可选）">
+              <a-input v-model:value="regForm.display_name" placeholder="在侧栏与界面中展示" />
+            </a-form-item>
+            <a-form-item label="密码">
+              <a-input-password v-model:value="regForm.password" autocomplete="new-password" />
+            </a-form-item>
+            <a-form-item label="确认密码">
+              <a-input-password
+                v-model:value="regForm.password2"
                 autocomplete="new-password"
                 @keyup.enter="submitRegister"
               />
-            </el-form-item>
-            <el-button type="primary" class="auth-submit" :loading="busy" native-type="submit">注册并登录</el-button>
-          </el-form>
+            </a-form-item>
+            <a-button type="primary" class="auth-submit" :loading="busy" html-type="submit">注册并登录</a-button>
+          </a-form>
         </div>
       </section>
     </div>
@@ -102,7 +98,7 @@
 
 <script setup>
 import { reactive, ref, watch } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage } from "../ui.js";
 
 import { request, setAuth } from "../api";
 import { BRAND_NAME, BRAND_TITLE } from "../brand";

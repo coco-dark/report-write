@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from report_writing.chat.intent_dispatch import execute_dispatch_tool
+from report_writing.chat.tool_dispatch import execute_dispatch_tool
 from report_writing.chat.session_documents import (
     focus_document_key,
     set_focus_document_key,
@@ -66,6 +66,38 @@ def test_apply_focus_document_by_key_announces(tmp_path: Path):
     assert focus_document_key(session) == "bp:bpB"
     assert session.messages and "切换" in str(session.messages[-1].text or "")
     assert str(session.messages[-1].document_key or "") == "bp:bpB"
+
+
+def test_oral_switch_to_quarterly_report(tmp_path):
+    session = ChatSession(id="s_qswitch", blueprint_id="", task_id="w_overview")
+    upsert_session_document(
+        session,
+        kind="writing",
+        task_id="w_overview",
+        title="依据样本-概述",
+        clear_blueprint_id=True,
+    )
+    upsert_session_document(
+        session,
+        kind="writing",
+        task_id="w_quarter",
+        title="我的季度报告",
+        clear_blueprint_id=True,
+    )
+    set_focus_document_key(session, "task:w_overview")
+    hit = execute_dispatch_tool(
+        tmp_path,
+        session,
+        {"tool": "focus_document", "args": {"document_title": "我的季度报告"}},
+        "切换到我的季度报告",
+        emit=None,
+        invoke=None,
+    )
+    assert hit is not None
+    reply, _cards, events = hit
+    assert focus_document_key(session) == "task:w_quarter"
+    assert "季度" in (reply or "")
+    assert any(e.get("type") == "focus_document" for e in events)
 
 
 def test_new_write_message_does_not_switch_to_old_doc(tmp_path):

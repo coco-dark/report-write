@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from report_writing.domain.models import ChatPhase, ChatSession
+from report_writing.domain.models import ChatActionPayload, ChatPayload, ChatPhase, ChatSession
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -197,6 +197,12 @@ def should_update_title_in_place(
             ):
                 return False
         return True
+    # 「名字改为X / 改名叫X」：同一份文档改展示名，勿另开槽
+    if msg and message_requires_structured_rename_title(msg):
+        if not message_looks_like_new_write_topic(msg) and not message_wants_new_document_strong(
+            msg
+        ):
+            return True
     ob = focus_onboarding(session)
     if not ob.get("name_confirmed"):
         return True
@@ -308,6 +314,11 @@ def should_mint_new_document_slot(
     msg = (message or "").strip()
     if should_update_title_in_place(session, entry_title, wanted, message=msg):
         return False
+    if msg and message_requires_structured_rename_title(msg):
+        if not message_looks_like_new_write_topic(msg) and not message_wants_new_document_strong(
+            msg
+        ):
+            return False
     if msg:
         scope = resolve_document_scope(session, msg, title_hint=wanted)
         if scope.get("force_new") or str(scope.get("action") or "") == "force_new":
@@ -603,6 +614,10 @@ def apply_focused_document_title(
         persist_tid = wid
     elif tid and is_writing_task_id(tid):
         persist_tid = tid
+    if not persist_tid and bid:
+        persist_tid = _writing_copy_id_for_blueprint(session, bid)
+        if persist_tid:
+            wid = persist_tid
     # tid 若是蓝本 id：只更新登记表，不写蓝本 task.json
 
     if home is not None and persist_tid:
@@ -624,6 +639,32 @@ def apply_focused_document_title(
                     pass
         except Exception:
             pass
+
+    focus_key = normalize_document_registry_key(focus or "")
+    if focus_key and focus_key in session_documents_map(session):
+        prev = dict(session_documents_map(session).get(focus_key) or {})
+        prev_kind = str(prev.get("kind") or kind or "").strip()
+        if focus_key.startswith("bp:") or focus_key.startswith("doc:"):
+            prev_kind = prev_kind or "blueprint"
+        use_tid = persist_tid or str(prev.get("task_id") or tid or "").strip()
+        use_bid = str(prev.get("blueprint_id") or bid or "").strip()
+        use_wid = wid or persist_tid or str(prev.get("writing_task_id") or "").strip()
+        k = prev_kind if prev_kind in {"outline", "writing", "task", "blueprint"} else (
+            "blueprint" if use_bid and (not use_tid or use_tid == use_bid or is_blueprint_task_id(use_tid))
+            else "writing"
+        )
+        upsert_session_document(
+            session,
+            kind=k,
+            task_id=use_tid or use_bid,
+            blueprint_id=use_bid,
+            writing_task_id=use_wid or None,
+            title=name,
+            registry_key=focus_key,
+            clear_blueprint_id=writing_path == "freeform" and not collected,
+        )
+        set_focus_document_key(session, focus_key)
+        return name
 
     if bid and (
         kind == "blueprint"
@@ -1444,7 +1485,7 @@ def onboarding_lane_active(session: ChatSession) -> bool:
     if str(wiz.get("working_task_id") or wiz.get("blueprint_id") or "").strip():
         return True
     try:
-        from report_writing.chat.intent_clarify import get_pending
+        from report_writing.chat.clarify_flow import get_pending
 
         pending = get_pending(session) or {}
         if str(pending.get("source") or "") in {
@@ -1833,8 +1874,12 @@ def user_wants_existing_blueprint_match(
     bound = str(getattr(session, "blueprint_id", "") or "").strip() if session else ""
     if bound and "使用" in compact and message_looks_like_new_write_topic(msg):
         return True
+    if session is not None and (
+        is_writing_document_named(session) or focus_has_active_writing_context(session)
+    ):
+        return False
     try:
-        from report_writing.chat.intent_clarify import _clear_entry_tool_from_message
+        from report_writing.chat.clarify_flow import _clear_entry_tool_from_message
 
         if _clear_entry_tool_from_message(msg, session=session, invoke=invoke) == "match_blueprints":
             return True
@@ -1871,7 +1916,7 @@ def append_doc_name_clarify_if_needed(
             hint = extra
         return hint.strip(), merged
 
-    from report_writing.chat.intent_clarify import build_document_name_clarify
+    from report_writing.chat.clarify_flow import build_document_name_clarify
 
     pending = peek_pending_entry(session)
     tip = str(pending.get("title") or (session.freeform or {}).get("title") or "").strip()
@@ -1914,17 +1959,13 @@ def preferred_entry_path_resolved(session: ChatSession, message: str = "", *, in
     if not msg:
         return ""
     try:
-        from report_writing.chat.freeform_outline import wants_generate_outline
+        from report_writing.chat.freeform_intent import utterance_mentions_generate_outline
 
         pending = peek_pending_entry(session)
         original = str(pending.get("message") or "").strip() or msg
         branch = str(ob.get("entry_branch") or "").strip()
-        gen_msg = wants_generate_outline(
-            msg, invoke=invoke, phase=str(session.phase or ""), session=session
-        )
-        gen_orig = wants_generate_outline(
-            original, invoke=invoke, phase=str(session.phase or ""), session=session
-        )
+        gen_msg = utterance_mentions_generate_outline(msg)
+        gen_orig = utterance_mentions_generate_outline(original)
         if gen_msg or gen_orig:
             # 已选无蓝本 → 生成目录即 freeform（可跳过模版/自动二选一）
             if branch == "without_blueprint":
@@ -1941,13 +1982,7 @@ def preferred_entry_path_resolved(session: ChatSession, message: str = "", *, in
                 or quick_title_from_write_message(msg)
             )
             if (named_in_orig and gen_orig) or (named_in_msg and gen_msg):
-                from report_writing.chat.freeform_intent import lexical_freeform_intent
-
-                if lexical_freeform_intent(msg) == "generate_outline" or (
-                    original != msg
-                    and lexical_freeform_intent(original) == "generate_outline"
-                ):
-                    return "freeform"
+                return "freeform"
         try:
             from report_writing.chat.freeform_outline import outline_top_chapter_count
 
@@ -1960,7 +1995,7 @@ def preferred_entry_path_resolved(session: ChatSession, message: str = "", *, in
         pass
     if invoke is not None:
         try:
-            from report_writing.chat.intent_clarify import entry_path_from_routing_message
+            from report_writing.chat.clarify_flow import entry_path_from_routing_message
 
             ep = entry_path_from_routing_message(msg, session=session, invoke=invoke)
             if ep in _ENTRY_PATH_VALUES:
@@ -2002,11 +2037,9 @@ def observe_new_document_gaps(
 
     residual_intents: list[str] = []
     try:
-        from report_writing.chat.freeform_outline import wants_generate_outline
+        from report_writing.chat.freeform_intent import utterance_mentions_generate_outline
 
-        if msg and wants_generate_outline(
-            msg, invoke=invoke, phase=str(session.phase or ""), session=session
-        ):
+        if msg and utterance_mentions_generate_outline(msg):
             residual_intents.append("generate_outline")
     except Exception:
         pass
@@ -2051,6 +2084,8 @@ def suggest_next_tools_from_gaps(
         base_args["title_hint"] = tip
         base_args["title"] = tip
     ep = str(gaps.get("declared_entry_path") or "").strip()
+    if not ep and session is not None:
+        ep = str(focus_onboarding(session).get("entry_path") or "").strip()
     bp_bound = session is not None and session_blueprint_already_selected(session)
 
     if message_wants_own_template(msg):
@@ -2101,12 +2136,19 @@ def suggest_next_tools_from_gaps(
                 return tools
             if str(ob.get("entry_path") or "").strip() != "freeform":
                 return tools
-        tools.append({"tool": "skip_blueprint", "args": dict(base_args)})
-        # auto_outline 槽位本身即「自动生成大纲」意图，勿等标题句再命中 generate_outline
+        skip_args = dict(base_args)
         want_gen = (
             str(gaps.get("declared_freeform_mode") or "").strip() == "auto_outline"
             or "generate_outline" in list(gaps.get("residual_intents") or [])
+            or (
+                session is not None
+                and str(focus_onboarding(session).get("freeform_mode") or "").strip()
+                == "auto_outline"
+            )
         )
+        if want_gen:
+            skip_args["path_setup_only"] = True
+        tools.append({"tool": "skip_blueprint", "args": skip_args})
         if want_gen:
             tools.append(
                 {
@@ -2155,10 +2197,7 @@ def prepare_observed_onboarding(
             if path_ep == "template" and message_wants_own_template(msg):
                 mark_focus_entry_path(session, "template")
             elif path_ep == "freeform":
-                from report_writing.chat.freeform_intent import lexical_freeform_intent
-
-                if lexical_freeform_intent(msg) == "generate_outline":
-                    mark_focus_entry_path(session, "freeform")
+                mark_focus_entry_path(session, "freeform")
     elif branch == "with_blueprint":
         path_ep = preferred_entry_path_resolved(session, msg, invoke=invoke) or "match"
         if path_ep:
@@ -2355,6 +2394,89 @@ def begin_document_onboarding(
         except Exception:
             pass
 
+
+def message_wants_current_blueprint_copy(text: str) -> bool:
+    """本句是按「当前这份蓝本」再开一份写作文档。"""
+    compact = (text or "").replace(" ", "")
+    if not compact:
+        return False
+    return any(
+        k in compact
+        for k in (
+            "这个蓝本",
+            "该蓝本",
+            "这份蓝本",
+            "根据这个蓝本",
+            "根据该蓝本",
+            "照这个蓝本",
+            "用这个蓝本",
+            "按这个蓝本",
+            "再根据这个",
+        )
+    )
+
+
+def apply_explicit_new_document_turn(
+    session: ChatSession,
+    home: Path | None,
+    message: str,
+    *,
+    emit=None,
+) -> bool:
+    """已有焦点文档时，用户明确另开/再写一份：立刻 mint 新槽（可同时定名、沿用当前蓝本）。
+
+    不要把「名字叫 X」当成给旧文档改名，也不要只口头确认「是不是两份」。
+    """
+    msg = (message or "").strip()
+    if not msg or home is None:
+        return False
+    if not message_wants_new_document_strong(msg):
+        return False
+    if not is_writing_document_named(session) and not focus_has_active_writing_context(
+        session
+    ):
+        return False
+    prev_bid = str(getattr(session, "blueprint_id", "") or "").strip()
+    prev_tid = str(getattr(session, "task_id", "") or "").strip()
+    prev_key = focus_document_key(session)
+    title = explicit_doc_title_from_message(msg)
+    if not title:
+        title = clean_document_display_title(quick_title_from_write_message(msg))
+    begin_document_onboarding(
+        session,
+        home,
+        message=msg,
+        title_hint=title,
+        force_new=True,
+        emit=emit,
+    )
+    new_tid = str(getattr(session, "task_id", "") or "").strip()
+    if prev_tid and new_tid and new_tid == prev_tid:
+        return False
+    if title:
+        confirm_writing_document_name(session, title, home=home, message=msg)
+    keep_bp = prev_bid and message_wants_current_blueprint_copy(msg)
+    if keep_bp:
+        from report_writing.chat.actions import _action_select_blueprint
+
+        _action_select_blueprint(home, session, {"blueprint_id": prev_bid})
+        if emit:
+            try:
+                nk = focus_document_key(session)
+                emit(
+                    focus_document_event(
+                        session,
+                        nk,
+                        title=title or document_title_for_key(session, nk),
+                    )
+                )
+            except Exception:
+                pass
+    return bool(new_tid and new_tid != prev_tid) or bool(
+        focus_document_key(session) != prev_key
+    )
+
+
 def confirm_writing_document_name(
     session: ChatSession,
     title: str,
@@ -2386,7 +2508,7 @@ def confirm_writing_document_name(
         ):
             return ""
     cat = (category or "").strip()
-    if not apply_to_focus or home is None:
+    if not apply_to_focus:
         ff = dict(session.freeform or {})
         ff["title"] = name
         if cat:
@@ -2464,11 +2586,6 @@ def confirm_writing_document_name(
         pass
     stash_pending_entry(session, message=message or name, title=name)
     mark_focus_name_confirmed(session)
-    if not tid and not bid:
-        return name
-    if entry_title and _titles_conflict(entry_title, name):
-        apply_focused_document_title(session, name, home=home, category=cat)
-        return name
     apply_focused_document_title(session, name, home=home, category=cat)
     return name
 
@@ -2805,7 +2922,7 @@ def _writing_copy_id_for_blueprint(session: ChatSession, blueprint_id: str) -> s
 
 def resolve_task_id(
     session: ChatSession,
-    payload: dict[str, Any] | None = None,
+    payload: ChatActionPayload | dict[str, Any] | None = None,
     *,
     require: bool = False,
 ) -> str:
@@ -2816,7 +2933,7 @@ def resolve_task_id(
     """
     from report_writing.services.task_ids import is_blueprint_task_id, is_writing_task_id
 
-    body = dict(payload or {})
+    body = ChatActionPayload.parse(payload).as_dict()
     payload_wid = str(body.get("writing_task_id") or "").strip()
     if payload_wid and is_writing_task_id(payload_wid):
         return payload_wid
@@ -2862,9 +2979,9 @@ def resolve_task_id(
 
 def resolve_blueprint_id(
     session: ChatSession,
-    payload: dict[str, Any] | None = None,
+    payload: ChatPayload = None,
 ) -> str:
-    body = dict(payload or {})
+    body = ChatActionPayload.parse(payload).as_dict()
     payload_bid = str(body.get("blueprint_id") or "").strip()
     if payload_bid:
         return payload_bid
@@ -2968,24 +3085,36 @@ def filter_pending_by_task(
             out.append(row)
     return out
 
-def _norm_title(text: str) -> str:
+_TITLE_PUNCT = ("「", "」", "《", "》", '"', "'", " ", "\t", "　", "-", "—", "_", "·")
+_TITLE_GENERIC = ("文档", "蓝本", "报告")
+
+
+def _norm_title(text: str, *, keep_doc_words: bool = False) -> str:
     t = (text or "").strip().casefold()
-    for ch in ("「", "」", "《", "》", '"', "'", " ", "\t", "　", "文档", "蓝本", "报告", "-", "—", "_", "·"):
+    for ch in _TITLE_PUNCT:
         t = t.replace(ch, "")
+    if not keep_doc_words:
+        for ch in _TITLE_GENERIC:
+            t = t.replace(ch, "")
     return t
 
 def _title_match_cores(title: str) -> list[str]:
-    """标题全文 + 去后缀核心（「安全预评价-A」→「安全预评价」），便于口语点名。"""
+    """标题全文 + 去后缀核心（「安全预评价-A」→「安全预评价」），便于口语点名。
+
+    「报告」会另留一档：否则「切换到我的季度报告」对不上标题「我的季度报告」。
+    """
     raw = (title or "").strip()
     cores: list[str] = []
-    full = _norm_title(raw)
-    if full:
-        cores.append(full)
+    for keep in (False, True):
+        full = _norm_title(raw, keep_doc_words=keep)
+        if full and full not in cores:
+            cores.append(full)
     for sep in ("-", "—", "_", "·", "（", "("):
         if sep in raw:
-            head = _norm_title(raw.split(sep, 1)[0])
-            if head and head not in cores:
-                cores.append(head)
+            for keep in (False, True):
+                head = _norm_title(raw.split(sep, 1)[0], keep_doc_words=keep)
+                if head and head not in cores:
+                    cores.append(head)
             break
     return cores
 
@@ -3016,8 +3145,14 @@ def match_session_document(
         return None
     text = (message or "").strip()
     hint = (title_hint or "").strip()
-    norm_msg = _norm_title(text)
-    norm_hint = _norm_title(hint)
+    norm_msgs = (
+        _norm_title(text),
+        _norm_title(text, keep_doc_words=True),
+    )
+    norm_hints = (
+        _norm_title(hint),
+        _norm_title(hint, keep_doc_words=True),
+    )
     best: tuple[int, str, dict[str, Any]] | None = None
     for key, meta in docs.items():
         title = str(meta.get("title") or "").strip()
@@ -3030,14 +3165,14 @@ def match_session_document(
         for nt in cores:
             if len(nt) < 2:
                 continue
-            if norm_hint and (nt in norm_hint or norm_hint in nt):
+            if any(h and (nt in h or h in nt) for h in norm_hints if h):
                 score = max(score, 100 + len(nt))
-            if nt in norm_msg:
+            if any(nt in m for m in norm_msgs if m):
                 score = max(score, 80 + len(nt))
             # 「那份安全预评价」类：标题前缀弱匹配
             if score < 40 and len(nt) >= 4:
                 prefix = nt[: min(6, len(nt))]
-                if prefix and prefix in norm_msg:
+                if prefix and any(prefix in m for m in norm_msgs if m):
                     score = max(score, 40 + len(prefix))
         if score <= 0:
             continue
@@ -3105,7 +3240,7 @@ def focus_bound_blueprint_id(session: ChatSession) -> str:
         meta.get("writing_task_id") or meta.get("task_id") or session.task_id or ""
     ).strip()
     try:
-        from report_writing.chat.intent_router import active_blueprint_wizard
+        from report_writing.chat.session_state import active_blueprint_wizard
 
         wiz = dict(active_blueprint_wizard(session) or {})
     except Exception:
@@ -3294,7 +3429,7 @@ def rebind_session_to_focus_document(
     session: ChatSession, home: Path | None = None
 ) -> None:
     """切焦点/切文档 tab：对齐 writing_path、题目、goal，避免线路与向导串台。"""
-    from report_writing.chat.intent_router import (
+    from report_writing.chat.session_state import (
         WRITING_PATH_BLUEPRINT,
         WRITING_PATH_FREEFORM,
         lock_writing_path,
@@ -3603,12 +3738,12 @@ def apply_matched_document_to_session(
 def enrich_payload_with_message_document(
     session: ChatSession,
     message: str,
-    payload: dict[str, Any] | None = None,
+    payload: ChatPayload = None,
     *,
     switch_focus: bool = True,
 ) -> dict[str, Any]:
     """若用户话点名了登记表中的文档，写入 task_id/blueprint_id；可切换焦点。"""
-    body = dict(payload or {})
+    body = ChatActionPayload.parse(payload).as_dict()
     if str(body.get("task_id") or "").strip() or str(body.get("blueprint_id") or "").strip():
         return body
     hint = str(
@@ -3694,10 +3829,11 @@ _STRONG_NEW_DOC_HINTS = (
     "另外一份",
     "重写一份",
     "重新写一份",
-    "重写帮我写",
-    "重新帮我写",
+    "重写帮我写一份",
+    "重新帮我写一份",
+    "重新帮我写一篇",
     "从头写一份",
-    "从头帮我写",
+    "从头帮我写一份",
     "重新开写",
     "重开一份",
     "再开一个文档",
@@ -3705,6 +3841,10 @@ _STRONG_NEW_DOC_HINTS = (
     "新开一个文档",
     "新写一份",
     "新写一个",
+    "一份新的",
+    "写一份新的",
+    "帮我写一份新",
+    "再写一份新",
 )
 
 # 弱「重写」：已定名焦点上禁止静默 continue，应追问新开/整份重写当前/继续
@@ -3723,9 +3863,6 @@ _WEAK_REWRITE_HINTS = (
 _CHAPTER_REVISE_HINT = re.compile(
     r"(第\s*[\d一二三四五六七八九十百千零〇两\.．\-]+?\s*章|本章|这一章|这一节|该章)"
 )
-
-# LLM force_new / continue 直办置信门槛（与 TurnPlan HIGH_CONFIDENCE 对齐）
-SCOPE_HIGH_CONFIDENCE = 0.72
 
 _LIST_BLUEPRINTS_MESSAGE_RE = re.compile(
     r"^(看看)?(有哪些|有什么|列出|显示|展示).{0,10}蓝本",
@@ -3814,10 +3951,24 @@ def message_skips_onboarding_hang(text: str) -> bool:
     return False
 
 
+def message_targets_current_chapter(text: str) -> bool:
+    """本句是写/重写当前章，不是另开一份文档。"""
+    compact = (text or "").replace(" ", "")
+    if not compact:
+        return False
+    if not _CHAPTER_REVISE_HINT.search(compact):
+        return False
+    if any(x in compact for x in ("一份", "一篇", "一个文档")):
+        return False
+    return True
+
+
 def message_wants_new_document_strong(text: str) -> bool:
     """无 invoke 时的窄兜底。有模型时请用 resolve_document_scope(..., invoke=)。"""
     t = (text or "").strip()
     if not t:
+        return False
+    if message_targets_current_chapter(t):
         return False
     return any(h in t for h in _STRONG_NEW_DOC_HINTS)
 
@@ -3827,12 +3978,13 @@ def message_looks_like_chapter_revise(text: str) -> bool:
     t = (text or "").strip()
     if not t:
         return False
-    if message_wants_new_document_strong(t):
+    if not message_targets_current_chapter(t):
         return False
     compact = t.replace(" ", "")
-    if not _CHAPTER_REVISE_HINT.search(compact):
-        return False
-    return any(k in compact for k in ("重写", "退回", "改写", "重试", "再写"))
+    return any(
+        k in compact
+        for k in ("重写", "重新写", "重新帮我写", "退回", "改写", "重试", "再写", "写本章")
+    )
 
 
 def message_looks_like_weak_rewrite(text: str) -> bool:
@@ -3872,6 +4024,8 @@ def message_looks_like_new_write_topic(message: str) -> bool:
     compact = (message or "").replace(" ", "")
     if not compact:
         return False
+    if message_targets_current_chapter(compact):
+        return False
     return any(
         k in compact
         for k in ("写一份", "写个", "写份", "帮我写", "写一篇", "想写", "帮我生成一份")
@@ -3902,18 +4056,23 @@ def message_confirms_write_document_intent(
         return True
     if message_wants_new_document_strong(msg):
         return True
+    # 纯改名（名字改为 / 改名叫…）不是新开写
+    if message_requires_structured_rename_title(msg) and not message_looks_like_new_write_topic(
+        msg
+    ):
+        return False
     if explicit_doc_title_from_message(msg) and not re.search(
-        r"(改个名字|改名叫|改名为|重命名|标题改)", msg.replace(" ", "")
+        r"(改个名字|改名叫|改名为|重命名|标题改|名字改)", msg.replace(" ", "")
     ):
         return True
-    if message_declares_document_title(msg, ""):
+    if message_declares_document_title(msg, "") and not message_requires_structured_rename_title(
+        msg
+    ):
         return True
     try:
-        from report_writing.chat.freeform_outline import wants_generate_outline
+        from report_writing.chat.freeform_intent import utterance_mentions_generate_outline
 
-        if wants_generate_outline(
-            msg, invoke=invoke, phase=str(getattr(session, "phase", "") or ""), session=session
-        ):
+        if utterance_mentions_generate_outline(msg):
             return True
     except Exception:
         pass
@@ -3951,16 +4110,15 @@ def ensure_write_onboarding_started(
     msg = (message or "").strip()
     if not msg or home is None:
         return False
-    if not message_confirms_write_document_intent(msg, session=session, invoke=invoke):
+    if is_writing_document_named(session) or focus_has_active_writing_context(session):
+        # 已有文档：另开一份由 apply_explicit_new_document_turn / 作用域澄清处理，这里不再打模型、不改名。
         return False
     wiz = dict((session.freeform or {}).get("blueprint_wizard") or {})
     wiz_step = str(wiz.get("step") or "").strip()
     if wiz_step in {"upload", "outline", "outline_confirm", "upload_done", "study"}:
         return False
-    if is_writing_document_named(session) or focus_has_active_writing_context(session):
-        blocked = silent_rename_blocked_topic(session, msg)
-        if blocked:
-            return False
+    if not message_confirms_write_document_intent(msg, session=session, invoke=invoke):
+        return False
     minted = False
     if onboarding_lane_active(session):
         prepare_observed_onboarding(session, home, message=msg, invoke=invoke)
@@ -4042,6 +4200,21 @@ def resolve_write_subject_vs_focus(
     if not msg:
         return {"action": "noop", "topic": "", "reason": "empty_message"}
     explicit = explicit_doc_title_from_message(msg)
+    if message_targets_current_chapter(msg):
+        return {
+            "action": "chapter_revise" if message_looks_like_chapter_revise(msg) else "continue",
+            "topic": "",
+            "reason": "current_chapter_write",
+        }
+    if message_wants_new_document_strong(msg):
+        topic = explicit or tip or clean_document_display_title(
+            quick_title_from_write_message(msg)
+        )
+        return {
+            "action": "force_new",
+            "topic": topic,
+            "reason": "strong_new_document",
+        }
     if explicit:
         return {"action": "rename_ok", "topic": explicit, "reason": "explicit_doc_title"}
     topic = tip or clean_document_display_title(quick_title_from_write_message(msg))
@@ -4110,13 +4283,23 @@ def resolve_document_scope(
 ) -> dict[str, str | bool | float]:
     """判断本句是续写当前 / 新开文档 / 切换已有 / 退回重写本章 / 整份重写当前 / 需追问。
 
-    有 invoke 时走 LLM（说法不固定按意思判）；失败或无模型再退回窄启发式。
+    口语选 Tool 归总控。这里只用窄启发式，不再调文档作用域 LLM。
     返回：force_new / action / title / source / need_clarify / confidence
     action 含：continue | force_new | switch_existing | chapter_revise | rewrite_current | ask
     """
+    del invoke
     msg = (message or "").strip()
     tip = (title_hint or "").strip()
     named = is_writing_document_named(session)
+    if msg and message_targets_current_chapter(msg):
+        return {
+            "force_new": False,
+            "action": "chapter_revise" if message_looks_like_chapter_revise(msg) else "continue",
+            "title": tip or "",
+            "source": "heuristic",
+            "need_clarify": False,
+            "confidence": 0.9,
+        }
     if msg and message_wants_new_document_strong(msg):
         title = (
             tip
@@ -4141,76 +4324,6 @@ def resolve_document_scope(
             "need_clarify": False,
             "confidence": 0.9,
         }
-    if invoke is not None and msg:
-        try:
-            from report_writing.chat.intent_context import pack_classifier_context
-            from report_writing.chat.intent_llm import (
-                classify_document_scope_llm,
-                extract_write_subject_title_llm,
-            )
-
-            ctx = pack_classifier_context(session)
-            judged = classify_document_scope_llm(
-                msg,
-                dialogue_tail=list(ctx.get("dialogue_tail") or []),
-                focus_document_brief=str(ctx.get("focus_document_brief") or ""),
-                session_documents_brief=str(ctx.get("session_documents_brief") or ""),
-                invoke=invoke,
-            ) or {}
-            action = str(judged.get("action") or "").strip()
-            if action:
-                conf = float(judged.get("confidence") or 0)
-                title = str(judged.get("title") or "").strip() or tip
-                if not title and action in {"force_new", "ask", "rewrite_current"}:
-                    title = extract_write_subject_title_llm(msg, invoke=invoke) or tip
-                # 低置信 force_new（且无强提示）→ 追问，避免误新开
-                if (
-                    action == "force_new"
-                    and conf < SCOPE_HIGH_CONFIDENCE
-                    and not message_wants_new_document_strong(msg)
-                ):
-                    action = "ask"
-                # 低置信 continue + 弱重写/明显异题新写 → 追问
-                active = focus_has_active_writing_context(session)
-                if action == "continue" and (named or active) and conf < SCOPE_HIGH_CONFIDENCE:
-                    if message_looks_like_weak_rewrite(msg) or ambiguous_named_doc_new_topic(
-                        session, msg, title_hint=title
-                    ):
-                        action = "ask"
-                if action == "continue" and active and message_looks_like_new_write_topic(msg):
-                    amb = ambiguous_named_doc_new_topic(session, msg, title_hint=title)
-                    if amb and not message_wants_new_document_strong(msg):
-                        action = "ask"
-                if (
-                    action == "force_new"
-                    and active
-                    and not message_wants_new_document_strong(msg)
-                    and ambiguous_named_doc_new_topic(session, msg, title_hint=title)
-                ):
-                    action = "ask"
-                # 高置信异题新写：LLM 若仍 ask，但启发式已能判定明显不同 → 直办 force_new
-                if action == "ask" and conf >= SCOPE_HIGH_CONFIDENCE:
-                    obvious = ambiguous_named_doc_new_topic(session, msg, title_hint=title)
-                    if (
-                        obvious
-                        and message_looks_like_new_write_topic(msg)
-                        and message_wants_new_document_strong(msg)
-                    ):
-                        action = "force_new"
-                        title = title or obvious
-                        conf = max(conf, SCOPE_HIGH_CONFIDENCE)
-                need = action == "ask"
-                return {
-                    "force_new": action == "force_new",
-                    "action": action,
-                    "title": title,
-                    "source": "llm",
-                    "need_clarify": need,
-                    "confidence": conf,
-                }
-        except Exception:
-            pass
-    # 启发式兜底：仅覆盖极少数固定说法；口语变化依赖上面的 LLM
     if msg and message_looks_like_chapter_revise(msg):
         return {
             "force_new": False,
@@ -4326,11 +4439,21 @@ def message_explicitly_creates_blueprint(
         return is_create_blueprint_intent(t, invoke=invoke, session=session)
     return any(h in t for h in _EXPLICIT_CREATE_BLUEPRINT_HINTS)
 
-def explicit_doc_title_from_message(text: str) -> str:
-    """无模型时的窄兜底：定名「名字叫… / 就叫…」与改名「名字改一下叫做 / 改名叫…」。
 
-    有 invoke 时优先 classify_explicit_doc_name_given_llm；本函数作确定性兜底。
-    「写一份××」题材不算显式文档名。
+_RENAME_NEEDS_TITLE_RE = re.compile(
+    r"(改个名字|改名叫|改名为|重命名|标题改|名字改|文档名改|改一下名)"
+)
+
+
+def message_requires_structured_rename_title(text: str) -> bool:
+    """口语含改名指令但未通过 Tool/args 传 title 时，须追问或要求结构化 title。"""
+    return bool(_RENAME_NEEDS_TITLE_RE.search((text or "").replace(" ", "")))
+
+
+def explicit_doc_title_from_message(text: str) -> str:
+    """定名「名字叫… / 就叫…」与改名「名字改一下叫做 / 改名叫…」结构提取。
+
+    口语起名归总控 set_session_meta；「写一份××」题材不算显式文档名。
     """
     t = (text or "").strip()
     if not t:
@@ -4690,7 +4813,7 @@ def _title_before_action_clause(text: str) -> str:
 
 
 def quick_title_from_write_message(text: str) -> str:
-    """无模型时的窄兜底标题候选。有 invoke 时优先 extract_write_subject_title_llm。"""
+    """写题材句的短标题候选（结构兜底；正式定名归总控 set_session_meta）。"""
     t = (text or "").strip()
     if not t:
         return ""

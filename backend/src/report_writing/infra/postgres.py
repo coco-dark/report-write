@@ -171,6 +171,20 @@ CREATE TABLE IF NOT EXISTS writing_user_llm_config (
     updated_at varchar(32) NOT NULL,
     KEY writing_user_llm_updated_idx (updated_at)
 );
+CREATE TABLE IF NOT EXISTS writing_user (
+    id varchar(64) NOT NULL PRIMARY KEY,
+    username varchar(32) NOT NULL,
+    display_name varchar(128) NOT NULL DEFAULT '',
+    password_hash varchar(256) NOT NULL DEFAULT '',
+    created_at varchar(32) NOT NULL DEFAULT '',
+    updated_at varchar(32) NOT NULL,
+    UNIQUE KEY writing_user_username_idx (username)
+);
+CREATE TABLE IF NOT EXISTS writing_user_token_usage (
+    user_id varchar(64) NOT NULL PRIMARY KEY,
+    document json NOT NULL,
+    updated_at varchar(32) NOT NULL
+);
 """
 
 _STATEMENTS = [statement.strip() for statement in _SCHEMA.split(";") if statement.strip()]

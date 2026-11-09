@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from pathlib import Path
 
-from report_writing.chat.actions import _collect_freeform_outline
-from report_writing.chat.intent_clarify import (
+from report_writing.chat.actions import _action_submit_outline, _collect_freeform_outline
+from report_writing.chat.clarify_flow import (
     build_freeform_next_clarify,
     execute_clarify_spec,
     get_pending,
@@ -74,8 +76,8 @@ def test_rename_with_existing_outline_does_not_ask_generate(tmp_path: Path):
 
 def test_continue_with_existing_outline_confirms(tmp_path: Path):
     session = _session_with_outline(tmp_path)
-    reply, _cards = _collect_freeform_outline(
-        tmp_path, session, "继续", confirm=False, invoke=None
+    reply, _cards = _action_submit_outline(
+        tmp_path, session, {}, "继续", invoke=None
     )
     assert "帮我生成目录" not in reply
     # 确认后应进入要点或可写阶段
@@ -149,7 +151,7 @@ def test_rename_requires_structured_title_not_regex(tmp_path: Path):
 
 def test_dispatch_set_session_meta_needs_structured_title(tmp_path: Path):
     """调度层空 args 不再用改名正则补 title；须由上游传入结构化 title。"""
-    from report_writing.chat.intent_dispatch import execute_dispatch_tool
+    from report_writing.chat.tool_dispatch import execute_dispatch_tool
 
     session = _session_with_outline(tmp_path)
     hit = execute_dispatch_tool(
@@ -216,7 +218,7 @@ def test_session_meta_clarify_accepts_plain_title_followup(tmp_path: Path):
     assert get_pending(session) and get_pending(session)["source"] == "session_meta"
 
     hit = try_handle_pending_message(session, "2026年度个人述职", invoke=None)
-    assert isinstance(hit, dict)
+    assert isinstance(hit, Mapping)
     assert hit.get("slots", {}).get("meta_action") == "apply"
     assert get_pending(session) is None
 

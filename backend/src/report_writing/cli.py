@@ -74,8 +74,18 @@ def main(argv: list[str] | None = None) -> int:
     repair.add_argument("--resync-db", action="store_true", help="修复后按用户重新 sync-data 到 MySQL")
 
     args = parser.parse_args(argv)
+    from report_writing.infra.llm import live_model
+
     if args.command == "run":
-        task = run_task(args.template, args.dataset, args.task, args.cache, args.biz_type, args.force_study)
+        task = run_task(
+            args.template,
+            args.dataset,
+            args.task,
+            args.cache,
+            args.biz_type,
+            args.force_study,
+            model=live_model(),
+        )
         print(_summary(task))
         return 0
     if args.command == "status":
@@ -86,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
         print(_summary(task))
         return 0
     if args.command == "rerun":
-        task = rerun_chapter(args.task, args.template, args.dataset)
+        task = rerun_chapter(args.task, args.template, args.dataset, model=live_model())
         print(_summary(task))
         return 0
     if args.command == "confirm":
@@ -98,6 +108,7 @@ def main(argv: list[str] | None = None) -> int:
             HumanDecision(args.decision),
             args.text,
             args.comment,
+            model=live_model(),
         )
         print(_summary(task))
         return 0
@@ -161,6 +172,8 @@ def _run_serve(args: argparse.Namespace) -> None:
     if reload:
         kwargs["reload"] = True
         kwargs["reload_dirs"] = _serve_reload_dirs()
+        # 前端 build 写进 static/，不要触发热更新把进程打挂
+        kwargs["reload_excludes"] = ["**/static/**", "**/static/*"]
     uvicorn.run("report_writing.api:app", **kwargs)
 
 

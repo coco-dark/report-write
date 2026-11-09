@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from report_writing.chat.blueprint_actions import finish_blueprint_match
-from report_writing.chat.intent_llm import classify_no_match_path_llm
-from report_writing.chat.intent_router import WRITING_PATH_FREEFORM, lock_writing_path, touch_session_plan
+from report_writing.chat.session_state import (
+    WRITING_PATH_FREEFORM,
+    lock_writing_path,
+    touch_session_plan,
+)
 from report_writing.chat.session_goal import merge_session_goal
 from report_writing.chat.write_path_after_match import (
     clear_pending_no_match,
@@ -34,21 +36,30 @@ def test_finish_match_without_results_asks_instead_of_outline(tmp_path: Path):
     assert "49" not in reply
 
 
+def test_no_match_with_template_talk_does_not_auto_start_wizard(tmp_path: Path):
+    session = ChatSession(id="s-tpl")
+    reply, cards = finish_blueprint_match(
+        tmp_path,
+        session,
+        "我有模版写一份环境报告",
+        "",
+        [],
+        invoke=None,
+    )
+    wiz = dict((session.freeform or {}).get("blueprint_wizard") or {})
+    assert not str(wiz.get("step") or "").strip()
+    assert is_awaiting_path_after_no_match(session) or any(
+        getattr(c, "type", "") in {"intent_clarify", "skip_blueprint"} for c in cards
+    )
+    assert "向导" not in (reply or "") or "怎么开始" in (reply or "") or "蓝本" in (reply or "")
+
+
 def test_write_path_help_outline_clears_pending(tmp_path: Path):
     session = ChatSession(id="s2")
     reply_ask_write_path(session, "安全预评价报告")
 
-    def invoke(system: str, user: str) -> str:
-        if "no match" in system.lower() or "接下来怎么走" in system:
-            return json.dumps({"intent": "help_build_outline", "confidence": 0.9})
-        return "{}"
-
     pending = get_pending_no_match_context(session)
     topic = str(pending.get("topic") or "").strip()
-    hit = classify_no_match_path_llm(
-        "没有样板，先帮我起草目录", topic=topic, invoke=invoke
-    )
-    assert hit and hit.get("intent") == "help_build_outline"
     clear_pending_no_match(session)
     from report_writing.chat.actions import _clear_blueprint_wizard_state
 

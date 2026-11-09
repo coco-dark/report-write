@@ -1,5 +1,7 @@
 /** 要素展示文案（对话 / 拓扑 / 关联弹窗共用） */
 
+import { humanLabel } from "./pointItemsSync.js";
+
 export function elementKindLabel(kind) {
   return (
     {
@@ -232,6 +234,32 @@ export function cloneLibraryItemToTaskElement(lib) {
     library_item_id: String(lib?.id || "").trim(),
     kv_pairs: kvPairsFromElement(lib).filter((p) => p.key || p.value),
   };
+}
+
+/** 合并任务要素列表：保序、保留本地已配 file_slots，与文档窗 merge 一致 */
+export function mergeElementNodes(prev, next) {
+  const byId = new Map();
+  for (const el of prev || []) {
+    const id = String(el?.id || "").trim();
+    if (id) byId.set(id, { ...el });
+  }
+  for (const el of next || []) {
+    const id = String(el?.id || "").trim();
+    if (!id) continue;
+    const prevEl = byId.get(id) || {};
+    const merged = { ...prevEl, ...el };
+    const keepName = humanLabel(el?.name, prevEl?.name);
+    if (keepName) merged.name = keepName;
+    else if (humanLabel(prevEl?.name)) merged.name = String(prevEl.name).trim();
+    const prevSlots = Array.isArray(prevEl.file_slots) ? prevEl.file_slots : [];
+    const nextSlots = Array.isArray(el.file_slots) ? el.file_slots : [];
+    const prevHas = prevSlots.some((s) => Number(s?.no) > 0);
+    const nextHas = nextSlots.some((s) => Number(s?.no) > 0);
+    if (prevHas && !nextHas) merged.file_slots = prevSlots.map((s) => ({ ...s }));
+    else if (nextHas) merged.file_slots = nextSlots.map((s) => ({ ...s }));
+    byId.set(id, merged);
+  }
+  return [...byId.values()];
 }
 
 export function materializeNewElements(rows) {

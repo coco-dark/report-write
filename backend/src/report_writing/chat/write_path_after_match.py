@@ -53,30 +53,12 @@ def build_no_match_path_clarify(
 ) -> tuple[str, list[Any]]:
     """无匹配后的入口澄清：两步（有蓝本 / 无蓝本）。"""
     from report_writing.chat.cards import _skip_blueprint_card
-    from report_writing.chat.intent_clarify import begin_clarify, build_entry_branch_clarify
+    from report_writing.chat.clarify_flow import begin_clarify, build_entry_branch_clarify
     from report_writing.domain.models import ChatCard
 
     tip = (topic or message or "").strip()
-    question = ""
-    if invoke is not None:
-        from report_writing.chat.intent_context import pack_classifier_context
-        from report_writing.chat.intent_llm import classify_unclear_intent_llm
-
-        ctx = pack_classifier_context(session)
-        judged = classify_unclear_intent_llm(
-            tip or "库里没有对口蓝本，接下来怎么写？",
-            phase=str(session.phase or "") or str(ctx.get("phase") or ""),
-            blueprint_id="",
-            wizard_step="",
-            dialogue_tail=list(ctx.get("dialogue_tail") or []),
-            focus_document_brief=str(ctx.get("focus_document_brief") or ""),
-            session_documents_brief=str(ctx.get("session_documents_brief") or ""),
-            session_goal_brief=str(ctx.get("session_goal_brief") or ""),
-            invoke=invoke,
-        ) or {}
-        question = str(judged.get("question") or "").strip()
-    if not question:
-        question = _fallback_no_match_question(tip)
+    del invoke
+    question = _fallback_no_match_question(tip)
     reply, cards = build_entry_branch_clarify(
         session,
         message=tip,
@@ -122,7 +104,10 @@ def abandon_active_blueprint_and_ask_path(
 ) -> tuple[str, list[Any]]:
     """解绑当前蓝本、退出向导，询问：另选库内蓝本 / 无蓝本直写 / 重新建蓝本。"""
     from report_writing.chat.actions import _clear_blueprint_wizard_state
-    from report_writing.chat.intent_router import WRITING_PATH_BLUEPRINT, touch_session_plan
+    from report_writing.chat.session_state import (
+        WRITING_PATH_BLUEPRINT,
+        touch_session_plan,
+    )
 
     wizard = dict((session.freeform or {}).get("blueprint_wizard") or {})
     shown = str(wizard.get("title") or "").strip()
@@ -158,7 +143,7 @@ def reply_ask_write_path(
     *,
     invoke: InvokeFn | None = None,
 ) -> tuple[str, list[Any]]:
-    from report_writing.chat.intent_router import touch_session_plan
+    from report_writing.chat.session_state import touch_session_plan
 
     set_pending_no_match(session, message)
     touch_session_plan(session, goal="await_path_after_no_match")

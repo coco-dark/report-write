@@ -135,6 +135,7 @@ def test_retry_already_persisted_ignores_stale_configure_payload(tmp_path: Path)
         ],
     }
     with patch("report_writing.services.pipeline.run_chapters") as run_mock:
+        run_mock.return_value = TaskStore(path).load()
         _reply, cards, _events = _action_retry_chapter(
             home, session, stale_payload
         )

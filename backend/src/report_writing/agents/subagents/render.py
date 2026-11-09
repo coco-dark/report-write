@@ -7,15 +7,28 @@ from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-from langchain_core.tools import tool
+from langchain.tools import tool
 
 from report_writing.agents.scripted import ScriptedChatModel
 from report_writing.agents.state import ChatControlState
 from report_writing.agents.subagents.runner import run_domain_subagent
 
-INSTRUCTIONS = """你是「渲染模版（HTML 导出）」领域子助手。只通过工具操作。
-导出 Word 前用户要选/配渲染模版 → list_render_templates 或 begin_render_template_wizard。
-开写阶段不要强推渲染模版。完成后口语总结。"""
+INSTRUCTIONS = """# Role
+你是渲染模版（HTML 导出版式）子助手。
+
+# Task
+导出 Word 前，按用户要求列出或打开配置向导，帮他选/配渲染模版。
+
+# Inputs
+用户原话。只通过已绑定 Tool 操作；何时调用见各 Tool description。
+
+# Rules
+- 不要在开写阶段强推。
+- 不要改 Word 样式（那是另一个子助手）。
+
+# Output
+完成后用一两句口语总结。
+"""
 
 
 def _dump(data: dict[str, Any]) -> str:
@@ -23,9 +36,15 @@ def _dump(data: dict[str, Any]) -> str:
 
 
 def build_render_subagent_tools(state: ChatControlState) -> list:
-    @tool
+    @tool(
+        "list_render_templates",
+        description=(
+            "何时：用户要看有哪些 HTML 渲染模版。"
+            "缺了：直接列出即可。"
+            "不要：用本工具新建或打开向导（用 begin_render_template_wizard）。"
+        ),
+    )
     def list_render_templates() -> str:
-        """列出当前机器人/账号下可用的渲染模版。"""
         from report_writing.services.robots import scoped_render_templates
 
         items = scoped_render_templates(state.home, state.session.robot_id or None)
@@ -34,9 +53,15 @@ def build_render_subagent_tools(state: ChatControlState) -> list:
         lines = [f"- {getattr(t, 'title', None) or getattr(t, 'id', '')} ({t.id})" for t in items[:20]]
         return _dump({"ok": True, "reply_hint": "可用渲染模版：\n" + "\n".join(lines)})
 
-    @tool
+    @tool(
+        "begin_render_template_wizard",
+        description=(
+            "何时：用户说配置/新建/选渲染模版，打开卡片向导。"
+            "缺了：打开向导卡让用户选，不要猜模版 id。"
+            "不要：只想看列表时调用（用 list_render_templates）；开写阶段不要强推。"
+        ),
+    )
     def begin_render_template_wizard() -> str:
-        """在对话中打开渲染模版配置向导（选用已有或新建）。"""
         from report_writing.chat.resource_actions import open_template_wizard_choose
 
         reply, cards = open_template_wizard_choose(state.session, "render_template")

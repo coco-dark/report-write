@@ -46,7 +46,10 @@ def session_turn_snapshot(session: ChatSession, message: str = "") -> dict[str, 
     freeform = dict(session.freeform or {})
     plan = dict(freeform.get("plan") or {})
     from report_writing.chat.session_goal import get_session_goal, session_goal_brief
-    from report_writing.chat.intent_router import dialogue_recently_skipped_blueprint, user_chose_skip_blueprint
+    from report_writing.chat.session_state import (
+        dialogue_recently_skipped_blueprint,
+        user_chose_skip_blueprint,
+    )
     from report_writing.chat.writing_brief import get_writing_brief
 
     goal = get_session_goal(session)

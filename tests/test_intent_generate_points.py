@@ -1,6 +1,6 @@
 import json
 
-from report_writing.chat.freeform_points import wants_generate_points
+from report_writing.chat.freeform_intent import wants_generate_points
 
 
 def _invoke(system: str, user: str) -> str:

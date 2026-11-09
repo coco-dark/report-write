@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from pathlib import Path
 
 from report_writing.chat.action_slots import ACTION_SLOT_SOURCE, try_resolve_action_slot_message
 from report_writing.chat.collect_element_library import collect_task_elements_to_library
-from report_writing.chat.intent_clarify import (
+from report_writing.chat.clarify_flow import (
     begin_clarify,
     get_pending,
     rehang_last_clarify,
     try_handle_pending_message,
 )
-from report_writing.chat.intent_dispatch import execute_dispatch_tool
+from report_writing.chat.tool_dispatch import execute_dispatch_tool
 from report_writing.chat.materials_pack_gate import apply_materials_pack_choice
 from report_writing.controller import ensure_task
 from report_writing.domain.models import ChatPhase, ChatSession, ElementNode, OutlineNode, OutlineTree, WritingTask
@@ -70,7 +72,7 @@ def test_pace_oral_alias_resolves(tmp_path: Path):
         phase_hint="writing_pace",
     )
     hit = try_handle_pending_message(session, "一章一章来", invoke=None)
-    assert isinstance(hit, dict)
+    assert isinstance(hit, Mapping)
     assert (hit.get("slots") or {}).get("args", {}).get("writing_pace") == "step"
 
 
@@ -119,7 +121,7 @@ def test_materials_rename_free_text_resume(tmp_path: Path):
     assert "旧名" in reply
 
     hit = try_handle_pending_message(session, "项目资料包", invoke=None)
-    assert isinstance(hit, dict)
+    assert isinstance(hit, Mapping)
     assert (hit.get("slots") or {}).get("args", {}).get("name") == "项目资料包"
 
 
@@ -171,7 +173,7 @@ def test_rehang_last_clarify_after_expiry():
         phase_hint="writing_pace",
     )
     # 模拟过期：清 pending，保留 last 快照
-    from report_writing.chat.intent_clarify import clear_pending
+    from report_writing.chat.clarify_flow import clear_pending
 
     clear_pending(session)
     assert get_pending(session) is None
@@ -190,7 +192,7 @@ def test_rehang_last_clarify_after_expiry():
 def test_resolve_intent_clarify_recovers_from_cleared_pending(tmp_path: Path):
     """pending 误清后点选：应从 last 快照恢复执行，而不是报「过期了」再逼点一次。"""
     from report_writing.agents.chat_control import run_ui_action_shortcut
-    from report_writing.chat.intent_clarify import (
+    from report_writing.chat.clarify_flow import (
         build_entry_branch_clarify,
         clear_pending,
     )

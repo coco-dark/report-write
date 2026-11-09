@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from report_writing.domain.models import ChatSession, ElementNode, WritingTask
+from report_writing.domain.models import ChatActionPayload, ChatPayload, ChatSession, ElementNode, WritingTask
 
 def extract_collect_element_name(text: str) -> str:
     """无模型时的窄兜底：常见「把××收入要素库」句式。有 invoke 请用 resolve_collect_element_name。"""
@@ -45,7 +45,7 @@ def resolve_collect_element_name(
         return ""
     if invoke is not None:
         try:
-            from report_writing.chat.intent_llm import extract_collect_element_name_llm
+            from report_writing.chat.clarify_llm import extract_collect_element_name_llm
 
             hit = extract_collect_element_name_llm(
                 text,
@@ -103,8 +103,14 @@ def _chapter_for_element(task: WritingTask | None, element_id: str) -> tuple[str
     eid = (element_id or "").strip()
     if not task or not eid or not getattr(task, "outline", None):
         return "", ""
+    from report_writing.domain.point_items_sync import (
+        element_ids_for_chapter_node,
+        elements_by_id_from_task,
+    )
+
+    by_id = elements_by_id_from_task(task)
     for ch in list(task.outline.chapters or []):
-        ids = [str(x).strip() for x in (getattr(ch, "element_ids", None) or [])]
+        ids = element_ids_for_chapter_node(ch, elements_by_id=by_id)
         if eid in ids:
             title = f"{getattr(ch, 'sequence', '') or ''} {getattr(ch, 'title', '') or ''}".strip()
             return str(getattr(ch, "key", "") or ""), title
@@ -114,7 +120,7 @@ def collect_task_elements_to_library(
     home: Path,
     session: ChatSession,
     message: str,
-    payload: dict[str, Any] | None = None,
+    payload: ChatPayload = None,
     *,
     invoke=None,
 ) -> tuple[str, list[Any]]:
@@ -131,7 +137,7 @@ def collect_task_elements_to_library(
         upsert_library_item,
     )
 
-    body = dict(payload or {})
+    body = ChatActionPayload.parse(payload).as_dict()
     task_id = str(body.get("task_id") or "").strip()
     if not task_id:
         task_id = str(getattr(session, "task_id", "") or "").strip()

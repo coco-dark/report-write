@@ -17,20 +17,21 @@ from report_writing.domain.point_items_sync import (
     writing_text_for_point_row,
 )
 
-_META_SYSTEM = (
-    "你是专业报告写作教练。用户已编辑本章「写作要点」列表，请据此重写章节说明与补充提示词。\n"
-    "只返回 JSON，不要 Markdown：\n"
-    '{"describes":"80～280字本章说明","aux_prompt":"补充提示词"}\n'
-    "规则：\n"
-    "- describes：本章功能、信息结构、写法边界；禁止写具体项目实例（工程名、地址、数值等）。\n"
-    "- aux_prompt：写作硬约束（体裁、篇幅、表格/条目偏好）；须与当前要点一致，可分行概括各条写法。\n"
-    "- 若输入中所有 point_items 的 needs_supplement 均为 false 且无待补 slot，则 aux_prompt 与 describes 中禁止出现「待补充」「【建议补充资料】」。\n"
-    "- 若仍有 needs_supplement 为 true 的要点，可在 aux 开头用「【建议补充资料】」列出对应资料类型。\n"
-    "- aux_prompt 总长不超过 800 字；describes 不超过 500 字。"
-)
+def _fallback_describes(
+    title: str,
+    category: str,
+    parent_title: str,
+    points: list[str],
+    *,
+    compose: str = "",
+    presence: str = "",
+) -> str:
+    from report_writing.domain.compose_analysis import fallback_describes
+    from report_writing.domain.chapter_compose import COMPOSE_HYBRID, normalize_compose
 
-
-def _fallback_describes(title: str, category: str, parent_title: str, points: list[str]) -> str:
+    mode = normalize_compose(compose, presence=presence)
+    if mode != COMPOSE_HYBRID:
+        return fallback_describes(title, points, compose=mode, presence=presence)
     from report_writing.chat.freeform_points import _fallback_describes as _ff
 
     base = _ff(title, category, parent_title=parent_title)
@@ -86,14 +87,21 @@ def derive_chapter_meta_from_points(
     *,
     title: str = "",
     sequence: str = "",
-    category: str = "报告",
+    category: str = "文档",
     parent_title: str = "",
     point_items: list[Any] | None,
+    model=None,
+    compose: str = "",
+    presence: str = "",
+    reference_text: str = "",
 ) -> tuple[str, str]:
-    """返回 (describes, aux_prompt)。无要点时返回空字符串对。"""
+    """返回 (describes, aux_prompt)。aux 恒为空：补充提示词留给用户。"""
+    from report_writing.domain.compose_analysis import meta_system_prompt
+
     items = [x for x in list(point_items or []) if isinstance(x, dict)]
     points = points_from_point_items(items)
-    if not points:
+    reference = str(reference_text or "").strip()
+    if not points and not reference and not str(title or "").strip():
         return "", ""
 
     writing_pts = [
@@ -103,18 +111,21 @@ def derive_chapter_meta_from_points(
     ]
     writing_pts = [t for t in writing_pts if t]
 
-    describes_fb = _fallback_describes(title, category, parent_title, writing_pts or points)
-    aux_fb = _aux_from_points(items)
+    describes_fb = _fallback_describes(
+        title, category, parent_title, writing_pts or points, compose=compose, presence=presence
+    )
 
     try:
-        from report_writing.infra.llm import live_model
+        from report_writing.infra.llm import or_live_model
 
-        model = live_model()
+        model = or_live_model(model)
     except Exception:
         model = None
 
     if model is None:
-        return describes_fb, aux_fb
+        from report_writing.domain.compose_analysis import format_describes_as_points
+
+        return format_describes_as_points(describes_fb), ""
 
     user = json.dumps(
         {
@@ -122,6 +133,9 @@ def derive_chapter_meta_from_points(
             "chapter_sequence": sequence,
             "chapter_title": title,
             "parent_title": parent_title,
+            "compose": compose or "hybrid",
+            "presence": presence or "always",
+            "reference_excerpt": reference[:2500],
             "point_items": [
                 {
                     "text": writing_text_for_point_row(r)
@@ -135,38 +149,43 @@ def derive_chapter_meta_from_points(
         },
         ensure_ascii=False,
     )
+    system = meta_system_prompt(compose=compose, presence=presence, category=category)
     try:
         if hasattr(model, "bind"):
             cold = model.bind(temperature=0.0)
             msg = cold.invoke(
                 [
-                    {"role": "system", "content": _META_SYSTEM},
+                    {"role": "system", "content": system},
                     {"role": "user", "content": user},
                 ]
             )
         else:
             msg = model.invoke(
                 [
-                    {"role": "system", "content": _META_SYSTEM},
+                    {"role": "system", "content": system},
                     {"role": "user", "content": user},
                 ]
             )
         content = getattr(msg, "content", None) or str(msg)
         parsed = _parse_meta_json(str(content))
-        describes = parsed.get("describes") or describes_fb
-        aux = parsed.get("aux_prompt") or aux_fb
-        return describes[:500], aux[:800]
+        from report_writing.domain.compose_analysis import format_describes_as_points
+
+        describes = format_describes_as_points(parsed.get("describes") or describes_fb)
+        return describes, ""
     except Exception:
-        return describes_fb, aux_fb
+        from report_writing.domain.compose_analysis import format_describes_as_points
+
+        return format_describes_as_points(describes_fb), ""
 
 
 def apply_meta_from_points_to_node(
     node: Any,
     *,
-    category: str = "报告",
+    category: str = "文档",
     parent_title: str = "",
+    model=None,
 ) -> bool:
-    """若 node 有可写要点，则重写 describes / aux_prompt。返回是否已更新。"""
+    """若 node 有可写要点，则重写章节说明。补充提示词留给用户，不覆盖。"""
     if bool(getattr(node, "structure_only", False)):
         return False
     items = list(getattr(node, "point_items", None) or [])
@@ -181,7 +200,9 @@ def apply_meta_from_points_to_node(
         category=category,
         parent_title=parent_title,
         point_items=items if items else [{"text": p} for p in points],
+        model=model,
+        compose=str(getattr(node, "compose", "") or ""),
+        presence=str(getattr(node, "presence", "") or ""),
     )
     node.describes = describes
-    node.aux_prompt = aux
     return True

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from report_writing.chat_orchestrator import (
+from report_writing.chat import (
     _apply_chapter_config,
     _progress_and_confirm_cards,
     handle_chat,

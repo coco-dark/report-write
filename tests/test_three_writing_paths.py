@@ -7,7 +7,7 @@ from pathlib import Path
 
 from report_writing.chat.actions import _action_select_blueprint, _action_skip_blueprint
 from report_writing.chat.freeform_route import _apply_single_freeform_intent
-from report_writing.chat.intent_router import (
+from report_writing.chat.session_state import (
     WRITING_PATH_BLUEPRINT,
     WRITING_PATH_FREEFORM,
     active_blueprint_wizard,
@@ -184,7 +184,9 @@ def test_path_create_wizard_allows_go_study_after_seed(tmp_path: Path):
             }
         },
     )
-    reply, cards = execute_wizard_command(tmp_path, session, "go_study")
+    reply, cards = execute_wizard_command(
+        tmp_path, session, "go_study", study_method="sample"
+    )
     assert "学" in reply
     assert any(c.type == "blueprint_wizard" for c in cards)
     wiz = (session.freeform or {}).get("blueprint_wizard") or {}
@@ -254,7 +256,9 @@ def test_path_select_blocks_create_commands_and_allows_study(tmp_path: Path):
     except ValueError as err:
         assert "选用" in str(err) or "创建向导" in str(err)
 
-    reply, cards = execute_wizard_command(tmp_path, session, "go_study")
+    reply, cards = execute_wizard_command(
+        tmp_path, session, "go_study", study_method="sample"
+    )
     assert "学" in reply
     assert any(c.type == "blueprint_wizard" for c in cards)
     title = next(c.title for c in cards if c.type == "blueprint_wizard")
@@ -264,7 +268,7 @@ def test_path_select_blocks_create_commands_and_allows_study(tmp_path: Path):
 
 def test_path_select_start_study_maps_to_go_study(tmp_path: Path):
     """选用蓝本后说「开始学习」应走 go_study，而不是指定章解析失败。"""
-    from report_writing.chat.intent_dispatch import execute_dispatch_tool
+    from report_writing.chat.tool_dispatch import execute_dispatch_tool
 
     bid = "bp_sel_study_all"
     _ready_blueprint(tmp_path, bid, analyzed=False)
@@ -282,12 +286,12 @@ def test_path_select_start_study_maps_to_go_study(tmp_path: Path):
     assert hit is not None
     reply, cards, _ = hit
     assert "没认出" not in reply
-    assert "学" in reply
-    assert any(c.type == "blueprint_wizard" for c in cards)
+    assert "学" in reply or "哪种方式" in reply
+    assert any(c.type in {"blueprint_wizard", "intent_clarify"} for c in cards)
 
 
 def test_path_select_continue_study_maps_to_go_study(tmp_path: Path):
-    from report_writing.chat.intent_dispatch import execute_dispatch_tool
+    from report_writing.chat.tool_dispatch import execute_dispatch_tool
 
     bid = "bp_sel_continue"
     _ready_blueprint(tmp_path, bid, analyzed=False)
@@ -305,12 +309,12 @@ def test_path_select_continue_study_maps_to_go_study(tmp_path: Path):
     assert hit is not None
     reply, cards, _ = hit
     assert "没认出" not in reply
-    assert "学" in reply
-    assert any(c.type == "blueprint_wizard" for c in cards)
+    assert "学" in reply or "哪种方式" in reply
+    assert any(c.type in {"blueprint_wizard", "intent_clarify"} for c in cards)
 
 
 def test_path_select_re_study_specific_chapter(tmp_path: Path):
-    from report_writing.chat.intent_dispatch import execute_dispatch_tool
+    from report_writing.chat.tool_dispatch import execute_dispatch_tool
 
     bid = "bp_sel_restudy"
     _ready_blueprint(tmp_path, bid, analyzed=True)

@@ -21,6 +21,8 @@ from report_writing.controller import (
 )
 from report_writing.domain.models import (
     ChapterStatus,
+    ChatActionPayload,
+    ChatPayload,
     ChatCard,
     ChatMessage,
     ChatPhase,
@@ -29,6 +31,7 @@ from report_writing.domain.models import (
     ChatSession,
     HumanDecision,
     OutlineNode,
+    TaskStatus,
     WritingTask,
 )
 from report_writing.services.robots import (
@@ -90,7 +93,7 @@ def maybe_offer_writing_pace_clarify(
     task_id_hint: str = "",
 ) -> tuple[str, list[ChatCard]] | None:
     """多章且本轮未选定节奏时返回澄清卡片。"""
-    from report_writing.chat.intent_clarify import build_writing_pace_clarify
+    from report_writing.chat.clarify_flow import build_writing_pace_clarify
 
     keys = [str(k).strip() for k in (chapter_keys or []) if str(k).strip()]
     if len(keys) < 2:
@@ -120,6 +123,20 @@ def _pending_write_keys(task: WritingTask) -> list[str]:
     return [key for key in _writing_chapter_keys(task) if _chapter_needs_write(task, key)]
 
 
+def sync_session_phase_from_task(session: ChatSession, task: WritingTask) -> None:
+    """会话 phase 跟任务真实流水线对齐：没有章在写就不要停在「写作中」。"""
+    task.refresh_status()
+    st = task.status.value if hasattr(task.status, "value") else str(task.status)
+    if st == TaskStatus.RUNNING.value:
+        session.phase = ChatPhase.WRITING.value
+    elif st in {TaskStatus.AWAITING_CONFIRM.value, TaskStatus.COMPLETED.value}:
+        session.phase = ChatPhase.CONFIRM_EXPORT.value
+    elif st == TaskStatus.STUDYING.value:
+        session.phase = ChatPhase.CREATE_HANDOFF.value
+    else:
+        session.phase = ChatPhase.READY_TO_WRITE.value
+
+
 def _chapter_write_label(task: WritingTask, key: str) -> str:
     seq = ""
     title = ""
@@ -137,6 +154,56 @@ def _chapter_write_label(task: WritingTask, key: str) -> str:
     return f"{seq} {title}".strip() if seq else title
 
 
+def emit_chat_writing_step(
+    emit: EmitFn | None,
+    event: dict,
+    *,
+    task_id: str = "",
+    chapter_title: str = "",
+) -> dict:
+    """首写 / 重写共用：step 事件 + 会话虚线过程行（检索/写作/检查/要点）。"""
+    from report_writing.chat.helpers import _STEP_LABEL, _emit, _emit_process
+
+    out = dict(event or {})
+    if task_id and not out.get("task_id"):
+        out["task_id"] = task_id
+    title = str(out.get("title") or chapter_title or out.get("chapter") or "").strip()
+    if chapter_title and (not title or title == out.get("chapter") or "_" in title):
+        title = chapter_title
+        out["title"] = title
+    _emit(emit, out)
+    if out.get("type") != "step":
+        return out
+    step = str(out.get("step") or "")
+    status = str(out.get("status") or "")
+    label = _STEP_LABEL.get(step, step or "步骤")
+    status_cn = {"running": "进行中", "done": "完成", "skipped": "跳过", "error": "失败"}.get(
+        status, status
+    )
+    result = out.get("result") if isinstance(out.get("result"), dict) else {}
+    note = str((result or {}).get("note") or "").strip()
+    tip = f"　{label} · {status_cn}" + (f" · {title}" if title else "")
+    if note:
+        tip = f"{tip} {note}"
+    _emit_process(
+        emit,
+        tip,
+        step=step,
+        status=status,
+        chapter=out.get("chapter") or "",
+        task_id=out.get("task_id") or task_id or "",
+    )
+    if step == "search" and status in {"done", "skipped"}:
+        from report_writing.chat.helpers import emit_search_element_lines
+
+        emit_search_element_lines(emit, result or {})
+    if step == "write" and status == "running":
+        from report_writing.chat.helpers import emit_write_points_lines
+
+        emit_write_points_lines(emit, result or {})
+    return out
+
+
 def _run_writing_keys(
     home: Path,
     session: ChatSession,
@@ -144,37 +211,18 @@ def _run_writing_keys(
     keys: list[str],
     *,
     emit: EmitFn | None = None,
+    model=None,
 ) -> tuple[WritingTask, list[dict]]:
     from report_writing.chat.cards import _chapter_progress_row, _progress_and_confirm_cards
-    from report_writing.chat.helpers import WRITING_PACE_STEP, _STEP_LABEL, _emit, _emit_process
+    from report_writing.chat.helpers import WRITING_PACE_STEP, _emit, _emit_process
     events: list[dict] = []
-    all_keys = _writing_chapter_keys(writing)
-    total = len(all_keys) or len(keys)
+    run_keys = [str(k).strip() for k in (keys or []) if str(k).strip()]
+    total = len(run_keys) or 1
 
     def on_event(event: dict) -> None:
-        events.append(event)
-        _emit(emit, event)
-        if event.get("type") != "step":
-            return
-        step = str(event.get("step") or "")
-        status = str(event.get("status") or "")
-        title = str(event.get("title") or event.get("chapter") or "")
-        label = _STEP_LABEL.get(step, step or "步骤")
-        status_cn = {"running": "进行中", "done": "完成", "skipped": "跳过", "error": "失败"}.get(status, status)
-        result = event.get("result") if isinstance(event.get("result"), dict) else {}
-        note = str((result or {}).get("note") or "").strip()
-        tip = f"　{label} · {status_cn}" + (f" · {title}" if title else "")
-        if note:
-            tip = f"{tip} {note}"
-        _emit_process(emit, tip, step=step, status=status, chapter=event.get("chapter") or "")
-        if step == "search" and status in {"done", "skipped"}:
-            from report_writing.chat.helpers import emit_search_element_lines
-
-            emit_search_element_lines(emit, result or {})
-        if step == "write" and status == "running":
-            from report_writing.chat.helpers import emit_write_points_lines
-
-            emit_write_points_lines(emit, result or {})
+        events.append(
+            emit_chat_writing_step(emit, event, task_id=str(getattr(writing, "id", "") or ""))
+        )
 
     from report_writing.services.writing_cancel import is_writing_cancelled
 
@@ -189,8 +237,12 @@ def _run_writing_keys(
             from report_writing.services.doc_outline_cache import invalidate_doc_outline_cache
 
             invalidate_doc_outline_cache(writing.id)
+        from report_writing.chat.writing_brief import attach_dialogue_content_basis
 
-        for key in keys:
+        attach_dialogue_content_basis(session, writing)
+        TaskStore(home / "tasks" / writing.id).save(writing)
+
+        for key in run_keys:
             if is_writing_cancelled(session.id):
                 from report_writing.services.task_chapters import sync_confirmed_chapters
 
@@ -209,7 +261,7 @@ def _run_writing_keys(
                 _emit(emit, paused)
                 _emit_process(emit, "写作已暂停；已确认的章节已写入数据库。")
                 break
-            index = (all_keys.index(key) + 1) if key in all_keys else (keys.index(key) + 1)
+            index = run_keys.index(key) + 1
             label = _chapter_write_label(writing, key)
             start_ev = {
                 "type": "chapter_start",
@@ -221,7 +273,6 @@ def _run_writing_keys(
             }
             events.append(start_ev)
             _emit(emit, start_ev)
-            _emit_process(emit, f"▶ ({index}/{total}) 开始写「{label}」")
 
             from report_writing.chat.writing_supplement_check import (
                 load_registry,
@@ -238,6 +289,8 @@ def _run_writing_keys(
                 chapter_keys=[key],
                 robot_id=session.robot_id or "",
                 on_event=on_event,
+                model=model,
+                force_rerun=True,
             )
             # 兜底：写完仍停在待确认/待人工时，有正文则直接落库为已确认
             try:
@@ -293,6 +346,9 @@ def _run_writing_keys(
                 continue
             row = _chapter_progress_row(writing, chapter_state)
             cards_now = _progress_and_confirm_cards(writing, pace=_session_writing_pace(session))
+            from report_writing.chat.cards import _chapter_draft_text
+
+            draft_html = (_chapter_draft_text(chapter_state) or "").strip()
             done_ev = {
                 "type": "chapter_done",
                 "task_id": writing.id,
@@ -303,22 +359,18 @@ def _run_writing_keys(
                 "status": row.get("status"),
                 "status_label": row.get("status_label"),
                 "has_draft": row.get("has_draft"),
-                "draft_preview": (row.get("draft_preview") or "")[:400],
+                "draft_preview": (row.get("draft_preview") or draft_html)[:1800],
+                "draft_html": draft_html,
                 "cards": [c.to_dict() for c in cards_now],
             }
             events.append(done_ev)
             _emit(emit, done_ev)
-            status_label = row.get("status_label") or row.get("status") or ""
-            preview = (row.get("draft_preview") or "").strip()
-            tip = f"✓ ({index}/{total}) 「{label}」本轮结束 · {status_label}"
-            if preview:
-                tip += f"\n　正文摘要：{preview[:160]}{'…' if len(preview) > 160 else ''}"
-            _emit_process(emit, tip)
 
         done = {"type": "run_done", "task_id": writing.id, "status": str(writing.status)}
         events.append(done)
         _emit(emit, done)
-        _emit_process(emit, "各章已按顺序写完，可在右侧文档窗口查看正文。")
+        if len(run_keys) > 1:
+            _emit_process(emit, "各章已按顺序写完，可在右侧文档窗口查看正文。")
     except Exception as error:
         _log.warning("run_chapters from chat: %s", error)
         err = {"type": "error", "detail": str(error)}
@@ -342,18 +394,18 @@ def _finish_writing_round(
     from report_writing.services.robots import get_robot
 
     robot = get_robot(home, session.robot_id) if session.robot_id else None
+    writing.refresh_status()
     cards = _progress_and_confirm_cards(writing, pace=pace)
-    if writing.status == "completed" or (
+    sync_session_phase_from_task(session, writing)
+    if writing.status == TaskStatus.COMPLETED or (
         writing.chapters and all(c.status in {ChapterStatus.CONFIRMED, ChapterStatus.SKIPPED} for c in writing.chapters)
     ):
-        session.phase = ChatPhase.CONFIRM_EXPORT.value
         cards.extend(export_phase_cards(home, writing.id, robot))
         return "各章都确认好了，可以在输入框上方「下载 Word」导出。", cards, events
 
     awaiting = any(c.status == ChapterStatus.AWAITING_CONFIRM for c in (writing.chapters or []))
     needs_human = any(c.status == ChapterStatus.NEEDS_HUMAN for c in (writing.chapters or []))
     pending_left = len(_pending_write_keys(writing))
-    session.phase = ChatPhase.CONFIRM_EXPORT.value
 
     if pace == WRITING_PACE_STEP:
         if awaiting or needs_human:
@@ -364,7 +416,7 @@ def _finish_writing_round(
                 events,
             )
         if pending_left:
-            return f"本章跑完了。可重试本章，或继续写作（还剩 {pending_left} 章）。", cards, events
+            return f"本章写作完成。可重写本章，或继续写作（还剩 {pending_left} 章）。", cards, events
         return "各章都写过了，可在右侧文档窗口查看正文。", cards, events
 
     if needs_human:
@@ -384,6 +436,7 @@ def _maybe_continue_step_writing(
     *,
     emit: EmitFn | None = None,
     prefix: str = "",
+    model=None,
 ) -> tuple[str, list[ChatCard], list[dict]]:
     """逐步模式下，确认当前章后自动写下一章。"""
     from report_writing.chat.cards import _progress_and_confirm_cards
@@ -410,7 +463,9 @@ def _maybe_continue_step_writing(
 
     session.phase = ChatPhase.WRITING.value
     _emit_process(emit, f"你已确认上一章，开始写下一章「{_chapter_write_label(task, pending[0])}」…")
-    writing, events = _run_writing_keys(home, session, task, pending[:1], emit=emit)
+    writing, events = _run_writing_keys(
+        home, session, task, pending[:1], emit=emit, model=model
+    )
     reply, cards, events = _finish_writing_round(home, session, writing, events, pace=WRITING_PACE_STEP)
     if prefix:
         reply = f"{prefix}{reply}"
@@ -419,9 +474,11 @@ def _maybe_continue_step_writing(
 
 def _resolve_write_chapter_scope(task: WritingTask, selected: list[str]) -> list[str]:
     """校验勾选章并返回应写入 task 的 scope（不改动 outline 树）。"""
+    from report_writing.chat.chapter_resolve import normalize_chapter_key_tokens
     from report_writing.chat.gates import _filter_outline_by_selected_keys
 
-    keys = [str(k).strip() for k in (selected or []) if str(k).strip()]
+    raw = [str(k).strip() for k in (selected or []) if str(k).strip()]
+    keys = normalize_chapter_key_tokens(task, raw) or raw
     if not keys:
         raise ValueError("请先勾选要写的章节")
     if task.outline is None or not list(task.outline.chapters or []):
@@ -456,7 +513,10 @@ def _writing_chapter_keys(task: WritingTask) -> list[str]:
     return [k for k in base if k in scope_set]
 
 
-def _apply_chapter_config(task: WritingTask, chapter_key: str, payload: dict) -> None:
+def _apply_chapter_config(task: WritingTask, chapter_key: str, payload: ChatPayload, *, model=None) -> None:
+    from report_writing.domain.models import ChatActionPayload
+
+    payload = ChatActionPayload.parse(payload)
     from report_writing.chat.helpers import _split_lines
     if task.outline is None:
         raise ValueError("任务没有大纲，无法配置章节")
@@ -464,11 +524,18 @@ def _apply_chapter_config(task: WritingTask, chapter_key: str, payload: dict) ->
     if node is None:
         raise ValueError(f"章节不存在：{chapter_key}")
 
-    before_points = list(getattr(node, "points", None) or [])
-
     if "points" in payload or "points_text" in payload:
         raw_points = payload.get("points", payload.get("points_text"))
-        node.points = _split_lines(raw_points)
+        new_lines = _split_lines(raw_points)
+        mode = str(payload.get("points_mode") or "replace").strip().lower()
+        if mode == "append":
+            from report_writing.domain.point_items_sync import points_for_writing_from_node
+
+            existing = points_for_writing_from_node(node) or [
+                str(p or "").strip() for p in list(node.points or []) if str(p or "").strip()
+            ]
+            new_lines = existing + new_lines
+        node.points = new_lines
     if "point_items" in payload and isinstance(payload.get("point_items"), list):
         from report_writing.domain.point_items_sync import points_from_point_items
 
@@ -478,10 +545,10 @@ def _apply_chapter_config(task: WritingTask, chapter_key: str, payload: dict) ->
     elif "points" in payload or "points_text" in payload:
         from report_writing.domain.point_items_sync import sync_point_items_from_points
 
-        node.point_items = sync_point_items_from_points(
-            list(node.points or []),
-            list(getattr(node, "point_items", None) or []),
-        )
+        # 仅按正文同步 point_items，保留同行已有 element_id；
+        # 禁止用章级 element_ids 按 slot 名自动串挂到要点（章/要点分存）。
+        prev_items = list(getattr(node, "point_items", None) or [])
+        node.point_items = sync_point_items_from_points(list(node.points or []), prev_items)
     if "keywords" in payload or "keywords_text" in payload:
         raw_keywords = payload.get("keywords", payload.get("keywords_text"))
         node.keywords = _split_lines(raw_keywords)
@@ -493,6 +560,26 @@ def _apply_chapter_config(task: WritingTask, chapter_key: str, payload: dict) ->
         node.reference_text = str(payload.get("reference_text") or "").strip()
     if "fixed_output" in payload:
         node.fixed_output = bool(payload.get("fixed_output"))
+    presence_raw = str(payload.get("presence") or "").strip()
+    if presence_raw:
+        node.presence = presence_raw
+    compose_raw = str(payload.get("compose") or "").strip()
+    if compose_raw:
+        node.compose = compose_raw
+    from report_writing.domain.chapter_compose import (
+        apply_compose_fields,
+        compose_mode,
+        uses_slot_reference,
+    )
+    from report_writing.domain.content_blocks import ensure_html_fragment
+
+    apply_compose_fields(node)
+    if uses_slot_reference(compose_mode(node)) and (node.reference_text or "").strip():
+        node.reference_text = ensure_html_fragment(node.reference_text)
+    if payload.get("extracts"):
+        from report_writing.domain.chapter_compose import extracts_from_slots
+
+        node.extracts = extracts_from_slots(payload.get("extracts"))
     if "search_terms_separate" in payload:
         node.search_terms_separate = bool(payload.get("search_terms_separate"))
     if "structure_only" in payload:
@@ -504,13 +591,27 @@ def _apply_chapter_config(task: WritingTask, chapter_key: str, payload: dict) ->
             node.keywords = []
             node.content_blocks = []
             node.fixed_output = False
+            node.presence = "always"
+            node.compose = "hybrid"
             if not (node.describes or "").strip():
                 node.describes = f"目录节点「{node.title or chapter_key}」，正文由子节展开，本章不单独撰写。"
     if "element_ids" in payload:
         raw_ids = payload.get("element_ids") or []
         if isinstance(raw_ids, str):
             raw_ids = _split_lines(raw_ids)
-        node.element_ids = [str(item).strip() for item in raw_ids if str(item).strip()]
+        parsed_ids = [str(item).strip() for item in raw_ids if str(item).strip()]
+        # 空列表不覆盖：切会话后 chapterEdits 未 hydrate 时重试会把已关联冲掉
+        if parsed_ids:
+            existing = [str(x).strip() for x in (node.element_ids or []) if str(x).strip()]
+            existing_set = set(existing)
+            if existing and any(eid not in existing_set for eid in parsed_ids):
+                from report_writing.domain.elements import union_element_ids
+
+                node.element_ids = union_element_ids(existing, parsed_ids)
+            else:
+                node.element_ids = parsed_ids
+        elif bool(payload.get("clear_element_ids")):
+            node.element_ids = []
     if "elements" in payload:
         from report_writing.domain.elements import save_elements
         from report_writing.domain.models import ElementNode
@@ -522,31 +623,80 @@ def _apply_chapter_config(task: WritingTask, chapter_key: str, payload: dict) ->
                 item if isinstance(item, ElementNode) else ElementNode.model_validate(item)
                 for item in raw_elements
             ]
-            save_elements(task, parsed)
+            existing = {
+                str(getattr(el, "id", "") or "").strip(): el
+                for el in list(getattr(task, "element_nodes", None) or [])
+                if str(getattr(el, "id", "") or "").strip()
+            }
+            merged: list = []
+            seen: set[str] = set()
+            for item in parsed:
+                eid = str(getattr(item, "id", "") or "").strip()
+                old = existing.get(eid)
+                if old is not None:
+                    if not list(getattr(item, "file_slots", None) or []) and list(
+                        getattr(old, "file_slots", None) or []
+                    ):
+                        item.file_slots = list(old.file_slots)
+                    if not list(getattr(item, "files", None) or []) and list(
+                        getattr(old, "files", None) or []
+                    ):
+                        item.files = list(old.files)
+                if eid:
+                    seen.add(eid)
+                merged.append(item)
+            for eid, old in existing.items():
+                if eid not in seen:
+                    merged.append(old)
+            save_elements(task, merged)
     if "title" in payload:
         title = str(payload.get("title") or "").strip()
         if title:
             node.title = title
     if "sequence" in payload:
         node.sequence = str(payload.get("sequence") or "").strip()
+    if "parent" in payload or "parent_sequence" in payload:
+        parent_raw = str(payload.get("parent") or payload.get("parent_key") or "").strip()
+        parent_seq = str(payload.get("parent_sequence") or "").strip()
+        parent_node = None
+        if parent_raw or parent_seq:
+            for item in task.outline.chapters:
+                if parent_raw and item.key == parent_raw:
+                    parent_node = item
+                    break
+                if (parent_raw or parent_seq) and str(item.sequence or "").strip() in {
+                    parent_raw,
+                    parent_seq,
+                }:
+                    parent_node = item
+                    break
+        if parent_raw == "" and parent_seq == "":
+            node.parent = ""
+            node.parent_sequence = ""
+        elif parent_node is not None:
+            node.parent = parent_node.key
+            node.parent_sequence = str(parent_node.sequence or "")
+            node.level = int(parent_node.level or 1) + 1
+        else:
+            if parent_raw:
+                node.parent = parent_raw
+            if parent_seq:
+                node.parent_sequence = parent_seq
+    if "level" in payload:
+        try:
+            node.level = max(1, int(payload.get("level") or node.level or 1))
+        except (TypeError, ValueError):
+            pass
+    if "content_blocks" in payload and isinstance(payload.get("content_blocks"), list):
+        from report_writing.domain.models import ContentBlock
 
-    after_points = list(getattr(node, "points", None) or [])
-    points_changed = before_points != after_points
-    if (
-        points_changed
-        and not bool(getattr(node, "structure_only", False))
-        and not payload.get("preserve_chapter_meta")
-    ):
-        parent_title = ""
-        pk = str(getattr(node, "parent", "") or "").strip()
-        if pk and task.outline:
-            parent = next((n for n in task.outline.chapters if n.key == pk), None)
-            if parent is not None:
-                parent_title = str(parent.title or "").strip()
-        from report_writing.domain.chapter_meta_from_points import apply_meta_from_points_to_node
-
-        category = str(getattr(task, "category", "") or "报告").strip() or "报告"
-        apply_meta_from_points_to_node(node, category=category, parent_title=parent_title)
+        blocks = []
+        for item in payload.get("content_blocks") or []:
+            if isinstance(item, ContentBlock):
+                blocks.append(item)
+            elif isinstance(item, dict):
+                blocks.append(ContentBlock.model_validate(item))
+        node.content_blocks = blocks
 
     for ch in task.chapters or []:
         if ch.key == chapter_key:
@@ -576,6 +726,9 @@ def _apply_chapter_config(task: WritingTask, chapter_key: str, payload: dict) ->
             req.reference_text = (node.reference_text or "").strip()
             req.fixed_output = bool(node.fixed_output)
             req.structure_only = bool(node.structure_only)
+            from report_writing.domain.chapter_compose import copy_compose_fields
+
+            copy_compose_fields(req, node)
             req.search_terms_separate = bool(getattr(node, "search_terms_separate", False))
             req.knowledge_folder_ids = []
             from report_writing.domain.point_items_sync import (
@@ -589,8 +742,11 @@ def _apply_chapter_config(task: WritingTask, chapter_key: str, payload: dict) ->
     sync_structure_only_chapter_status(task)
 
 
-def _apply_add_chapter_element(task: WritingTask, chapter_key: str, payload: dict):
+def _apply_add_chapter_element(task: WritingTask, chapter_key: str, payload: ChatPayload):
     """为本章新增要素节点并建立关联（不落库，由调用方 save）。"""
+    from report_writing.domain.models import ChatActionPayload
+
+    payload = ChatActionPayload.parse(payload)
     from report_writing.domain.elements import new_element_id, save_elements, sync_brief_from_outline
     from report_writing.domain.models import ElementNode
 
@@ -683,19 +839,21 @@ def _apply_add_chapter_element(task: WritingTask, chapter_key: str, payload: dic
     merged: dict[str, ElementNode] = {item.id: item for item in (task.element_nodes or []) if item.id}
     merged[element.id] = element
     save_elements(task, list(merged.values()))
-    ids = list(node.element_ids or [])
-    if element.id not in ids:
-        ids.append(element.id)
-    node.element_ids = ids
-    sync_brief_from_outline(task)
-    if task.brief is not None:
-        try:
-            req = task.brief.chapter(chapter_key)
-        except KeyError:
-            req = None
-        if req is not None:
-            req.element_ids = list(node.element_ids or [])
+    # 要点作用域：只挂 point_items，禁止写入章级 element_ids
+    pi_raw = payload.get("point_index")
+    try:
+        point_index = int(pi_raw) if pi_raw is not None else -1
+    except (TypeError, ValueError):
+        point_index = -1
+    scope = str(payload.get("associate_scope") or payload.get("associateScope") or "").strip().lower()
+    point_scoped = point_index >= 0 or scope == "point"
+    if not point_scoped:
+        ids = list(node.element_ids or [])
+        if element.id not in ids:
+            ids.append(element.id)
+        node.element_ids = ids
     _link_new_element_to_chapter_points(task, node, element, payload)
+    sync_brief_from_outline(task)
     return element
 
 
@@ -703,9 +861,12 @@ def _link_new_element_to_chapter_points(
     task: WritingTask,
     node: Any,
     element: Any,
-    payload: dict,
+    payload: ChatPayload,
 ) -> None:
-    """新增要素后：写入章 element_ids 并回写 point_items 行关联。"""
+    """新增要素后：按作用域回写 point_items；章级关联仅在未挂要点时写入 element_ids。"""
+    from report_writing.domain.models import ChatActionPayload
+
+    payload = ChatActionPayload.parse(payload)
     from report_writing.domain.point_items_sync import (
         human_label,
         is_element_id_token,
@@ -723,6 +884,8 @@ def _link_new_element_to_chapter_points(
         point_index = int(pi_raw) if pi_raw is not None else -1
     except (TypeError, ValueError):
         point_index = -1
+    scope = str(payload.get("associate_scope") or payload.get("associateScope") or "").strip().lower()
+    point_scoped = point_index >= 0 or scope == "point"
     slot_hint = human_label(
         payload.get("slot"),
         payload.get("slot_label"),
@@ -741,22 +904,36 @@ def _link_new_element_to_chapter_points(
             row["slot"] = slot_hint
         row["needs_supplement"] = False
         prev_items[point_index] = row
-    elif slot_hint and prev_items:
-        for i, row in enumerate(prev_items):
-            if str(row.get("element_id") or "").strip():
-                continue
-            slot = human_label(row.get("slot"), row.get("element_name")) or str(row.get("text") or "")
-            if is_element_id_token(slot):
-                slot = ""
-            if slot == slot_hint or slot_hint in slot or slot in slot_hint:
-                patched = dict(row)
-                patched["element_id"] = element.id
-                patched["element_name"] = human_label(
-                    getattr(element, "name", ""), slot_hint, patched.get("slot")
-                ) or slot_hint
-                patched["needs_supplement"] = False
-                prev_items[i] = patched
-                break
+    elif prev_items and point_scoped:
+        # 先按 slot/名称对上；对不上也落到首条未关联要点，避免「建了要素却没挂上、写作检索为空」
+        target_idx = -1
+        if slot_hint:
+            for i, row in enumerate(prev_items):
+                if str(row.get("element_id") or "").strip():
+                    continue
+                slot = human_label(row.get("slot"), row.get("element_name")) or str(row.get("text") or "")
+                if is_element_id_token(slot):
+                    slot = ""
+                if slot == slot_hint or slot_hint in slot or slot in slot_hint:
+                    target_idx = i
+                    break
+        if target_idx < 0:
+            target_idx = next(
+                (
+                    i
+                    for i, row in enumerate(prev_items)
+                    if not str(row.get("element_id") or "").strip()
+                ),
+                -1,
+            )
+        if target_idx >= 0:
+            patched = dict(prev_items[target_idx])
+            patched["element_id"] = element.id
+            patched["element_name"] = human_label(
+                getattr(element, "name", ""), slot_hint, patched.get("slot")
+            ) or slot_hint or human_label(getattr(element, "name", ""))
+            patched["needs_supplement"] = False
+            prev_items[target_idx] = patched
     by_id = {item.id: item for item in (task.element_nodes or []) if getattr(item, "id", None)}
     eid = str(getattr(element, "id", "") or "").strip()
     point_linked = point_index >= 0 or any(
@@ -765,7 +942,8 @@ def _link_new_element_to_chapter_points(
     if point_linked:
         node.point_items = prev_items
         node.points = points_from_point_items(prev_items)
-    elif eid:
+    elif eid and not point_scoped:
+        # 仅章级关联才写入 element_ids；要点作用域绝不能落到章上
         ids = [str(x).strip() for x in (node.element_ids or []) if str(x).strip()]
         if eid not in ids:
             node.element_ids = [*ids, eid]
@@ -781,13 +959,20 @@ def _link_new_element_to_chapter_points(
             from report_writing.domain.point_items_sync import element_ids_for_chapter_node
 
             req.points = list(node.points or [])
+            # brief 用写作并集；outline.node.element_ids 仍只保留章级
             req.element_ids = element_ids_for_chapter_node(node, elements_by_id=by_id)
 
 
 def _apply_dissociate_chapter_element(
     task: WritingTask, chapter_key: str, element_id: str
 ) -> str:
-    """取消单章与要素的关联；保留 element_nodes 条目。"""
+    """取消单章与要素的关联（章级 element_ids 或要点 point_items.element_id）；保留要素节点。"""
+    from report_writing.domain.point_items_sync import (
+        parse_slot_from_text,
+        points_from_point_items,
+        text_needs_supplement,
+    )
+
     ck = (chapter_key or "").strip()
     eid = (element_id or "").strip()
     if task.outline is None:
@@ -796,19 +981,54 @@ def _apply_dissociate_chapter_element(
     if node is None:
         raise ValueError(f"章节不存在：{ck}")
     ids = [str(x).strip() for x in (node.element_ids or []) if str(x).strip()]
-    if eid not in ids:
-        raise ValueError("该章未关联此要素")
-    node.element_ids = [x for x in ids if x != eid]
+    cleared_chapter = eid in ids
+    if cleared_chapter:
+        node.element_ids = [x for x in ids if x != eid]
+
+    cleared_points = False
+    items = [dict(row) for row in list(getattr(node, "point_items", None) or []) if isinstance(row, dict)]
+    if items:
+        next_items: list[dict] = []
+        for row in items:
+            if str(row.get("element_id") or "").strip() != eid:
+                next_items.append(row)
+                continue
+            patched = dict(row)
+            patched.pop("element_id", None)
+            patched.pop("element_name", None)
+            text = str(patched.get("text") or "")
+            slot = str(patched.get("slot") or "").strip() or parse_slot_from_text(text)
+            if slot:
+                patched["slot"] = slot
+            if slot or text_needs_supplement(text):
+                patched["needs_supplement"] = True
+            next_items.append(patched)
+            cleared_points = True
+        if cleared_points:
+            node.point_items = next_items
+            node.points = points_from_point_items(next_items)
+
+    label = f"{node.sequence or ''} {node.title or ''}".strip() or ck
+    # 幂等：章级/要点都未挂时也视为已取消（前端乐观关联未落盘、或重复点取消）
+    if not cleared_chapter and not cleared_points:
+        return label
+
     from report_writing.domain.elements import sync_brief_from_outline
+    from report_writing.domain.point_items_sync import element_ids_for_chapter_node
 
     sync_brief_from_outline(task)
     if task.brief is not None:
         try:
             req = task.brief.chapter(ck)
-            req.element_ids = list(node.element_ids or [])
+            by_id = {
+                str(getattr(el, "id", "") or "").strip(): el
+                for el in list(getattr(task, "element_nodes", None) or [])
+                if str(getattr(el, "id", "") or "").strip()
+            }
+            req.element_ids = element_ids_for_chapter_node(node, elements_by_id=by_id)
+            req.points = list(getattr(node, "points", None) or [])
         except KeyError:
             pass
-    label = f"{node.sequence or ''} {node.title or ''}".strip() or ck
     return label
 
 
@@ -861,6 +1081,51 @@ def _prepare_export_word(home: Path, session: ChatSession) -> tuple[str, list[Ch
     return ("可以导出了。请在输入框上方点「下载 Word」。", cards)
 
 
+def writing_status_facts(task: WritingTask | None) -> dict[str, Any]:
+    """给总控的进度事实，不是对用户的口头套话。"""
+    if task is None:
+        return {
+            "inflight": [],
+            "written": 0,
+            "awaiting": 0,
+            "pending": 0,
+            "task_status": "",
+        }
+
+    def _st(ch):
+        return ch.status.value if hasattr(ch.status, "value") else ch.status
+
+    inflight = [
+        _chapter_write_label(task, c.key)
+        for c in (task.chapters or [])
+        if _st(c)
+        in {
+            ChapterStatus.SEARCHING.value,
+            ChapterStatus.WRITING.value,
+            ChapterStatus.CHECKING.value,
+        }
+    ]
+    awaiting = [
+        c
+        for c in (task.chapters or [])
+        if _st(c)
+        in {ChapterStatus.AWAITING_CONFIRM.value, ChapterStatus.NEEDS_HUMAN.value}
+    ]
+    done = [
+        c
+        for c in (task.chapters or [])
+        if _st(c) in {ChapterStatus.CONFIRMED.value, ChapterStatus.SKIPPED.value}
+    ]
+    st = task.status.value if hasattr(task.status, "value") else str(task.status or "")
+    return {
+        "inflight": inflight,
+        "written": len(awaiting) + len(done),
+        "awaiting": len(awaiting),
+        "pending": len(_pending_write_keys(task)),
+        "task_status": st,
+    }
+
+
 def _writing_status(home: Path, session: ChatSession) -> tuple[str, list[ChatCard]]:
     from report_writing.chat.cards import _cards_with_export_card, _offer_start_writing, _progress_and_confirm_cards
     from report_writing.chat.helpers import _load_task
@@ -879,24 +1144,14 @@ def _writing_status(home: Path, session: ChatSession) -> tuple[str, list[ChatCar
         session.phase = ChatPhase.INTENT.value
         return ("这份写作任务找不到了，咱们重新选个蓝本，或再说说需求吧。", [])
     robot = get_robot(home, session.robot_id) if session.robot_id else None
+    task.refresh_status()
+    sync_session_phase_from_task(session, task)
     cards = _progress_and_confirm_cards(task, pace=_session_writing_pace(session))
     if task.chapters and all(c.status in {ChapterStatus.CONFIRMED, ChapterStatus.SKIPPED} for c in task.chapters):
         cards.extend(export_phase_cards(home, task.id, robot))
         session.phase = ChatPhase.CONFIRM_EXPORT.value
-        return "各章都确认完了，可以导出了。", cards
-    status = str(task.status.value if hasattr(task.status, "value") else task.status)
-    label = {
-        "studying": "还在分析准备",
-        "running": "正在写",
-        "awaiting_confirm": "等你确认几章",
-        "completed": "已经完成",
-    }.get(status, status)
-    session.phase = ChatPhase.WRITING.value if status == "running" else session.phase
-    return (
-        f"进度在这儿——{label}。有要改的章节在下方「写作进度」里展开；"
-        "要写完全部并确认后，再说「导出 Word」或点导出即可。",
-        cards,
-    )
+    # 不对用户写死套话：进度数据在 cards / writing_status_facts，口头由总控组织
+    return "", cards
 
 
 def clone_blueprint_to_document_copy(
@@ -1042,6 +1297,48 @@ def _copy_sample_ref_from_source(copy: WritingTask, source: WritingTask) -> bool
     return changed
 
 
+def _merge_missing_elements_from_source(copy: WritingTask, source: WritingTask) -> bool:
+    """蓝本有、副本缺的要素节点/章关联补上；已有关联不覆盖。"""
+    from copy import deepcopy
+
+    from report_writing.domain.elements import union_element_ids
+
+    changed = False
+    if copy is None or source is None:
+        return False
+    have = {
+        str(getattr(item, "id", "") or "").strip(): item
+        for item in list(getattr(copy, "element_nodes", None) or [])
+        if str(getattr(item, "id", "") or "").strip()
+    }
+    extra = []
+    for item in list(getattr(source, "element_nodes", None) or []):
+        eid = str(getattr(item, "id", "") or "").strip()
+        if not eid or eid in have:
+            continue
+        extra.append(item.model_copy(deep=True) if hasattr(item, "model_copy") else deepcopy(item))
+        have[eid] = extra[-1]
+    if extra:
+        copy.element_nodes = list(getattr(copy, "element_nodes", None) or []) + extra
+        changed = True
+    src_chapters = list(getattr(getattr(source, "outline", None), "chapters", None) or [])
+    dst_chapters = list(getattr(getattr(copy, "outline", None), "chapters", None) or [])
+    if src_chapters and dst_chapters:
+        src_by = {str(n.key or "").strip(): n for n in src_chapters if str(n.key or "").strip()}
+        for node in dst_chapters:
+            src = src_by.get(str(node.key or "").strip())
+            if src is None:
+                continue
+            dst_ids = [str(x).strip() for x in (node.element_ids or []) if str(x).strip()]
+            if dst_ids:
+                continue
+            src_ids = union_element_ids(getattr(src, "element_ids", None))
+            if src_ids:
+                node.element_ids = src_ids
+                changed = True
+    return changed
+
+
 def hydrate_empty_copy_from_blueprint(
     home: Path,
     copy: WritingTask,
@@ -1062,6 +1359,7 @@ def hydrate_empty_copy_from_blueprint(
         changed = True
     if source is not None:
         changed = _copy_sample_ref_from_source(copy, source) or changed
+        changed = _merge_missing_elements_from_source(copy, source) or changed
     # 副本上已经有章节：保留用户改过的目录，不拿库蓝本盖回去；样本引用仍可补上
     if _outline_chapter_count(copy) > 0:
         if changed:

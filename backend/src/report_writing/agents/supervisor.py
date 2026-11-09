@@ -6,11 +6,13 @@ import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Annotated
 
 from langchain.agents import create_agent
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage
-from langchain_core.tools import tool
+from langchain.tools import tool
+from pydantic import Field
 
 from report_writing.agents.check import run_check
 from report_writing.agents.scripted import ScriptedChatModel, human_payload, tool_payloads
@@ -19,6 +21,8 @@ from report_writing.agents.write import run_write
 from report_writing.services.corpus import Corpus, ReportTemplate
 from report_writing.services.graph import _brief_result, _chapters_from_brief, _prior_summary, _sample_from_template
 from report_writing.domain.models import (
+    MAX_REVISIONS,
+    WRITE_SCORE_PASS,
     ChapterRequirement,
     ChapterState,
     ChapterStatus,
@@ -35,16 +39,22 @@ from report_writing.services.store import BriefCache
 
 _log = logging.getLogger("uvicorn.error")
 
-INSTRUCTIONS = """你是报告书写总控。你不检索、不写正文、不检查，只通过工具管理四个专员。
-phase=study：只调用一次 call_study，然后用一句话结束，等待人工确认学习结果。
-phase=write：学习结果已经确认。按给出的章节顺序，对每一章调用 call_search。
-检索无采纳证据时仍调用 call_write（按要点由模型撰写一般性表述），再 call_check。
-仅当 call_search 返回 skipped=true（如纯目录节点）时跳过编写。
-检查结果为 revise 时再次 call_write 和 call_check。结果为 accept 或 needs_human 时进入下一章。
-phase=revise：不要检索。对指定章节调用 call_write，再调用 call_check。
-phase=search：只对给出的每一章调用 call_search，不要 call_write 或 call_check。
-phase=full：先 call_study，再按 phase=write 的方式处理学习到的每一章。
-全部章节处理完后用一句话结束，不要再调用工具。"""
+INSTRUCTIONS = """# Role
+你是按章写作流水线总控。
+
+# Task
+只调度已绑定的专员。自己不检索、不写正文、不检查。
+
+# Inputs
+user JSON：phase、章节列表与各章状态。
+
+# Rules
+何时调用、当前 phase 禁忌见各 Tool description。
+按章节顺序推进：一章检索 → 写作 → 检查完成后再下一章。
+
+# Output
+全部完成后用一句话结束，不要闲聊。
+"""
 
 
 class SupervisorScriptModel(ScriptedChatModel):
@@ -82,7 +92,8 @@ class SupervisorScriptModel(ScriptedChatModel):
                 return self.call("call_search", {"key": key})
             if phase != "revise":
                 found = searches[key]
-                if found.get("skipped"):
+                # 目录节点/整枝省略才停；检索无资料仍要写作+检查
+                if found.get("skipped") and (found.get("omitted") or found.get("structure_only")):
                     continue
             written = writes.get(key, 0)
             reviewed = checks.get(key, [])
@@ -119,14 +130,65 @@ def execute_chapter_search(
     emit: EmitStepFn,
     *,
     search_only: bool = False,
+    chapters: list[ChapterState] | None = None,
+    brief: WritingBrief | None = None,
 ) -> dict:
     """单章检索与证据评级；search_only 时不进入写作态。"""
+    from report_writing.domain.chapter_compose import (
+        COMPOSE_AUTO_GENERATE,
+        COMPOSE_FIXED,
+        COMPOSE_HYBRID,
+        COMPOSE_SOURCE_ONLY,
+        COMPOSE_TEMPLATE_FILL,
+        MATERIALS_HANDOFF_NOTE,
+        PARENT_OMIT_NOTE,
+        compose_mode,
+        parent_branch_omitted,
+        should_omit_for_materials,
+    )
+
     if getattr(requirement, "structure_only", False):
         chapter.status = ChapterStatus.SKIPPED
         chapter.human_note = "目录节点，无需检索与写作"
         emit("search", "skipped", chapter.key, chapter.title, {"note": chapter.human_note})
-        return {"key": chapter.key, "skipped": True, "adopted": 0, "note": chapter.human_note}
-    if getattr(requirement, "fixed_output", False):
+        return {
+            "key": chapter.key,
+            "skipped": True,
+            "structure_only": True,
+            "adopted": 0,
+            "note": chapter.human_note,
+        }
+    if parent_branch_omitted(requirement, chapters or [], brief):
+        chapter.status = ChapterStatus.SKIPPED
+        chapter.human_note = PARENT_OMIT_NOTE
+        emit("search", "skipped", chapter.key, chapter.title, {"note": chapter.human_note, "omitted": True})
+        return {"key": chapter.key, "skipped": True, "omitted": True, "adopted": 0, "note": chapter.human_note}
+
+    from report_writing.domain.point_items_sync import chapter_has_writing_config
+
+    has_points = chapter_has_writing_config(requirement)
+    missing_materials = should_omit_for_materials(requirement, chapter.evidence)
+    if missing_materials and (search_only or not has_points):
+        chapter.status = ChapterStatus.NEEDS_HUMAN
+        chapter.human_note = f"{MATERIALS_HANDOFF_NOTE}：缺少{'、'.join(missing_materials)}"
+        chapter.draft = None
+        chapter.official_text = ""
+        emit(
+            "search",
+            "skipped",
+            chapter.key,
+            chapter.title,
+            {"note": chapter.human_note, "handoff": True, "missing": missing_materials},
+        )
+        return {
+            "key": chapter.key,
+            "skipped": True,
+            "handoff": True,
+            "adopted": 0,
+            "note": chapter.human_note,
+            "missing": missing_materials,
+        }
+    if compose_mode(requirement) == COMPOSE_FIXED or getattr(requirement, "fixed_output", False):
         fixed = (getattr(requirement, "reference_text", None) or "").strip()
         if not fixed:
             chapter.status = ChapterStatus.NEEDS_HUMAN
@@ -139,8 +201,16 @@ def execute_chapter_search(
                 "note": chapter.human_note,
                 "fixed_output": True,
             }
+        from report_writing.agents.check import revision_feedback_from_checks
+
+        kept_defects = revision_feedback_from_checks(chapter.checks)
         chapter.draft = None
-        chapter.checks = []
+        # 保留上一轮未通过检查，重写时仍能读到缺陷
+        chapter.checks = (
+            [c for c in (chapter.checks or []) if c.action != CheckAction.ACCEPT][-1:]
+            if kept_defects
+            else []
+        )
         chapter.revision_count = 0
         chapter.official_text = ""
         chapter.evidence = []
@@ -161,7 +231,6 @@ def execute_chapter_search(
         return {"key": chapter.key, "skipped": False, "adopted": 1, "note": note, "fixed_output": True}
     element_results = list(getattr(requirement, "element_results", None) or [])
     element_ids = list(getattr(requirement, "element_ids", None) or [])
-    has_points = bool(requirement.points or (getattr(requirement, "describes", None) or "").strip())
 
     # 过程条：先亮检索意图（槽位/检索词），避免用户只看到「按要点写」误以为没检索
     if element_ids and element_results:
@@ -201,23 +270,33 @@ def execute_chapter_search(
         fallback_write: bool = False,
         slot_missing: list[int] | None = None,
     ) -> dict:
+        from report_writing.agents.check import revision_feedback_from_checks
+
+        kept_defects = revision_feedback_from_checks(chapter.checks)
         chapter.draft = None
-        chapter.checks = []
+        chapter.checks = (
+            [c for c in (chapter.checks or []) if c.action != CheckAction.ACCEPT][-1:]
+            if kept_defects
+            else []
+        )
         chapter.revision_count = 0
         chapter.official_text = ""
         filled = [item for item in element_results if str(item.get("value") or "").strip()]
-        cards = [
-            {
-                "id": f"el-{item.get('id') or idx}",
-                "point": str(item.get("name") or item.get("id") or "要素"),
-                "source_file": "要素",
-                "location": str(item.get("kind") or ""),
-                "query": str(item.get("query") or "").strip(),
-                "excerpt": str(item.get("value") or "")[:800],
-                "adopted": True,
-            }
-            for idx, item in enumerate(filled)
-        ]
+        cards = []
+        for idx, item in enumerate(filled):
+            eid = str(item.get("id") or "").strip() or str(idx)
+            card_id = eid if eid.startswith("el-") else f"el-{eid}"
+            cards.append(
+                {
+                    "id": card_id,
+                    "point": str(item.get("name") or item.get("id") or "要素"),
+                    "source_file": "要素",
+                    "location": str(item.get("kind") or ""),
+                    "query": str(item.get("query") or "").strip(),
+                    "excerpt": str(item.get("value") or ""),
+                    "adopted": True,
+                }
+            )
         # 写入章节证据，供进度卡「证据」与过程条展示检索到的要素内容
         chapter.evidence = [
             EvidenceCard.from_dict(
@@ -238,9 +317,26 @@ def execute_chapter_search(
             for card in cards
         ]
         gaps = [int(n) for n in (slot_missing or []) if int(n) > 0]
+        obtained = []
+        for item in element_results:
+            if not isinstance(item, dict):
+                continue
+            value = str(item.get("value") or "").strip()
+            obtained.append(
+                {
+                    "id": str(item.get("id") or "").strip(),
+                    "name": str(item.get("name") or item.get("id") or "要素").strip() or "要素",
+                    "kind": str(item.get("kind") or "").strip(),
+                    "query": str(item.get("query") or "").strip()[:120],
+                    "value": value[:240],
+                    "ok": bool(value),
+                    "slot_missing": list(item.get("slot_missing") or [])[:4],
+                }
+            )
         payload = {
             "adopted": len(cards),
             "cards": cards,
+            "element_results": obtained,
             "note": note,
             "fallback_write": fallback_write,
             "element_driven": bool(element_ids),
@@ -262,6 +358,9 @@ def execute_chapter_search(
             "fallback_write": fallback_write,
             **({"slot_missing": gaps} if gaps else {}),
         }
+
+    if compose_mode(requirement) == COMPOSE_TEMPLATE_FILL:
+        return _finish_element_search("模板填槽，缺槽留空", fallback_write=False)
 
     if element_ids:
         filled = [item for item in element_results if str(item.get("value") or "").strip()]
@@ -285,49 +384,74 @@ def execute_chapter_search(
             return _finish_element_search(note, fallback_write=False, slot_missing=slot_gaps)
         if slot_gaps:
             gap_txt = "、".join(str(n) for n in slot_gaps)
-            if has_points:
-                note = f"资料包槽位 {gap_txt} 未找到文件，已跳过检索；将结合章节要点撰写"
+            mode = compose_mode(requirement)
+            if has_points and mode in {COMPOSE_HYBRID, COMPOSE_AUTO_GENERATE, COMPOSE_SOURCE_ONLY}:
+                note = (
+                    f"资料包槽位 {gap_txt} 未找到文件；不依赖资料，按要点自动成文"
+                    if mode == COMPOSE_AUTO_GENERATE
+                    else f"资料包槽位 {gap_txt} 未找到文件，已跳过检索；将据实写相关部分，无关转人工"
+                )
                 return _finish_element_search(
                     note, fallback_write=True, slot_missing=slot_gaps
                 )
             chapter.status = ChapterStatus.NEEDS_HUMAN
             chapter.human_note = (
-                f"资料包槽位 {gap_txt} 未找到文件，已跳过检索；请上传槽位文件或补充写作要点"
+                f"{MATERIALS_HANDOFF_NOTE}：资料包槽位 {gap_txt} 未找到文件"
+                if mode == COMPOSE_SOURCE_ONLY
+                else f"资料包槽位 {gap_txt} 未找到文件，已跳过检索；请上传槽位文件或补充写作要点"
             )
             emit(
                 "search",
                 "skipped",
                 chapter.key,
                 chapter.title,
-                {"note": chapter.human_note, "slot_missing": slot_gaps},
+                {"note": chapter.human_note, "slot_missing": slot_gaps, "handoff": True},
             )
             return {
                 "key": chapter.key,
                 "skipped": True,
+                "handoff": True,
                 "adopted": 0,
                 "note": chapter.human_note,
                 "slot_missing": slot_gaps,
             }
-        if has_points:
-            note = "要素未解析到内容，将结合章节要点撰写（请核对要素配置）"
+        mode = compose_mode(requirement)
+        if has_points and mode == COMPOSE_AUTO_GENERATE:
+            note = "要素未解析到内容；不依赖资料，按要点自动成文"
+            return _finish_element_search(note, fallback_write=True)
+        if has_points and mode == COMPOSE_HYBRID:
+            note = "要素未解析到内容，将据实写相关部分，主题无关转人工（请核对要素配置）"
+            return _finish_element_search(note, fallback_write=True)
+        if has_points and compose_mode(requirement) == COMPOSE_SOURCE_ONLY:
+            note = f"{MATERIALS_HANDOFF_NOTE}：关联要素未解析到可用内容；按写作要点继续撰写"
             return _finish_element_search(note, fallback_write=True)
         chapter.status = ChapterStatus.NEEDS_HUMAN
         chapter.human_note = "关联要素未解析到可用内容，请检查要素配置或补充写作要点"
         emit("search", "skipped", chapter.key, chapter.title, {"note": chapter.human_note})
         return {"key": chapter.key, "skipped": True, "adopted": 0, "note": chapter.human_note}
 
-    if requirement.search_terms():
-        chapter.status = ChapterStatus.NEEDS_HUMAN
-        chapter.human_note = "章节级检索词已停用，请为本章关联要素（含 RAG 要素）以拉取资料"
-        emit("search", "skipped", chapter.key, chapter.title, {"note": chapter.human_note})
-        return {"key": chapter.key, "skipped": True, "adopted": 0, "note": chapter.human_note}
+    if compose_mode(requirement) == COMPOSE_AUTO_GENERATE:
+        if not has_points:
+            chapter.status = ChapterStatus.NEEDS_HUMAN
+            chapter.human_note = "本章没有配置写作要点或章节说明，未进入写作"
+            emit("search", "skipped", chapter.key, chapter.title, {"note": chapter.human_note})
+            return {"key": chapter.key, "skipped": True, "adopted": 0, "note": chapter.human_note}
+        return _finish_element_search("不依赖资料，按要点自动成文", fallback_write=True)
 
     if not has_points:
         chapter.status = ChapterStatus.NEEDS_HUMAN
-        chapter.human_note = "章节要点为空且未关联要素，未进入写作"
+        chapter.human_note = "本章没有配置写作要点、章节说明或关联要素，未进入写作"
         emit("search", "skipped", chapter.key, chapter.title, {"note": chapter.human_note})
         return {"key": chapter.key, "skipped": True, "adopted": 0, "note": chapter.human_note}
-    note = "将按章节要点由模型撰写（资料请用要素「文件」或资料包槽位）"
+    if compose_mode(requirement) == COMPOSE_SOURCE_ONLY:
+        if has_points:
+            note = f"{MATERIALS_HANDOFF_NOTE}；按写作要点继续撰写"
+            return _finish_element_search(note, fallback_write=True)
+        chapter.status = ChapterStatus.NEEDS_HUMAN
+        chapter.human_note = MATERIALS_HANDOFF_NOTE
+        emit("search", "skipped", chapter.key, chapter.title, {"note": chapter.human_note, "handoff": True})
+        return {"key": chapter.key, "skipped": True, "handoff": True, "adopted": 0, "note": chapter.human_note}
+    note = "将据实写与主题相关的部分；无关内容转人工"
     return _finish_element_search(note, fallback_write=True)
 
 
@@ -377,9 +501,14 @@ def run_supervisor(
                 return item
         raise KeyError(key)
 
-    @tool
+    @tool(
+        "call_study",
+        description=(
+            "何时：phase 为 study 或 full，且尚未确认学习结果。调用一次学习专员分析样板并保存书写要求，然后结束等待人工确认。"
+            "不要：用写作专员代替分析；学习已确认不要再调。full 时先本工具，再按章检索写作。"
+        ),
+    )
     def call_study() -> str:
-        """调用学习专员，分析模版并保存学习结果。"""
         if phase not in {"study", "full"}:
             return json.dumps({"error": "学习结果已确认，不要重新学习"}, ensure_ascii=False)
         emit("study", "running", title="分析样板")
@@ -411,9 +540,15 @@ def run_supervisor(
         emit("study", "done", title="分析样板", payload=payload)
         return json.dumps(payload, ensure_ascii=False)
 
-    @tool
-    def call_search(key: str) -> str:
-        """按该章学习要点检索资料，并评级采纳。"""
+    @tool(
+        "call_search",
+        description=(
+            "何时：学习已确认后、写作前，按章节顺序检索并评级采纳。phase=search 只调本工具。"
+            "缺了：用当前要检索的章节 key，不要猜。"
+            "不要：未学习时调用。skipped=true 时跳过本章编写；无采纳证据仍接着写。"
+        ),
+    )
+    def call_search(key: Annotated[str, Field(description="必填。章节 key。")]) -> str:
         if phase == "study" or result.brief is None:
             return json.dumps({"key": key, "error": "尚未确认学习结果"}, ensure_ascii=False)
         chapter = find(key)
@@ -426,24 +561,62 @@ def run_supervisor(
             robot,
             emit,
             search_only=(phase == "search"),
+            chapters=result.chapters,
+            brief=result.brief,
         )
         return json.dumps(payload, ensure_ascii=False)
 
-    @tool
-    def call_write(key: str) -> str:
-        """根据该章已采纳证据编写正文。"""
+    @tool(
+        "call_write",
+        description=(
+            "何时：phase 为 write/full/revise，且已有学习结果，根据该章已采纳证据写正文。"
+            "缺了：用当前要写的章节 key。"
+            "不要：仅检索阶段或未学习时调用。revise 不要检索，写完立刻检查。"
+        ),
+    )
+    def call_write(key: Annotated[str, Field(description="必填。章节 key。")]) -> str:
         if phase == "search":
             return json.dumps({"key": key, "error": "当前为仅检索阶段，不要写作"}, ensure_ascii=False)
         if result.brief is None:
             return json.dumps({"key": key, "error": "没有学习结果"}, ensure_ascii=False)
         chapter = find(key)
         requirement = result.brief.chapter(key)
-        comments = []
-        if chapter.checks and chapter.checks[-1].action == CheckAction.REVISE:
-            comments = chapter.checks[-1].comments
-        knowledge_fallback = not chapter.adopted_evidence()
+        from report_writing.domain.chapter_compose import (
+            COMPOSE_AUTO_GENERATE,
+            COMPOSE_HYBRID,
+            COMPOSE_SOURCE_ONLY,
+            MATERIALS_HANDOFF_NOTE,
+            compose_mode,
+        )
+
+        from report_writing.agents.check import revision_feedback_from_checks
+
+        # 上一轮检查缺陷（revise / needs_human）必须带给本轮写作
+        comments = revision_feedback_from_checks(chapter.checks)
+        knowledge_fallback = not chapter.adopted_evidence() and compose_mode(requirement) in {
+            COMPOSE_HYBRID,
+            COMPOSE_AUTO_GENERATE,
+            COMPOSE_SOURCE_ONLY,
+        }
+        if (
+            compose_mode(requirement) == COMPOSE_SOURCE_ONLY
+            and not chapter.adopted_evidence()
+            and not [str(p).strip() for p in (requirement.points or []) if str(p).strip()]
+            and not str(getattr(requirement, "describes", "") or "").strip()
+        ):
+            chapter.status = ChapterStatus.NEEDS_HUMAN
+            chapter.human_note = MATERIALS_HANDOFF_NOTE
+            return json.dumps(
+                {"key": key, "skipped": True, "handoff": True, "note": chapter.human_note},
+                ensure_ascii=False,
+            )
         chapter.status = ChapterStatus.WRITING
         points = [str(p).strip() for p in (requirement.points or []) if str(p).strip()]
+        write_note = (
+            f"按上一轮检查 {len(comments)} 条缺陷改写"
+            if comments
+            else (f"按 {len(points)} 条写作要点撰写" if points else "未配置写作要点")
+        )
         emit(
             "write",
             "running",
@@ -453,10 +626,14 @@ def run_supervisor(
                 "points": points[:20],
                 "describes": (requirement.describes or "").strip()[:240],
                 "aux_prompt": (requirement.aux_prompt or "").strip()[:240],
-                "note": f"按 {len(points)} 条写作要点撰写" if points else "未配置写作要点",
+                "note": write_note,
+                "check_defects": [
+                    {"index": int(c.index), "message": (c.message or "")[:160]}
+                    for c in comments[:8]
+                ],
             },
         )
-        # 首写不带 previous；仅检查要求改稿时才沿用上一稿
+        # 有检查缺陷则沿用上一稿并按意见改；首写不带 previous
         previous = chapter.draft if comments else None
         chapter.draft = run_write(
             requirement,
@@ -468,6 +645,7 @@ def run_supervisor(
             model=model,
             robot=robot,
             knowledge_fallback=knowledge_fallback,
+            doc_category=str(getattr(result.brief, "category", "") or ""),
         )
         paragraphs = [item.text for item in chapter.draft.paragraphs]
         emit(
@@ -480,9 +658,15 @@ def run_supervisor(
         chapter.status = ChapterStatus.CHECKING
         return json.dumps({"key": key, "paragraphs": paragraphs}, ensure_ascii=False)
 
-    @tool
-    def call_check(key: str) -> str:
-        """检查该章文字、引用和要点覆盖。"""
+    @tool(
+        "call_check",
+        description=(
+            "何时：该章已有草稿，检查引用、要点覆盖与边界。通过或缺人工后进入下一章。"
+            "缺了：用当前要检查的章节 key。"
+            "不要：仅检索阶段调用。"
+        ),
+    )
+    def call_check(key: Annotated[str, Field(description="必填。章节 key。")]) -> str:
         if phase == "search":
             return json.dumps({"key": key, "error": "当前为仅检索阶段，不要检查"}, ensure_ascii=False)
         if result.brief is None or find(key).draft is None:
@@ -499,17 +683,6 @@ def run_supervisor(
             knowledge_fallback=not chapter.adopted_evidence(),
         )
         chapter.checks.append(checked)
-        emit(
-            "check",
-            "done",
-            chapter.key,
-            chapter.title,
-            {
-                "action": checked.action.value,
-                "reason": checked.reason,
-                "comments": [item.to_dict() for item in checked.comments],
-            },
-        )
         if checked.action == CheckAction.REVISE:
             chapter.revision_count += 1
             chapter.status = ChapterStatus.WRITING
@@ -523,9 +696,39 @@ def run_supervisor(
             ):
                 chapter.status = ChapterStatus.NEEDS_HUMAN
                 chapter.human_note = checked.reason or "没有可保存的正文"
-        return json.dumps({"key": key, "action": checked.action.value, "reason": checked.reason}, ensure_ascii=False)
+        emit(
+            "check",
+            "done",
+            chapter.key,
+            chapter.title,
+            {
+                "action": checked.action.value,
+                "reason": checked.reason,
+                "score": int(getattr(checked, "score", 0) or 0),
+                "below_threshold": bool(getattr(checked, "below_threshold", False)),
+                "revision_count": int(chapter.revision_count or 0),
+                "max_revisions": int(MAX_REVISIONS),
+                "write_score_pass": int(WRITE_SCORE_PASS),
+                "comments": [item.to_dict() for item in checked.comments],
+            },
+        )
+        return json.dumps(
+            {
+                "key": key,
+                "action": checked.action.value,
+                "reason": checked.reason,
+                "score": int(getattr(checked, "score", 0) or 0),
+                "below_threshold": bool(getattr(checked, "below_threshold", False)),
+                "revision_count": int(chapter.revision_count or 0),
+            },
+            ensure_ascii=False,
+        )
 
-    chat = model if model is not None else SupervisorScriptModel()
+    # 检索/写作/检查必须按固定顺序调度；对话模型当总控会跳过已写章，重写 2 秒结束
+    if phase in {"write", "search", "revise"}:
+        chat = SupervisorScriptModel()
+    else:
+        chat = model if model is not None else SupervisorScriptModel()
     agent = create_agent(
         chat,
         [call_study, call_search, call_write, call_check],

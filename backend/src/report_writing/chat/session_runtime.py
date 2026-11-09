@@ -18,10 +18,11 @@
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
-from report_writing.domain.models import ChapterStatus, ChatPhase, ChatSession
+from report_writing.domain.models import ChapterStatus, ChatActionPayload, ChatPayload, ChatPhase, ChatSession
 
 RUNTIME_VERSION = 1
 
@@ -30,6 +31,86 @@ WORKFLOW_WRITING = "writing"
 WORKFLOW_TEMPLATE = "template_wizard"
 WORKFLOW_EXPORT = "export"
 WORKFLOW_FREEFORM = "freeform"
+
+# 本轮 go_study / re_study 真正挂 trigger 时点亮。ContextVar 在线程池里可能丢，
+# 所以同时写到 wizard._arm_study_kick，供 SSE done 贴回；GET 快照会剥掉。
+STUDY_KICK_ARM_KEY = "_arm_study_kick"
+_study_kick_armed: ContextVar[bool] = ContextVar("rw_study_kick_armed", default=False)
+
+
+def arm_study_kick_this_turn(
+    session: ChatSession | None = None,
+    wizard: dict[str, Any] | None = None,
+) -> None:
+    _study_kick_armed.set(True)
+    if wizard is not None:
+        wizard[STUDY_KICK_ARM_KEY] = True
+    if session is None:
+        return
+    ff = dict(session.freeform or {})
+    live = dict(wizard if wizard is not None else (ff.get("blueprint_wizard") or {}))
+    live[STUDY_KICK_ARM_KEY] = True
+    session.freeform = {**ff, "blueprint_wizard": live}
+
+
+def disarm_study_kick_this_turn() -> None:
+    _study_kick_armed.set(False)
+
+
+def study_kick_armed_this_turn(live_wizard: dict[str, Any] | None = None) -> bool:
+    if _study_kick_armed.get():
+        return True
+    return dict(live_wizard or {}).get(STUDY_KICK_ARM_KEY) is True
+
+
+_STUDY_EPHEMERAL_KEYS = (
+    "trigger_begin_study",
+    "trigger_chapter_study",
+    "chapter_study_keys",
+    "study_stream_active",
+    STUDY_KICK_ARM_KEY,
+)
+
+
+def _strip_study_ephemerals(wizard: dict[str, Any]) -> bool:
+    changed = False
+    for key in _STUDY_EPHEMERAL_KEYS:
+        if key in wizard:
+            wizard.pop(key, None)
+            changed = True
+    return changed
+
+
+def clear_leftover_study_triggers(session: ChatSession) -> None:
+    """清掉向导里残留的分析自驱，禁止闲聊/开写把上一轮章节再跑一遍。
+
+    必须同时清 freeform.blueprint_wizard 与 runtime.workflows.blueprint_wizard：
+    否则 migrate_legacy_freeform 会把 workflow 里的 trigger / _arm_study_kick
+    又合并回 freeform，关联要素等非分析回合的 SSE done 会再次点燃前端 study 流。
+    """
+    ff = dict(session.freeform or {})
+    changed = False
+    wizard = dict(ff.get("blueprint_wizard") or {})
+    if wizard and _strip_study_ephemerals(wizard):
+        ff["blueprint_wizard"] = wizard
+        changed = True
+    rt = ff.get("runtime")
+    if isinstance(rt, dict):
+        workflows = dict(rt.get("workflows") or {})
+        bp = dict(workflows.get(WORKFLOW_BLUEPRINT) or {})
+        if bp and _strip_study_ephemerals(bp):
+            workflows[WORKFLOW_BLUEPRINT] = bp
+            ff["runtime"] = {**rt, "workflows": workflows}
+            changed = True
+    if not changed:
+        return
+    session.freeform = ff
+
+
+def suppress_study_kick_for_document_scope(session: ChatSession) -> None:
+    """文档作用域澄清未决：禁止本轮把分析自驱贴给前端。"""
+    disarm_study_kick_this_turn()
+    clear_leftover_study_triggers(session)
 
 
 def _runtime_root(session: ChatSession) -> dict[str, Any]:
@@ -70,7 +151,8 @@ def workflow_patch(session: ChatSession, name: str, patch: dict[str, Any]) -> di
     return merged
 
 
-def workflow_touch_template(session: ChatSession, payload: dict[str, Any]) -> None:
+def workflow_touch_template(session: ChatSession, payload: ChatPayload) -> None:
+    payload = ChatActionPayload.parse(payload)
     data = {
         "resource": str(payload.get("resource") or "").strip(),
         "step": str(payload.get("step") or "choose").strip(),
@@ -116,6 +198,10 @@ def migrate_legacy_freeform(session: ChatSession) -> None:
             merged = dict(legacy_bp)
         else:
             merged = {**runtime_bp, **legacy_bp}
+            # 分析自驱只认当前 freeform：legacy 已清掉的字段不得从 runtime 复活
+            for key in _STUDY_EPHEMERAL_KEYS:
+                if key not in legacy_bp:
+                    merged.pop(key, None)
         bid = str(merged.get("blueprint_id") or "").strip()
         if bool(legacy_bp.get("fresh_meta")):
             bid = str(legacy_bp.get("blueprint_id") or "").strip()
@@ -351,9 +437,14 @@ def derive_writing_workflow(home: Path, session: ChatSession) -> dict[str, Any]:
                     progress["needs_human"] += 1
                 elif status == ChapterStatus.PENDING:
                     progress["pending_write"] += 1
-            progress["running"] = (
-                phase == ChatPhase.WRITING.value and not bool(ff.get("writing_paused"))
-            )
+            inflight = {
+                ChapterStatus.SEARCHING,
+                ChapterStatus.WRITING,
+                ChapterStatus.CHECKING,
+            }
+            progress["running"] = any(
+                getattr(chapter, "status", None) in inflight for chapter in chapters
+            ) and not bool(ff.get("writing_paused"))
     return {
         "phase": phase,
         "task_id": tid,
@@ -471,6 +562,46 @@ def reconcile_chat_session(home: Path, session: ChatSession) -> bool:
     return dirty
 
 
+def attach_turn_study_kick(
+    public_wizard: dict[str, Any] | None,
+    live_wizard: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """把本轮分析自驱标记贴回 SSE done 用的 wizard。
+
+    GET / runtime_public_view 仍剥掉 trigger，避免刷新自动重跑；
+    分析卡又不进气泡。若 done.blueprint_wizard 也剥掉，前端只收到口头回复、永远不开 study 流。
+    只在本轮真正挂过分析 trigger 时贴回，禁止把上一轮残留带到「写某一章」。
+    """
+    out = dict(public_wizard or {})
+    live = dict(live_wizard or {})
+    if not study_kick_armed_this_turn(live):
+        return out
+    keys = [
+        str(k).strip()
+        for k in list(live.get("trigger_chapter_study") or live.get("chapter_study_keys") or [])
+        if str(k).strip()
+    ]
+    begin_all = live.get("trigger_begin_study") is True
+    if not keys and not begin_all:
+        return out
+    out["step"] = "study"
+    if begin_all:
+        out["trigger_begin_study"] = True
+    if keys:
+        out["trigger_chapter_study"] = keys
+        out["chapter_study_keys"] = keys
+    method = str(live.get("study_method") or "").strip()
+    if method:
+        out["study_method"] = method
+    work = str(live.get("working_task_id") or "").strip()
+    if work:
+        out["working_task_id"] = work
+    bid = str(live.get("blueprint_id") or out.get("blueprint_id") or "").strip()
+    if bid:
+        out["blueprint_id"] = bid
+    return out
+
+
 def runtime_public_view(session: ChatSession, home: Path | None = None) -> dict[str, Any]:
     """返回可给前端的运行时快照（GET 会话 / SSE done）。"""
     migrate_legacy_freeform(session)
@@ -494,8 +625,10 @@ def runtime_public_view(session: ChatSession, home: Path | None = None) -> dict[
         or bp.get("study_stream_active")
         or bp.get("trigger_outline_extract")
         or bp.get("outline_extract_active")
+        or bp.get(STUDY_KICK_ARM_KEY)
     ):
         bp = dict(bp)
+        bp.pop(STUDY_KICK_ARM_KEY, None)
         pending = str(bp.get("pending_wizard_command") or "").strip()
         keep_re_extract = pending == "re_extract_outline" or bool(
             bp.get("outline_extract_active")
@@ -601,7 +734,7 @@ def runtime_public_view(session: ChatSession, home: Path | None = None) -> dict[
         ),
         "composer_save_blueprint": composer_save,
         "blueprint_wizard": bp,
-        "session_goal": goal,
+        "session_goal": goal.to_dict(),
         "session_goal_brief": session_goal_brief(session),
         "writing_brief": brief,
         "writing_brief_prompt_preview": writing_brief_prompt_block(session)[:500],

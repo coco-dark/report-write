@@ -48,8 +48,13 @@ def log_rag_domain() -> None:
 
     from report_writing.infra.project_config import data_home_path
 
+    from report_writing.services.users import sync_users_from_disk
+
     data_home = data_home_path()
     ensure_default_user(data_home)
+    synced_users = sync_users_from_disk(data_home)
+    if synced_users:
+        _log.info("用户账号已同步到数据库：%s", synced_users)
     token = set_current_user_id("default")
     try:
         counts = sync_local_data(user_workspace(data_home, "default"))

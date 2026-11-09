@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
-from report_writing.domain.models import ChatCard, ChatSession, WritingTask
+from report_writing.domain.models import ChatActionPayload, ChatCard, ChatPayload, ChatSession, WritingTask
 
 EmitFn = Callable[[dict[str, Any]], None]
 InvokeFn = Callable[[str, str], str]
@@ -78,6 +78,44 @@ def mark_materials_pack_skipped(session: ChatSession, task_id: str, *, skipped: 
     session.freeform = ff
 
 
+def _session_writing_copy(
+    home: Path,
+    session: ChatSession,
+    task: WritingTask | None,
+    *,
+    blueprint_id: str = "",
+) -> WritingTask | None:
+    """已有文档副本时，资料包应绑到 w* 而不是蓝本预选。"""
+    from report_writing.chat.helpers import _load_task
+
+    if task is not None and not _is_blueprint_only_task(task):
+        return task
+    bp = (
+        blueprint_id
+        or str(getattr(session, "blueprint_id", "") or "")
+        or (str(getattr(task, "source_blueprint_id", "") or "") if task is not None else "")
+        or (str(task.id) if task is not None and _is_blueprint_only_task(task) else "")
+    ).strip()
+    copy_id = ""
+    try:
+        from report_writing.chat.session_documents import _writing_copy_id_for_blueprint
+        from report_writing.services.task_ids import is_writing_task_id
+
+        if bp:
+            copy_id = _writing_copy_id_for_blueprint(session, bp)
+        sess_tid = str(getattr(session, "task_id", "") or "").strip()
+        if not copy_id and is_writing_task_id(sess_tid):
+            copy_id = sess_tid
+    except Exception:
+        copy_id = ""
+    if not copy_id:
+        return None
+    loaded = _load_task(home, copy_id)
+    if loaded is None or _is_blueprint_only_task(loaded):
+        return None
+    return loaded
+
+
 def _is_blueprint_only_task(task: WritingTask | None) -> bool:
     """蓝本库条目（尚未 clone 成写作文档）。"""
     if task is None:
@@ -144,6 +182,53 @@ def clear_pending_materials_pack(
         by_bp.pop(bp, None)
     ff["pending_materials_pack_by_blueprint"] = by_bp
     session.freeform = ff
+
+
+def resolve_writing_materials_pack_id(
+    home: Path,
+    session: ChatSession,
+    task: WritingTask | None,
+) -> str:
+    """写作文档已绑、会话预选、或本蓝本仅有一份待入库包时，视为已配置。"""
+    if task is not None:
+        pid = str(getattr(task, "materials_pack_id", "") or "").strip()
+        if pid:
+            return pid
+    bp = str(
+        getattr(session, "blueprint_id", "")
+        or (getattr(task, "source_blueprint_id", "") if task is not None else "")
+        or ""
+    ).strip()
+    pid = peek_pending_materials_pack(session, blueprint_id=bp)
+    if pid:
+        return pid
+    try:
+        from report_writing.services.materials_pack import list_packs
+
+        related: list = []
+        wid = str(getattr(task, "id", "") or "").strip() if task is not None else ""
+        for pack in list_packs(home, in_library=False):
+            owners = [str(x).strip() for x in (getattr(pack, "blueprint_ids", None) or []) if str(x).strip()]
+            if bp and bp in owners:
+                related.append(pack)
+            elif wid and wid in owners:
+                related.append(pack)
+        if len(related) == 1:
+            return str(getattr(related[0], "id", "") or "").strip()
+        with_files = [
+            p
+            for p in related
+            if any(
+                str(getattr(f, "file_name", "") or "").strip()
+                or str(getattr(f, "file_id", "") or "").strip()
+                for f in list(getattr(p, "slots_fill", None) or [])
+            )
+        ]
+        if len(with_files) == 1:
+            return str(getattr(with_files[0], "id", "") or "").strip()
+    except Exception:
+        pass
+    return ""
 
 
 def materials_pack_gate_satisfied(session: ChatSession, task: WritingTask | None) -> bool:
@@ -216,24 +301,32 @@ def soft_prompt_materials_pack_if_needed(
 
 
 def _chapter_element_ids(task: WritingTask, key: str) -> list[str]:
+    """本章检索用要素 id：brief∪大纲章级∪要点关联（与写作 resolve 一致）。"""
     kid = (key or "").strip()
     if not kid:
         return []
+    from report_writing.domain.point_items_sync import (
+        element_ids_for_chapter_node,
+        elements_by_id_from_task,
+    )
+
+    by_id = elements_by_id_from_task(task)
+    outline = getattr(task, "outline", None)
+    node = None
+    if outline is not None:
+        by_key = {str(item.key): item for item in (outline.chapters or [])}
+        node = by_key.get(kid)
+    if node is not None:
+        return element_ids_for_chapter_node(node, elements_by_id=by_id)
     brief = getattr(task, "brief", None)
     if brief is not None:
         try:
             req = brief.chapter(kid)
-            ids = [str(x).strip() for x in (getattr(req, "element_ids", None) or []) if str(x).strip()]
-            if ids:
-                return ids
         except KeyError:
-            pass
-    outline = getattr(task, "outline", None)
-    if outline is not None:
-        by_key = {str(item.key): item for item in (outline.chapters or [])}
-        node = by_key.get(kid)
-        if node is not None:
-            return [str(x).strip() for x in (getattr(node, "element_ids", None) or []) if str(x).strip()]
+            req = None
+        if req is not None:
+            # brief 无完整 point_items 时仍可能已带并集；再并一次要点行以防陈旧
+            return element_ids_for_chapter_node(req, elements_by_id=by_id)
     return []
 
 
@@ -349,6 +442,7 @@ def remind_slot_upload_before_write(
     *,
     invoke: InvokeFn | None = None,
     emit: EmitFn | None = None,
+    model=None,
 ) -> str:
     """若本轮章节有未齐的资料包槽位引用，用 LLM 拟人化提醒；不阻断开写。返回提醒正文或空串。"""
     gaps = collect_write_slot_gaps(home, task, chapter_keys)
@@ -361,26 +455,24 @@ def remind_slot_upload_before_write(
     llm = invoke
     if llm is None:
         try:
-            from langchain_core.messages import HumanMessage, SystemMessage
-            from report_writing.infra.llm import live_model
-            from report_writing.infra.llm_invoke import invoke_messages
+            from report_writing.infra.llm import or_live_model
+            from report_writing.infra.llm_invoke import invoke_prompt
 
-            model = live_model()
+            chosen = or_live_model(model)
 
             def _live(system: str, user: str) -> str:
-                if model is None:
+                if chosen is None:
                     return ""
-                return invoke_messages(
-                    model, [SystemMessage(content=system), HumanMessage(content=user)]
-                )
+                return invoke_prompt(chosen, system, user)
 
-            llm = _live if model is not None else None
+            llm = _live if chosen is not None else None
         except Exception:
             llm = None
     from report_writing.chat.helpers import _emit_tokens, polish_chat_reply
 
     reminder = polish_chat_reply(
         invoke=llm,
+        model=model,
         user_message="开始写作",
         draft=draft,
         phase=str(getattr(session, "phase", "") or ""),
@@ -519,10 +611,11 @@ def _bound_pack_card(task: WritingTask | None, pack, *, created: bool = False) -
     )
 
 
-def _resolve_bound_pack(home: Path, session: ChatSession, body: dict[str, Any], task: WritingTask | None):
+def _resolve_bound_pack(home: Path, session: ChatSession, body: ChatPayload, task: WritingTask | None):
     from report_writing.services.materials_pack import get_pack
 
-    pack_id = str(body.get("pack_id") or body.get("materials_pack_id") or "").strip()
+    payload = ChatActionPayload.parse(body)
+    pack_id = str(payload.get("pack_id") or payload.get("materials_pack_id") or "").strip()
     if not pack_id and task is not None:
         pack_id = str(getattr(task, "materials_pack_id", "") or "").strip()
     if not pack_id:
@@ -534,12 +627,14 @@ def _clarify_pick_pack(
     home: Path,
     session: ChatSession,
     tool: str,
-    body: dict[str, Any],
+    body: ChatPayload,
     *,
     message: str = "",
 ) -> tuple[str, list[ChatCard]]:
     """缺 pack_id 时挂多轮澄清，列出可点资料包。"""
     from report_writing.chat.action_slots import build_action_slot_clarify
+
+    body = ChatActionPayload.parse(body).as_dict()
 
     library = _session_packs(home, session, in_library=True)
     pending = _session_packs(home, session, in_library=False)
@@ -564,7 +659,7 @@ def apply_materials_pack_choice(
     home: Path,
     session: ChatSession,
     action: str,
-    payload: dict[str, Any] | None = None,
+    payload: ChatPayload = None,
     *,
     emit: EmitFn | None = None,
 ) -> tuple[str, list[ChatCard]]:
@@ -580,7 +675,7 @@ def apply_materials_pack_choice(
     from report_writing.services.store import TaskStore
     from report_writing.services.writing_task_catalog import save_writing_task
 
-    body = dict(payload or {})
+    body = ChatActionPayload.parse(payload).as_dict()
     key = (action or "").strip()
     tid = str(body.get("task_id") or session.task_id or "").strip()
     task = _load_task(home, tid) if tid else None
@@ -712,8 +807,10 @@ def apply_materials_pack_choice(
         from report_writing.services.robots import assert_materials_pack_in_robot_scope
 
         assert_materials_pack_in_robot_scope(home, session.robot_id or "", pack_id)
-        # 已有写作文档：直接绑定
-        if task is not None and not _is_blueprint_only_task(task):
+        # 已有写作文档：直接绑定（payload 空 task_id 时勿把 clone 误判成蓝本预选）
+        bind_task = _session_writing_copy(home, session, task, blueprint_id=bp)
+        if bind_task is not None:
+            task = bind_task
             task.materials_pack_id = pack_id
             mark_materials_pack_skipped(session, task.id, skipped=False)
             TaskStore(home / "tasks" / task.id).save(task)
@@ -788,7 +885,9 @@ def apply_materials_pack_choice(
             blueprint_id=bp,
         )
         # 已有写作文档：直接绑定
-        if task is not None and not _is_blueprint_only_task(task):
+        bind_task = _session_writing_copy(home, session, task, blueprint_id=bp)
+        if bind_task is not None:
+            task = bind_task
             task.materials_pack_id = pack.id
             mark_materials_pack_skipped(session, task.id, skipped=False)
             TaskStore(home / "tasks" / task.id).save(task)
@@ -836,7 +935,7 @@ def apply_materials_pack_choice(
             )
         new_name = str(body.get("name") or body.get("pack_name") or "").strip()
         if not new_name:
-            from report_writing.chat.intent_clarify import begin_clarify
+            from report_writing.chat.clarify_flow import begin_clarify
 
             return begin_clarify(
                 session,
@@ -935,7 +1034,7 @@ def apply_materials_pack_choice(
         # materials_pack_update_slot
         new_name = str(body.get("name") or body.get("slot_name") or "").strip()
         if not new_name:
-            from report_writing.chat.intent_clarify import begin_clarify
+            from report_writing.chat.clarify_flow import begin_clarify
 
             return begin_clarify(
                 session,

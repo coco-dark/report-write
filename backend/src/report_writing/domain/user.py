@@ -27,7 +27,7 @@ class UserLlmConfig(Entity):
     timeout: int = 120
     temperature: float = 0.0
     max_tokens: int = 4096
-    intent_model_name: str = ""  # 意图分类专用；空则 REPORT_WRITING_INTENT_MODEL 或同对话模型
+    intent_model_name: str = ""  # 窄 JSON 分类器（澄清/槽位）；字段名是配置契约，空则 yaml intent-model-name
     enabled: bool = False  # True 时优先于系统百炼配置
 
     def effective_base_url(self) -> str:

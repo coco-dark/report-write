@@ -159,22 +159,24 @@ def normalize_content_blocks(raw: list | None) -> list[dict[str, Any]]:
                 "column_roles": column_roles,
                 "fixed_items": fixed_items,
                 "variable_items": variable_items,
+                "compose": str(item.get("compose") or "").strip(),
+                "template_text": str(item.get("template_text") or item.get("text") or "").strip(),
             }
         )
     return blocks
 
 
 def ensure_html_fragment(text: str) -> str:
-    """保证片段是完整 HTML：无标签包 <p>；未闭合标签自动补上；纯文本表格提升为 <table>。"""
+    """保证片段是完整 HTML：无标签则按段落/表格/列表转换；未闭合标签自动补上。"""
     raw = (text or "").strip()
     if not raw:
         return "<p></p>"
     if raw in ("【图片】", "[图片]", "图片占位"):
         return '<figure class="image-placeholder"><figcaption>图片占位</figcaption></figure>'
     if not re.search(r"<[a-zA-Z]", raw):
-        as_table = _plain_text_to_table_html(raw)
-        if as_table:
-            return as_table
+        structured = _plain_text_to_structured_html(raw)
+        if structured:
+            return structured
         return f"<p>{_escape_text(raw)}</p>"
     repaired = _close_open_tags(raw)
     stripped = repaired.lstrip().lower()
@@ -190,6 +192,116 @@ def ensure_html_fragment(text: str) -> str:
     ):
         repaired = f"<p>{repaired}</p>"
     return promote_tables_in_html(repaired)
+
+
+_LIST_OL_RE = re.compile(r"^(\d+)[\.、．][\s　]*(.+)$")
+_LIST_UL_RE = re.compile(r"^[•·●\-—]\s+(.+)$")
+
+
+def _is_table_row(line: str) -> bool:
+    cells = _split_table_row(line)
+    return bool(cells and len(cells) >= 2)
+
+
+def _is_table_caption(line: str) -> bool:
+    s = (line or "").strip()
+    if not s or _is_table_row(s):
+        return False
+    return bool(re.match(r"^表[\d.\-－—]+", s) or (s.startswith("表") and len(s) < 80))
+
+
+def _is_section_header(line: str) -> bool:
+    s = (line or "").strip()
+    if not s or _is_table_row(s):
+        return False
+    return bool(
+        re.match(r"^[一二三四五六七八九十百千0-9]+、", s)
+        or re.match(r"^[（(][一二三四五六七八九十0-9]+[）)]", s)
+    )
+
+
+def _all_table_like(lines: list[str]) -> bool:
+    nonempty = [ln for ln in lines if str(ln).strip()]
+    if sum(1 for ln in nonempty if _is_table_row(ln)) < 2:
+        return False
+    return all(_is_table_row(ln) or _is_table_caption(ln) or _is_section_header(ln) for ln in nonempty)
+
+
+def _plain_text_to_structured_html(text: str) -> str:
+    """原文转 HTML：段落、表题+表、有序列表。整段都是表时走原表格提升。"""
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    lines = [ln.rstrip() for ln in raw.splitlines()]
+    if _all_table_like(lines):
+        return _plain_text_to_table_html(raw) or ""
+
+    parts: list[str] = []
+    i = 0
+    n = len(lines)
+
+    def next_content(start: int) -> int | None:
+        j = start
+        while j < n and not lines[j].strip():
+            j += 1
+        return j if j < n else None
+
+    while i < n:
+        if not lines[i].strip():
+            i += 1
+            continue
+        ln = lines[i]
+        caption_then_table = _is_table_caption(ln) and any(
+            _is_table_row(lines[k]) for k in range(i + 1, min(i + 12, n))
+        )
+        if _is_table_row(ln) or caption_then_table:
+            buf: list[str] = []
+            while i < n:
+                if not lines[i].strip():
+                    nxt = next_content(i + 1)
+                    if nxt is None:
+                        break
+                    if _is_table_row(lines[nxt]) or _is_section_header(lines[nxt]) or _is_table_caption(lines[nxt]):
+                        i = nxt
+                        continue
+                    break
+                cur = lines[i]
+                if _is_table_row(cur) or _is_table_caption(cur) or _is_section_header(cur):
+                    buf.append(cur)
+                    i += 1
+                    continue
+                break
+            table = _plain_text_to_table_html("\n".join(buf))
+            if table:
+                parts.append(table)
+            else:
+                parts.extend(f"<p>{_escape_text(item.strip())}</p>" for item in buf)
+            continue
+        ol = _LIST_OL_RE.match(ln.strip())
+        ul = _LIST_UL_RE.match(ln.strip())
+        if ol or ul:
+            ordered = bool(ol)
+            items: list[str] = []
+            while i < n and lines[i].strip():
+                s = lines[i].strip()
+                m_ol = _LIST_OL_RE.match(s)
+                m_ul = _LIST_UL_RE.match(s)
+                if ordered and m_ol:
+                    items.append(m_ol.group(2))
+                    i += 1
+                    continue
+                if (not ordered) and m_ul:
+                    items.append(m_ul.group(1))
+                    i += 1
+                    continue
+                break
+            tag = "ol" if ordered else "ul"
+            inner = "".join(f"<li>{_escape_text(item)}</li>" for item in items)
+            parts.append(f"<{tag}>{inner}</{tag}>")
+            continue
+        parts.append(f"<p>{_escape_text(ln.strip())}</p>")
+        i += 1
+    return "\n".join(parts)
 
 
 def promote_tables_in_html(html: str) -> str:

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Iterator, Mapping
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_serializer, field_validator, model_validator
 
 
 class ChapterStatus(str, Enum):
@@ -22,6 +24,7 @@ class ChapterStatus(str, Enum):
 class TaskStatus(str, Enum):
     STUDYING = "studying"
     RUNNING = "running"
+    IDLE = "idle"
     AWAITING_CONFIRM = "awaiting_confirm"
     COMPLETED = "completed"
 
@@ -44,7 +47,8 @@ MAX_ADOPTED = 8
 MAX_SEARCH_TERMS = 6  # 每章最多用几个检索词
 SEARCH_TOP_K = 4  # 每个检索词 RAG 返回条数
 MAX_EVIDENCE_CARDS = 20  # 每章最终保留的证据卡上限（含未采纳）
-MAX_REVISIONS = 2
+MAX_REVISIONS = 5  # 检查退回自动重写上限
+WRITE_SCORE_PASS = 70  # 写作检查通过分阈值（0–100）；低于此线进度卡标为未达线
 MAX_AGENT_STEPS = 8
 
 
@@ -86,6 +90,8 @@ class ContentBlock(Entity):
     fixed_items: list[str] = Field(default_factory=list)
     # 随项目变化的单元格/行项（写作时需从资料填充）
     variable_items: list[str] = Field(default_factory=list)
+    compose: str = ""  # source_only | template_fill | hybrid | auto_generate；空=跟随章节
+    template_text: str = ""  # 套话原文，可用 {{槽名}}
 
     @field_validator("cells_sample", mode="before")
     @classmethod
@@ -107,6 +113,8 @@ class ChapterRequirement(Entity):
     keywords: list[str] = Field(default_factory=list)
     extracts: list[ExtractItem] = Field(default_factory=list)
     points: list[str] = Field(default_factory=list)
+    # 与大纲 point_items 对齐：写作时绑定「要点 ↔ 关联要素结果」
+    point_items: list[dict[str, Any]] = Field(default_factory=list)
     content_blocks: list[ContentBlock] = Field(default_factory=list)
     reference_text: str = ""  # 参考正文：学写法/格式；fixed_output 时作为必须照抄的固定正文
     allowed_fact_types: list[str] = Field(default_factory=lambda: ["名称", "数值", "日期", "单位"])
@@ -117,9 +125,20 @@ class ChapterRequirement(Entity):
     knowledge_folder_ids: list[str] = Field(default_factory=list)
     element_ids: list[str] = Field(default_factory=list)
     element_results: list[dict[str, Any]] = Field(default_factory=list)
+    # 对话里用户说明的原文，写作时与要素同为内容依据；不据此生成/回填要素槽
+    content_basis: list[str] = Field(default_factory=list)
     structure_only: bool = False  # 纯目录节点：不写正文、不检索
     fixed_output: bool = False  # 固定内容：跳过检索，按 reference_text 原文输出
+    presence: str = "always"  # always | if_materials（由写作策略派生）
+    compose: str = "hybrid"  # source_only | template_fill | hybrid | auto_generate
     search_terms_separate: bool = False  # True=每个检索词单独查；默认 False=合并一次查
+
+    @model_validator(mode="after")
+    def _sync_compose_fields(self):
+        from report_writing.domain.chapter_compose import apply_compose_fields
+
+        apply_compose_fields(self)
+        return self
 
     def search_terms(self) -> list[str]:
         """章节级检索词已废弃；资料由关联要素解析（见 element_results）。"""
@@ -306,7 +325,17 @@ class OutlineNode(Entity):
     elements: list[ChapterElement] = Field(default_factory=list)
     structure_only: bool = False  # 仅目录标题，不需要写作要点/检索词
     fixed_output: bool = False  # 固定内容输出：写作时照抄 reference_text
+    presence: str = "always"
+    compose: str = "hybrid"
+    extracts: list[ExtractItem] = Field(default_factory=list)
     search_terms_separate: bool = False  # True=检索词分开查；默认合并一次查
+
+    @model_validator(mode="after")
+    def _sync_compose_fields(self):
+        from report_writing.domain.chapter_compose import apply_compose_fields
+
+        apply_compose_fields(self)
+        return self
 
 
 class AutoStudyDraft(Entity):
@@ -327,6 +356,9 @@ class AutoStudyDraft(Entity):
     accepted: bool = True
     structure_only: bool = False
     project_slots: list[dict[str, Any]] = Field(default_factory=list)
+    presence: str = "always"
+    compose: str = "hybrid"
+    boilerplate: str = ""
 
 
 class OutlineDiffItem(Entity):
@@ -448,12 +480,15 @@ class ParsePointsRequest(Entity):
 
 
 class MetaFromPointsRequest(Entity):
-    """按当前写作要点重写章节说明与补充提示词。"""
+    """按当前写作要点 / 原文生成章节说明（不改补充提示词）。"""
 
     chapter_key: str = ""
     title: str = ""
     sequence: str = ""
     point_items: list[dict] = Field(default_factory=list)
+    compose: str = ""
+    presence: str = ""
+    reference_text: str = ""
 
 
 class ElementDraftFromPointRequest(Entity):
@@ -525,6 +560,9 @@ class CheckResult(Entity):
     action: CheckAction
     comments: list[ParagraphComment] = Field(default_factory=list)
     reason: str = ""
+    # 写作检查分 0–100；与 WRITE_SCORE_PASS 对照展示是否达线
+    score: int = 0
+    below_threshold: bool = False
 
 
 class ChapterState(Entity):
@@ -597,6 +635,8 @@ class WritingTask(Entity):
     write_chapter_scope: list[str] = Field(default_factory=list)
     # 开写前/写后待补充项登记（与对话 registry 同步）
     writing_supplement_gaps: list[dict[str, Any]] = Field(default_factory=list)
+    # 开写时从对话摘录的原文内容依据（非整槽要素）
+    writing_content_basis: list[str] = Field(default_factory=list)
     user_id: str = ""
 
     def chapter(self, key: str) -> ChapterState:
@@ -606,19 +646,31 @@ class WritingTask(Entity):
         raise KeyError(key)
 
     def refresh_status(self) -> None:
+        """任务状态只跟章节流水线，禁止「还有没写的章」就标成正在写。"""
         if self.outline is not None and not self.outline_confirmed:
             self.status = TaskStatus.STUDYING
             return
         if self.brief is not None and not self.brief_confirmed:
             self.status = TaskStatus.STUDYING
             return
+        inflight = {
+            ChapterStatus.SEARCHING,
+            ChapterStatus.WRITING,
+            ChapterStatus.CHECKING,
+        }
+        awaiting = {ChapterStatus.AWAITING_CONFIRM, ChapterStatus.NEEDS_HUMAN}
+        done = {ChapterStatus.CONFIRMED, ChapterStatus.SKIPPED}
         statuses = [item.status for item in self.chapters]
-        if statuses and all(item in {ChapterStatus.CONFIRMED, ChapterStatus.SKIPPED} for item in statuses):
-            self.status = TaskStatus.COMPLETED
-        elif any(item == ChapterStatus.AWAITING_CONFIRM for item in statuses):
-            self.status = TaskStatus.AWAITING_CONFIRM
-        elif self.brief is not None:
+        if any(item in inflight for item in statuses):
             self.status = TaskStatus.RUNNING
+            return
+        if any(item in awaiting for item in statuses):
+            self.status = TaskStatus.AWAITING_CONFIRM
+            return
+        if statuses and all(item in done for item in statuses):
+            self.status = TaskStatus.COMPLETED
+            return
+        self.status = TaskStatus.IDLE
 
 
 class StudiedTemplate(Entity):
@@ -732,6 +784,449 @@ class RenderTemplateSummary(Entity):
     header: str = ""
 
 
+class WritingPace(str, Enum):
+    BATCH = "batch"
+    STEP = "step"
+
+
+class SessionGoal(Entity, Mapping[str, Any]):
+    """会话级写作目标（类型 / 标题 / 项目 / 备注）。"""
+
+    summary: str = ""
+    doc_category: str = ""
+    doc_title: str = ""
+    project: str = ""
+    notes: str = ""
+    updated_at: str = ""
+
+    def get(self, key: str, default: Any = None) -> Any:
+        if key in type(self).model_fields:
+            value = getattr(self, key)
+            return default if value in (None, "") and default is not None else value
+        return default
+
+    def __getitem__(self, key: str) -> Any:
+        data = self.to_dict()
+        if key in data:
+            return data[key]
+        raise KeyError(key)
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.to_dict())
+
+    def __len__(self) -> int:
+        return len(self.to_dict())
+
+
+class ChatActionPayload(Entity, Mapping[str, Any]):
+    """对话 action / Tool 入参。点选、口语 Tool、调度层共用，避免散落的 dict[str]。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    q: str = ""
+    message: str = ""
+    text: str = ""
+    notes: str = ""
+    user_message: str = ""
+    task_id: str = ""
+    blueprint_id: str = ""
+    card_key: str = ""
+    chapter_key: str = ""
+    chapter_key_hint: str = ""
+    focus_chapter_key: str = ""
+    chapter_keys: list[str] = Field(default_factory=list)
+    write_chapter_keys: list[str] = Field(default_factory=list)
+    chapter_sequences: list[str] = Field(default_factory=list)
+    writing_pace: str = ""
+    decision: str = ""
+    comment: str = ""
+    pause_after: bool = False
+    skip_empty: bool = True
+    confirm: bool = False
+    regenerate: bool = False
+    reopen_edit: bool = False
+    outline_text: str = ""
+    revision_instructions: str = ""
+    title: str = ""
+    category: str = ""
+    gap_id: str = ""
+    hint: str = ""
+    user_note: str = ""
+    slot: str = ""
+    slot_label: str = ""
+    name: str = ""
+    already_persisted: bool = False
+    from_doc_window: bool = False
+    skip_supplement_check: bool = False
+    aux_prompt: str = ""
+    describes: str = ""
+    reference_text: str = ""
+    points_text: str = ""
+    keywords_text: str = ""
+    pack_id: str = ""
+    option_id: str = ""
+    option_label: str = ""
+    explicit_create: bool = False
+    force_new: bool = False
+    dismiss: bool = False
+    project_folder_label: str = ""
+    project_folder_ids: list[str] = Field(default_factory=list)
+    element_ids: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    writing_task_id: str = ""
+    sequence: str = ""
+    chapter_title: str = ""
+    kind: str = ""
+    element_id: str = ""
+    element_name: str = ""
+    points: Any = None
+    keywords: Any = None
+    point_items: list[Any] = Field(default_factory=list)
+    elements: list[Any] = Field(default_factory=list)
+    chapters: list[Any] = Field(default_factory=list)
+    point_index: Any = None
+    fixed_output: bool = False
+    presence: str = ""
+    compose: str = ""
+    source_text: str = ""
+    search_terms_separate: bool = False
+    structure_only: bool = False
+    preserve_chapter_meta: bool = False
+    wizard_command: str = ""
+    step: str = ""
+    resource: str = ""
+    accept: bool = False
+    title_hint: str = ""
+    clarify_id: str = ""
+    blueprint_title: str = ""
+    chapter_label: str = ""
+    slot_no: int = 0
+    no: int = 0
+    materials_pack_id: str = ""
+    sequences: list[str] = Field(default_factory=list)
+    working_task_id: str = ""
+    item_id: str = ""
+    document_title: str = ""
+    doc_title: str = ""
+    target_document: str = ""
+    action: str = ""
+    target: str = ""
+    options: list[Any] = Field(default_factory=list)
+    question: str = ""
+    source: str = ""
+    mode: str = ""
+    count: int = 0
+    steps: list[Any] = Field(default_factory=list)
+    confirmed_create: bool = False
+    from_entry_path: bool = False
+
+    @classmethod
+    def parse(cls, raw: Any = None) -> ChatActionPayload:
+        if isinstance(raw, cls):
+            return raw
+        if raw is None or raw == "":
+            return cls()
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except json.JSONDecodeError:
+                return cls()
+        if not isinstance(raw, dict):
+            if hasattr(raw, "model_dump"):
+                raw = raw.model_dump()
+            else:
+                return cls()
+        data = dict(raw)
+        if data.get("chapter_keys_json") and not data.get("chapter_keys"):
+            data["chapter_keys"] = data.get("chapter_keys_json")
+        for key in (
+            "chapter_keys",
+            "write_chapter_keys",
+            "chapter_sequences",
+            "element_ids",
+            "tags",
+            "project_folder_ids",
+            "sequences",
+        ):
+            if key in data:
+                data[key] = _as_str_list(data.get(key))
+        if data.get("_skip_supplement_check") and not data.get("skip_supplement_check"):
+            data["skip_supplement_check"] = bool(data.get("_skip_supplement_check"))
+        return cls.model_validate(data)
+
+    def as_dict(self) -> dict[str, Any]:
+        return self.model_dump(exclude_unset=True)
+
+    def with_updates(self, **kwargs: Any) -> ChatActionPayload:
+        data = self.as_dict()
+        data.update(kwargs)
+        return ChatActionPayload.parse(data)
+
+    def __getitem__(self, key: str) -> Any:
+        extra = self.model_extra or {}
+        if key in extra:
+            return extra[key]
+        if key in self.model_fields_set:
+            return getattr(self, key)
+        raise KeyError(key)
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.as_dict())
+
+    def __len__(self) -> int:
+        return len(self.as_dict())
+
+    def get(self, key: str, default: Any = None) -> Any:
+        extra = self.model_extra or {}
+        if key in extra:
+            return extra[key]
+        if key in self.model_fields_set:
+            return getattr(self, key)
+        return default
+
+    def __contains__(self, key: object) -> bool:
+        if not isinstance(key, str):
+            return False
+        return key in self.model_fields_set or key in (self.model_extra or {})
+
+    def pop(self, key: str, default: Any = None) -> Any:
+        extra = self.model_extra
+        if extra is not None and key in extra:
+            return extra.pop(key, default)
+        if key in self.model_fields_set:
+            value = getattr(self, key)
+            field = type(self).model_fields[key]
+            if field.default_factory is not None:
+                setattr(self, key, field.default_factory())
+            else:
+                setattr(self, key, field.default)
+            self.model_fields_set.discard(key)
+            return value
+        return default
+
+
+def _as_str_list(value: Any) -> list[str]:
+    if value is None or value == "":
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("["):
+            try:
+                value = json.loads(text)
+            except json.JSONDecodeError:
+                value = [text]
+        else:
+            value = [part.strip() for part in text.replace("，", ",").split(",") if part.strip()]
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def action_payload_dict(payload: Any = None) -> dict[str, Any]:
+    """把 Tool/点选入参收成普通 dict（仅已填字段），给仍走 dict 的旧调用。"""
+    return ChatActionPayload.parse(payload).as_dict()
+
+
+ChatPayload = ChatActionPayload | dict[str, Any] | None
+
+
+class ClarifyOption(Entity):
+    """澄清卡上的一个选项。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str = ""
+    label: str = ""
+    slots: dict[str, Any] = Field(default_factory=dict)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        extra = self.model_extra or {}
+        if key in extra:
+            return extra[key]
+        if key in type(self).model_fields:
+            return getattr(self, key)
+        return default
+
+
+class ClarifyCandidate(Entity):
+    """澄清点选后要执行的候选 Tool。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    kind: str = ""
+    name: str = ""
+    command: str = ""
+    tool: str = ""
+    payload: ChatActionPayload = Field(default_factory=ChatActionPayload)
+
+    @field_validator("payload", mode="before")
+    @classmethod
+    def _coerce_payload(cls, value: Any) -> ChatActionPayload:
+        return ChatActionPayload.parse(value)
+
+    @field_serializer("payload")
+    def _dump_payload(self, value: ChatActionPayload) -> dict[str, Any]:
+        if isinstance(value, ChatActionPayload):
+            return value.as_dict()
+        return dict(value or {})
+
+    def get(self, key: str, default: Any = None) -> Any:
+        extra = self.model_extra or {}
+        if key in extra:
+            return extra[key]
+        if key in type(self).model_fields:
+            value = getattr(self, key)
+            if key == "payload" and isinstance(value, ChatActionPayload):
+                return value.as_dict()
+            return value
+        return default
+
+
+class ClarifyPending(Entity, Mapping[str, Any]):
+    """会话挂起的澄清卡（session.freeform.intent_clarify）。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str = ""
+    source: str = ""
+    question: str = ""
+    options: list[ClarifyOption] = Field(default_factory=list)
+    candidate: ClarifyCandidate = Field(default_factory=ClarifyCandidate)
+    slots: dict[str, Any] = Field(default_factory=dict)
+    phase_hint: str = ""
+    ask_count: int = 0
+
+    @field_validator("options", mode="before")
+    @classmethod
+    def _coerce_options(cls, value: Any) -> list:
+        if not value:
+            return []
+        rows = []
+        for item in value:
+            if isinstance(item, ClarifyOption):
+                rows.append(item)
+            elif isinstance(item, dict):
+                rows.append(ClarifyOption.model_validate(item))
+        return rows
+
+    @field_validator("candidate", mode="before")
+    @classmethod
+    def _coerce_candidate(cls, value: Any) -> ClarifyCandidate:
+        if isinstance(value, ClarifyCandidate):
+            return value
+        return ClarifyCandidate.model_validate(value or {})
+
+    @classmethod
+    def parse(cls, raw: Any = None) -> ClarifyPending | None:
+        if isinstance(raw, cls):
+            return raw
+        if not raw:
+            return None
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except json.JSONDecodeError:
+                return None
+        if not isinstance(raw, dict) or not str(raw.get("id") or "").strip():
+            return None
+        return cls.model_validate(raw)
+
+    @classmethod
+    def from_any(cls, raw: Any = None) -> ClarifyPending:
+        hit = cls.parse(raw)
+        if hit is not None:
+            return hit
+        data = raw.to_dict() if hasattr(raw, "to_dict") else dict(raw or {})
+        if not str(data.get("id") or "").strip():
+            data["id"] = "_"
+        return cls.model_validate(data)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        data = self.to_dict()
+        return data.get(key, default)
+
+    def __getitem__(self, key: str) -> Any:
+        data = self.to_dict()
+        if key in data:
+            return data[key]
+        raise KeyError(key)
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        if key in type(self).model_fields:
+            setattr(self, key, value)
+            self.model_fields_set.add(key)
+            return
+        extra = self.model_extra
+        if extra is None:
+            object.__setattr__(self, "__pydantic_extra__", {key: value})
+        else:
+            extra[key] = value
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.to_dict())
+
+    def __len__(self) -> int:
+        return len(self.to_dict())
+
+
+class ClarifySpec(Entity, Mapping[str, Any]):
+    """澄清点选结果：交给 execute_clarify_spec 执行。"""
+
+    model_config = ConfigDict(extra="allow")
+
+    candidate: ClarifyCandidate = Field(default_factory=ClarifyCandidate)
+    slots: dict[str, Any] = Field(default_factory=dict)
+    option_id: str = ""
+    defaulted: bool = False
+    note: str = ""
+    source: str = ""
+
+    @field_validator("candidate", mode="before")
+    @classmethod
+    def _coerce_candidate(cls, value: Any) -> ClarifyCandidate:
+        if isinstance(value, ClarifyCandidate):
+            return value
+        return ClarifyCandidate.model_validate(value or {})
+
+    @classmethod
+    def parse(cls, raw: Any = None) -> ClarifySpec:
+        if isinstance(raw, cls):
+            return raw
+        if raw is None:
+            return cls()
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except json.JSONDecodeError:
+                return cls()
+        if not isinstance(raw, dict):
+            if hasattr(raw, "to_dict"):
+                raw = raw.to_dict()
+            else:
+                return cls()
+        return cls.model_validate(raw)
+
+    def with_slots(self, **kwargs: Any) -> ClarifySpec:
+        slots = dict(self.slots)
+        slots.update(kwargs)
+        return self.model_copy(update={"slots": slots})
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self.to_dict().get(key, default)
+
+    def __getitem__(self, key: str) -> Any:
+        data = self.to_dict()
+        if key in data:
+            return data[key]
+        raise KeyError(key)
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.to_dict())
+
+    def __len__(self) -> int:
+        return len(self.to_dict())
+
+
 class ChatPhase(str, Enum):
     INTENT = "intent"
     BLUEPRINT_SELECT = "blueprint_select"
@@ -751,7 +1246,18 @@ class ChatCard(Entity):
     used: bool = False
     type: str = ""
     title: str = ""
-    payload: dict[str, Any] = Field(default_factory=dict)
+    payload: ChatActionPayload = Field(default_factory=ChatActionPayload)
+
+    @field_validator("payload", mode="before")
+    @classmethod
+    def _coerce_payload(cls, value: Any) -> ChatActionPayload:
+        return ChatActionPayload.parse(value)
+
+    @field_serializer("payload")
+    def _dump_payload(self, value: ChatActionPayload) -> dict[str, Any]:
+        if isinstance(value, ChatActionPayload):
+            return value.as_dict()
+        return dict(value or {})
 
 
 class ChatMessage(Entity):
@@ -821,7 +1327,7 @@ class ChatRequest(Entity):
     robot_id: str = ""
     session_id: str = ""
     action: str = ""  # select_blueprint | skip_blueprint | resume | confirm_chapter | start_writing | ...
-    action_payload: dict[str, Any] = Field(default_factory=dict)
+    action_payload: ChatActionPayload = Field(default_factory=ChatActionPayload)
     client_sync: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -879,6 +1385,10 @@ class UseStudyRequest(Entity):
 class UpdatePointsRequest(Entity):
     points: list[str]
     save_cache: bool = False
+
+
+class GenerateBoilerplateRequest(Entity):
+    source_text: str = ""
 
 
 class ConfirmChapterRequest(Entity):

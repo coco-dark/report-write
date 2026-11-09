@@ -1,6 +1,6 @@
 <template>
   <div class="chapter-composer" :class="{ 'is-readonly': readonly }">
-    <div v-if="!readonly" class="fmt-bar">
+    <div v-if="!readonly && !hideToolbar" class="fmt-bar">
       <button type="button" class="fmt" title="加粗" @mousedown.prevent="fmt('bold')"><b>B</b></button>
       <button type="button" class="fmt" title="斜体" @mousedown.prevent="fmt('italic')"><i>I</i></button>
       <button type="button" class="fmt" title="下划线" @mousedown.prevent="fmt('underline')"><u>U</u></button>
@@ -12,12 +12,9 @@
       ref="root"
       class="rich-editor chapter-html-editor"
       :class="{ 'is-readonly': readonly }"
+      :style="editorStyle"
       :contenteditable="readonly ? 'false' : 'true'"
-      :data-placeholder="
-        readonly
-          ? '写作进行中，完成后可查看与修改正文'
-          : '可直接修改正文，改完点「保存正文」'
-      "
+      :data-placeholder="resolvedPlaceholder"
       @input="onInput"
       @paste="onPaste"
     />
@@ -25,7 +22,7 @@
 </template>
 
 <script setup>
-import { nextTick, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 
 import { clipboardToHtml, insertHtmlAtCursor, sanitizeHtml, toDisplayHtml } from "../chatHtml";
 
@@ -35,12 +32,35 @@ const props = defineProps({
   sourceHtml: { type: String, default: "" },
   /** 写作/分析中只读展示，禁止编辑 */
   readonly: { type: Boolean, default: false },
+  placeholder: { type: String, default: "" },
+  minHeight: { type: [Number, String], default: "" },
+  maxHeight: { type: [Number, String], default: "" },
+  /** 隐藏格式工具栏（仍可粘贴 Word 富文本） */
+  hideToolbar: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(["update:modelValue"]);
 
 const root = ref(null);
 let lastEmitted = "";
+
+const resolvedPlaceholder = computed(() => {
+  if (props.placeholder) return props.placeholder;
+  return props.readonly
+    ? "写作进行中，完成后可查看与修改正文"
+    : "可直接修改正文，改完点「保存正文」";
+});
+
+const editorStyle = computed(() => {
+  const style = {};
+  if (props.minHeight !== "" && props.minHeight != null) {
+    style.minHeight = typeof props.minHeight === "number" ? `${props.minHeight}px` : String(props.minHeight);
+  }
+  if (props.maxHeight !== "" && props.maxHeight != null) {
+    style.maxHeight = typeof props.maxHeight === "number" ? `${props.maxHeight}px` : String(props.maxHeight);
+  }
+  return style;
+});
 
 function displayOf(raw) {
   const text = String(raw || "");
@@ -89,13 +109,9 @@ watch(
     }
     if (document.activeElement === root.value) return;
     const incoming = displayOf(props.modelValue) || displayOf(props.sourceHtml);
-    if (!incoming) return;
     if (incoming === lastEmitted) return;
-    const current = readDom();
-    if (!current.trim()) {
-      writeDom(incoming);
-      lastEmitted = incoming;
-    }
+    writeDom(incoming);
+    lastEmitted = incoming;
   }
 );
 

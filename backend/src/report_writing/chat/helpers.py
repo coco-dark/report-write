@@ -21,6 +21,8 @@ from report_writing.controller import (
 )
 from report_writing.domain.models import (
     ChapterStatus,
+    ChatActionPayload,
+    ChatPayload,
     ChatCard,
     ChatMessage,
     ChatPhase,
@@ -29,7 +31,9 @@ from report_writing.domain.models import (
     ChatSession,
     HumanDecision,
     OutlineNode,
+    WritingPace,
     WritingTask,
+    action_payload_dict,
 )
 from report_writing.services.robots import (
     DEFAULT_CHAT_PROMPT,
@@ -42,11 +46,6 @@ from report_writing.services.store import TaskStore
 
 _log = logging.getLogger("report_writing.chat")
 
-InvokeFn = Callable[[str, str], str]
-EmitFn = Callable[[dict[str, Any]], None]
-StreamModelFn = Callable[[str, str], Iterable[str]]
-
-_log = logging.getLogger(__name__)
 InvokeFn = Callable[[str, str], str]
 EmitFn = Callable[[dict[str, Any]], None]
 StreamModelFn = Callable[[str, str], Iterable[str]]
@@ -112,8 +111,8 @@ def is_vague_freeform_meta(text: str, *, field: bool = False) -> bool:
     return False
 
 
-WRITING_PACE_BATCH = "batch"
-WRITING_PACE_STEP = "step"
+WRITING_PACE_BATCH = WritingPace.BATCH.value
+WRITING_PACE_STEP = WritingPace.STEP.value
 _ACTION_USER_LABELS = {
     "select_blueprint": "选用蓝本",
     "skip_blueprint": "跳过蓝本，自己定大纲",
@@ -130,6 +129,9 @@ _ACTION_USER_LABELS = {
     "confirm_chapter": "确认本章",
     "confirm_all_chapters": "统一确认章节",
     "configure_chapter": "保存章节配置",
+    "get_chapter_info": "查看章节信息",
+    "generate_chapter_describes": "生成章节说明",
+    "generate_chapter_boilerplate": "生成套话正文",
     "add_chapter_element": "添加章节要素",
     "collect_to_element_library": "收入要素库",
     "associate_elements": "关联要素",
@@ -137,7 +139,7 @@ _ACTION_USER_LABELS = {
     "remove_document_element": "删除文档要素",
     "open_element_library": "查看要素",
     "open_blueprint_library": "查看蓝本库",
-    "retry_chapter": "重试本章写作",
+    "retry_chapter": "开始写作本章",
     "retry_search_chapter": "仅重试检索",
     "submit_outline": "确认大纲",
     "save_freeform_as_blueprint": "收录到蓝本库",
@@ -184,9 +186,22 @@ _WIZARD_COMMAND_USER_LABELS = {
 }
 
 
-def blueprint_wizard_user_label(payload: dict | None) -> str:
-    data = payload or {}
+def blueprint_wizard_user_label(payload: ChatPayload) -> str:
+    data = action_payload_dict(payload)
     command = str(data.get("wizard_command") or "").strip()
+    if command == "re_study_chapters":
+        tag = _chapter_instruction_tag(ChatActionPayload.parse(data))
+        keys = data.get("chapter_keys") or []
+        n = len(keys) if isinstance(keys, list) else 0
+        method = str(data.get("study_method") or "").strip()
+        scope = f"（{n}章）" if n > 1 else tag
+        if method == "source":
+            return f"根据原文分析章节{scope}" if scope else "根据原文分析本章"
+        if method == "auto":
+            return f"自动分析章节{scope}" if scope else "自动分析本章"
+        if method == "sample":
+            return f"依据样本分析章节{scope}" if scope else "依据样本分析本章"
+        return f"分析章节{scope}" if scope else "重新分析本章"
     if command and command in _WIZARD_COMMAND_USER_LABELS:
         return _WIZARD_COMMAND_USER_LABELS[command]
     step = str(data.get("step") or "").strip()
@@ -219,41 +234,153 @@ _CHAPTER_STATUS_LABEL = {
 }
 _TASK_STATUS_LABEL = {
     "studying": "分析中",
-    "running": "进行中",
+    "running": "正在写",
+    "idle": "待继续",
     "awaiting_confirm": "已写作",
     "completed": "已完成",
 }
 
 
-def _user_action_label(action: str, payload: dict | None = None) -> str:
+def _usable_chapter_part(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text or text in {"本章", "当前章节"}:
+        return ""
+    return text
+
+
+def _chapter_instruction_tag(payload: ChatPayload) -> str:
+    seq = _usable_chapter_part(payload.get("sequence"))
+    title = _usable_chapter_part(payload.get("chapter_title")) or _usable_chapter_part(
+        payload.get("title")
+    )
+    inner = " ".join(part for part in (seq, title) if part).strip()
+    return f"[{inner}]" if inner else ""
+
+
+def _user_action_label(action: str, payload: ChatPayload = None) -> str:
+    """按钮点击在对话里展示的一句指令，如「重写章节[1.1 评价单元划分]」。"""
     key = (action or "").strip()
-    label = _ACTION_USER_LABELS.get(key, "继续")
-    payload = payload or {}
-    if key == "select_blueprint":
-        title = str(payload.get("title") or payload.get("blueprint_title") or "").strip()
-        return f"选用「{title}」" if title else label
-    if key == "select_write_chapters":
+    payload = ChatActionPayload.parse(payload)
+    tag = _chapter_instruction_tag(payload)
+    slot = str(
+        payload.get("pointSlot")
+        or payload.get("point_slot")
+        or payload.get("slot")
+        or payload.get("slot_label")
+        or ""
+    ).strip()
+
+    if key == "retry_chapter":
+        mode = str(payload.get("_write_mode") or payload.get("write_mode") or "").strip()
+        if mode == "rewrite":
+            return f"重写章节{tag}" if tag else "重写本章"
+        return f"开始写作章节{tag}" if tag else "开始写作本章"
+    if key == "retry_search_chapter":
+        return f"重试检索章节{tag}" if tag else "重试本章检索"
+    if key == "confirm_chapter":
+        return f"确认章节{tag}" if tag else "确认本章"
+    if key == "configure_chapter":
+        return f"保存章节配置{tag}" if tag else "保存章节配置"
+    if key == "get_chapter_info":
+        return f"查看章节信息{tag}" if tag else "查看章节信息"
+    if key == "generate_chapter_describes":
+        return f"生成章节说明{tag}" if tag else "生成章节说明"
+    if key == "generate_chapter_boilerplate":
+        return f"生成套话正文{tag}" if tag else "生成套话正文"
+    if key == "associate_elements":
+        if slot and tag:
+            return f"关联要素{tag}要点「{slot}」"
+        if slot:
+            return f"关联要素「{slot}」"
+        return f"关联要素{tag}" if tag else "关联要素"
+    if key == "add_chapter_element":
+        name = str(payload.get("name") or "").strip()
+        if name and tag:
+            return f"添加要素「{name}」到章节{tag}"
+        return f"添加要素到章节{tag}" if tag else "添加章节要素"
+    if key == "start_writing":
         keys = payload.get("chapter_keys") or payload.get("write_chapter_keys") or []
         n = len(keys) if isinstance(keys, list) else 0
-        return f"确认要写的章节（{n} 章）" if n else label
-    if key == "start_writing":
         pace = str(payload.get("writing_pace") or "").strip().lower()
+        if tag and n <= 1:
+            return f"开始写作章节{tag}"
+        if n > 1:
+            return f"开始写作（{n}章）"
         if pace in {"batch", "all", "full"}:
-            return "全部写完再确认"
+            return "开始写作（全部写完再确认）"
         if pace in {"step", "chapter", "one"}:
-            return "写一章确认一章"
-        return label
+            return "开始写作（写一章确认一章）"
+        return "开始写作"
+    if key == "write_analyzed_only":
+        keys = payload.get("chapter_keys") or payload.get("write_chapter_keys") or []
+        n = len(keys) if isinstance(keys, list) else 0
+        if tag and n <= 1:
+            return f"先写已分析的章节{tag}"
+        if n > 1:
+            return f"先写已分析的章节（{n}章）"
+        return "先写已分析的章节"
+    if key == "pause_writing":
+        return "暂停写作"
+    if key == "confirm_all_chapters":
+        rows = payload.get("chapters") or []
+        n = len(rows) if isinstance(rows, list) else 0
+        return f"确认全部章节（{n}章）" if n else "确认全部章节"
+    if key == "generate_freeform_points":
+        keys = payload.get("chapter_keys") or []
+        n = len(keys) if isinstance(keys, list) else 0
+        if tag and n <= 1:
+            return f"生成章节{tag}的写作要点"
+        if n > 1:
+            return f"生成写作要点（{n}章）"
+        return "生成写作要点"
+    if key == "skip_freeform_points":
+        return "跳过写作要点，直接开写"
+    if key == "check_writing_supplements":
+        return f"重新检查写作要点待补充项{tag}" if tag else "重新检查写作要点待补充项"
+    if key == "skip_writing_supplement_check":
+        keys = payload.get("chapter_keys") or []
+        n = len(keys) if isinstance(keys, list) else 0
+        if tag and n <= 1:
+            return f"先这样开写章节{tag}"
+        if n > 1:
+            return f"先这样开写（{n}章）"
+        return "先这样开写"
+    if key == "dismiss_writing_supplement":
+        if slot and tag:
+            return f"忽略待补充项{tag}要点「{slot}」"
+        if slot:
+            return f"忽略待补充项「{slot}」"
+        return f"忽略待补充项{tag}" if tag else "忽略待补充项"
     if key == "submit_outline":
         if bool(payload.get("regenerate")):
             rev = str(payload.get("revision_instructions") or "").strip()
             return f"重新生成章节目录：{rev[:40]}" if rev else "重新生成章节目录"
         if bool(payload.get("reopen_edit")):
             return "重新编辑目录"
-        if bool(payload.get("confirm")):
-            return "确认大纲"
-        return label
+        return "确认大纲"
+    if key == "select_blueprint":
+        title = str(payload.get("title") or payload.get("blueprint_title") or "").strip()
+        return f"选用蓝本「{title}」" if title else "选用蓝本"
+    if key == "skip_blueprint":
+        return "跳过蓝本，自动生成大纲"
+    if key == "begin_blueprint_wizard":
+        return "依据模版编写"
+    if key == "list_blueprints":
+        return "查看可用蓝本"
     if key == "blueprint_wizard":
         return blueprint_wizard_user_label(payload)
+    if key == "select_write_chapters":
+        keys = payload.get("chapter_keys") or payload.get("write_chapter_keys") or []
+        n = len(keys) if isinstance(keys, list) else 0
+        return f"确认要写的章节（{n}章）" if n else "确认要写的章节"
+    pack = str(payload.get("pack_name") or payload.get("name") or "").strip()
+    if key == "materials_pack_use":
+        return f"使用资料包「{pack}」" if pack else "换绑资料包"
+    if key == "materials_pack_create":
+        return f"新建资料包「{pack}」" if pack else "新建资料包"
+    if key == "materials_pack_confirm_library":
+        return f"资料包入库「{pack}」" if pack else "确认资料包入库"
+    label = _ACTION_USER_LABELS.get(key, "继续")
     return label
 
 
@@ -290,6 +417,40 @@ def emit_search_element_lines(emit: EmitFn | None, result: dict[str, Any] | None
             _emit_process(emit, f"　槽位 {gap_txt} 未对齐/未上传，已跳过这些槽的检索")
     if note and (payload.get("fallback_write") or payload.get("element_driven")):
         _emit_process(emit, f"　检索说明：{note}")
+    obtained = payload.get("element_results") if isinstance(payload.get("element_results"), list) else []
+    kind_label_map = {
+        "file_slot": "引用槽位",
+        "file": "文件",
+        "rag_search": "文件",
+        "kv": "键值",
+        "fixed": "固定",
+        "llm_generate": "LLM生成",
+        "node_ref": "引用结果",
+    }
+    if obtained:
+        ok_n = sum(1 for row in obtained if isinstance(row, dict) and (row.get("ok") or str(row.get("value") or "").strip()))
+        _emit_process(emit, f"　获取到的要素 · {ok_n}/{len(obtained)}")
+        for row in obtained[:12]:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("name") or row.get("id") or "要素").strip() or "要素"
+            kind = str(row.get("kind") or "").strip()
+            kind_label = kind_label_map.get(kind, kind)
+            query = str(row.get("query") or "").strip()
+            value = " ".join(str(row.get("value") or "").split()).strip()
+            ok = bool(row.get("ok") if "ok" in row else value)
+            line = f"　· {'✓' if ok else '○'} {name}"
+            if kind_label:
+                line += f"（{kind_label}）"
+            if query:
+                line += f" · 检索词：{query[:80]}"
+            if value:
+                clipped = value[:180] + ("…" if len(value) > 180 else "")
+                line += f"：{clipped}"
+            elif not ok:
+                line += "：未取到内容"
+            _emit_process(emit, line)
+        return
     if not cards:
         return
     _emit_process(emit, f"　要素检索 · 采纳 {len(cards)} 条")
@@ -298,15 +459,7 @@ def emit_search_element_lines(emit: EmitFn | None, result: dict[str, Any] | None
             continue
         name = str(card.get("point") or card.get("source_file") or "要素").strip() or "要素"
         kind = str(card.get("location") or "").strip()
-        kind_label = {
-            "file_slot": "引用槽位",
-            "file": "文件",
-            "rag_search": "文件",
-            "kv": "键值",
-            "fixed": "固定",
-            "llm_generate": "LLM生成",
-            "node_ref": "引用结果",
-        }.get(kind, kind)
+        kind_label = kind_label_map.get(kind, kind)
         query = str(card.get("query") or "").strip()
         excerpt = " ".join(str(card.get("excerpt") or "").split()).strip()
         line = f"　· {name}"
@@ -338,16 +491,6 @@ def emit_write_points_lines(emit: EmitFn | None, result: dict[str, Any] | None) 
         _emit_process(emit, f"　补充提示：{aux[:160]}")
 
 
-def _llm_reply(system: str, message: str, *, invoke: InvokeFn) -> str:
-    if not (message or "").strip():
-        return ""
-    try:
-        return str(invoke(system, message) or "").strip()
-    except Exception as error:
-        _log.warning("chat invoke failed: %s", error)
-        return ""
-
-
 def should_skip_reply_polish(
     session: ChatSession | None,
     cards: list | None,
@@ -366,12 +509,10 @@ def should_skip_reply_polish(
             pass
     if session is not None:
         phase = str(session.phase or "")
-        if phase.startswith("freeform") or phase in {
-            ChatPhase.INTENT.value,
-            ChatPhase.BLUEPRINT_SELECT.value,
-            "ready_to_write",
-            "writing",
-            "confirm_export",
+        # 写作中的进度/导出套话不改味；入口与无蓝本引导允许润色
+        if phase in {
+            ChatPhase.WRITING.value,
+            ChatPhase.CONFIRM_EXPORT.value,
         }:
             return True
     if cards:
@@ -399,7 +540,7 @@ def compose_polish_situation(session: ChatSession | None, cards: list | None = N
     """给润色模型用的场景约束，避免工单腔、和当前流程打架。"""
     if session is None:
         return ""
-    from report_writing.chat.intent_router import user_chose_skip_blueprint
+    from report_writing.chat.session_state import user_chose_skip_blueprint
 
     parts: list[str] = []
     ff = dict(session.freeform or {})
@@ -454,6 +595,7 @@ def polish_chat_reply(
     session: ChatSession | None = None,
     cards: list | None = None,
     force: bool = False,
+    model=None,
 ) -> str:
     """将工具/模板草稿改写成自然口语；失败则返回草稿。单测与脚本模式默认跳过。
 
@@ -464,16 +606,21 @@ def polish_chat_reply(
         return draft or ""
     if not force and should_skip_reply_polish(session, cards, action=action):
         return text
+    if invoke is None and model is not None:
+        from report_writing.infra.llm_invoke import invoke_prompt
+
+        def invoke(system: str, user: str) -> str:
+            return invoke_prompt(model, system, user)
+
     if not invoke:
         return text
     system = (
-        "你是智能文档协作助手「小墨」，像坐在对面的靠谱同事：有温度、会接话，但不油腻、不卖萌。"
-        "把「草稿」改成 1～3 句口语（必要时 4 句），必须保留全部事实："
-        "蓝本名、章数、按钮/卡片怎么点、错误原因、下一步是什么；禁止编造或删掉关键信息。"
-        "风格：先轻轻接住用户上一步（半句即可），再说接下来怎么做；用「咱/你」自然交替。"
-        "禁止：公文腔（敬请、您好）、工单腔（请粘贴、每行一章、这边还没配好）、"
-        "机械复读草稿里的生硬套话；可把套话改成人话，意思不变。"
-        "不要 Markdown，不要编号清单；只输出给用户看的正文。"
+        "# Role\n你是智能文档协作助手「小墨」，像坐在对面的靠谱同事：有温度、会接话，但不油腻、不卖萌。\n"
+        "# Task\n把「草稿」改成 1～3 句口语（必要时 4 句）。\n"
+        "# Constraints\n必须保留全部事实：蓝本名、章数、按钮/卡片怎么点、错误原因、下一步是什么；禁止编造或删掉关键信息。\n"
+        "先轻轻接住用户上一步（半句即可），再说接下来怎么做；用「咱/你」自然交替。\n"
+        "禁止公文腔（敬请、您好）、工单腔（请粘贴、每行一章、这边还没配好）、机械复读草稿套话。\n"
+        "# Output\n不要 Markdown，不要编号清单；只输出给用户看的正文。"
     )
     user = (
         f"用户刚说：{(user_message or '').strip()[:800]}\n"
@@ -533,24 +680,16 @@ def _load_task(home: Path, task_id: str) -> WritingTask | None:
     tid = (task_id or "").strip()
     if not tid:
         return None
+    from report_writing.services.store import TaskNotFoundError, TaskStore
+
     try:
-        from report_writing.services.task_ids import is_blueprint_task_id
-
-        if is_blueprint_task_id(tid):
-            from report_writing.services.blueprint_catalog import load_blueprint_task
-
-            task = load_blueprint_task(tid)
-        else:
-            from report_writing.services.writing_task_catalog import load_writing_task
-
-            task = load_writing_task(tid)
-        if task is not None:
-            return task
-    except Exception:
-        pass
-    path = home / "tasks" / tid / "task.json"
-    if not path.is_file():
+        return TaskStore(home / "tasks" / tid).load()
+    except TaskNotFoundError:
         return None
-    return WritingTask.from_dict(json.loads(path.read_text(encoding="utf-8")))
+    except Exception:
+        path = home / "tasks" / tid / "task.json"
+        if not path.is_file():
+            return None
+        return WritingTask.from_dict(json.loads(path.read_text(encoding="utf-8")))
 
 

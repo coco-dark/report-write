@@ -67,6 +67,21 @@ export function isAbortError(error) {
   return msg.includes("aborted") || msg.includes("abort");
 }
 
+/** 流式中途断连（刷新/切会话/代理抖动）：常伴 network error，不一定是业务失败。 */
+export function isTransientNetworkError(error) {
+  if (!error) return false;
+  if (isAbortError(error)) return true;
+  const msg = String(error.message || error || "").toLowerCase();
+  return (
+    msg.includes("network error") ||
+    msg.includes("failed to fetch") ||
+    msg.includes("networkerror") ||
+    msg.includes("load failed") ||
+    msg.includes("connection") ||
+    error.name === "TypeError"
+  );
+}
+
 export async function readStream(response, onEvent, { signal } = {}) {
   if (!response.ok) {
     let detail = response.statusText;
@@ -90,7 +105,13 @@ export async function readStream(response, onEvent, { signal } = {}) {
       buffer = parts.pop() || "";
       for (const part of parts) {
         const line = part.split("\n").find((item) => item.startsWith("data: "));
-        if (line) onEvent(JSON.parse(line.slice(6)));
+        if (line) {
+          try {
+            onEvent(JSON.parse(line.slice(6)));
+          } catch {
+            /* 单条 SSE 损坏时继续读后续过程事件 */
+          }
+        }
       }
     }
   } catch (error) {
@@ -103,4 +124,33 @@ export async function readStream(response, onEvent, { signal } = {}) {
       /* already released */
     }
   }
+}
+
+/** 文档窗目录：蓝本 id 可附带本会话写作副本，避免 doc-outline 误合并全局 latest w* */
+export function docOutlineUrl(taskId, { fresh = true, writingTaskId = "" } = {}) {
+  const tid = String(taskId || "").trim();
+  if (!tid) return "";
+  const params = new URLSearchParams();
+  if (fresh) params.set("fresh", "1");
+  const wid = String(writingTaskId || "").trim();
+  if (wid && !/^w/i.test(tid)) params.set("writing_task_id", wid);
+  const q = params.toString();
+  return `/api/writing/tasks/${encodeURIComponent(tid)}/doc-outline${q ? `?${q}` : ""}`;
+}
+
+/** 全文预览：蓝本 id 可附带本会话写作副本 w* */
+export function draftPreviewUrl(
+  taskId,
+  { writtenOnly = true, confirmedOnly = false, writingTaskId = "", cacheBust = true } = {}
+) {
+  const tid = String(taskId || "").trim();
+  if (!tid) return "";
+  const params = new URLSearchParams();
+  if (writtenOnly) params.set("written_only", "true");
+  if (confirmedOnly) params.set("confirmed_only", "true");
+  const wid = String(writingTaskId || "").trim();
+  if (wid && !/^w/i.test(tid)) params.set("writing_task_id", wid);
+  if (cacheBust) params.set("_", String(Date.now()));
+  const q = params.toString();
+  return `/api/writing/tasks/${encodeURIComponent(tid)}/draft-preview?${q}`;
 }

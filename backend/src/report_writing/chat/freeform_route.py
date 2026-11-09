@@ -21,7 +21,7 @@ def _start_writing_from_freeform(
     emit: EmitFn | None = None,
 ) -> tuple[str, list[Any], list[dict[str, Any]]]:
     from report_writing.chat.helpers import _emit_process
-    from report_writing.chat.intent_dispatch import execute_dispatch_tool
+    from report_writing.chat.tool_dispatch import execute_dispatch_tool
 
     _emit_process(emit, "好，按无蓝本任务开写…")
     hit = execute_dispatch_tool(
@@ -58,7 +58,7 @@ def _apply_single_freeform_intent(
     if intent == "generate_outline" or (
         intent == "help_draft" and not (session.freeform or {}).get("outline_confirmed")
     ):
-        from report_writing.chat_orchestrator import _collect_freeform_outline
+        from report_writing.chat import _collect_freeform_outline
 
         _emit_process(emit, "正在起草章节目录…")
         reply, cards = _collect_freeform_outline(
@@ -73,7 +73,7 @@ def _apply_single_freeform_intent(
         return reply, cards, []
 
     if intent == "confirm_outline":
-        from report_writing.chat_orchestrator import _collect_freeform_outline
+        from report_writing.chat import _collect_freeform_outline
 
         _emit_process(emit, "正在确认目录…")
         reply, cards = _collect_freeform_outline(
@@ -90,7 +90,7 @@ def _apply_single_freeform_intent(
             ChatPhase.CONFIRM_EXPORT.value,
             ChatPhase.FREEFORM_OUTLINE.value,
         } or phase.startswith("freeform_"):
-            from report_writing.chat_orchestrator import _collect_freeform_points
+            from report_writing.chat import _collect_freeform_points
 
             _emit_process(emit, "正在生成写作要点…")
             reply, cards = _collect_freeform_points(
@@ -99,7 +99,7 @@ def _apply_single_freeform_intent(
             return reply, cards, []
 
     if intent == "skip_points":
-        from report_writing.chat_orchestrator import _collect_freeform_points
+        from report_writing.chat import _collect_freeform_points
 
         _emit_process(emit, "正在跳过要点配置…")
         reply, cards = _collect_freeform_points(

@@ -124,6 +124,31 @@ def test_generate_freeform_points_respects_chapter_keys(tmp_path: Path):
     assert by_key["c2"].describes == "范围原说明"
 
 
+def test_collect_points_does_not_infer_skip_from_message(tmp_path: Path):
+    session = ChatSession(
+        id="s-skip-msg",
+        phase=ChatPhase.FREEFORM_POINTS.value,
+        task_id="w20260101120000cc",
+        freeform={"meta_confirmed": True, "category": "工作说明", "title": "测试"},
+    )
+    wdir = tmp_path / "tasks" / session.task_id
+    ensure_task(wdir)
+    save_spec_meta(wdir, title="测试", category="工作说明")
+    save_outline(
+        wdir,
+        [
+            OutlineNode(key="c1", sequence="1", title="总则", level=1),
+            OutlineNode(key="c2", sequence="2", title="范围", level=1),
+        ],
+    )
+    confirm_outline(wdir)
+    reply, _cards = _collect_freeform_points(
+        tmp_path, session, "先跳过要点直接开写", invoke=None
+    )
+    assert (session.freeform or {}).get("points_step") != "skipped"
+    assert "收到" in reply or "要点" in reply
+
+
 def test_llm_draft_uses_rich_fallback_when_model_empty(tmp_path: Path):
     """模型空返回时用结构化兜底，不再两句万能概括。"""
     from report_writing.chat.freeform_points import llm_draft_chapter_points
