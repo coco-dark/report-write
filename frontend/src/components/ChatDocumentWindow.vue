@@ -1457,6 +1457,19 @@ function outlineSourceTaskId(doc = activeDoc.value) {
   if (wid) return wid;
   return String(doc?.taskId || doc?.blueprintId || "").trim();
 }
+
+function sessionWritingTaskId(doc = activeDoc.value) {
+  return String(doc?.writingTaskId || "").trim();
+}
+
+function requestDocOutline(taskId, { fresh = false } = {}) {
+  return request(
+    docOutlineUrl(taskId, {
+      fresh,
+      writingTaskId: sessionWritingTaskId(),
+    })
+  );
+}
 /**
  * 要素/章节配置落盘目标：有写作 clone 时只写 clone，禁止双写库蓝本（否则刷新又从 bp* 盖回）。
  */
@@ -5450,7 +5463,7 @@ async function unlinkCurrentElement() {
     : [];
   if (!nodes.length) {
     try {
-      const slim = await request(`/api/writing/tasks/${encodeURIComponent(persistTid)}/doc-outline`);
+      const slim = await requestDocOutline(persistTid);
       nodes = (slim?.chapters || []).map((item) => ({ ...item }));
     } catch (error) {
       ElMessage.error(error?.message || "读取目录失败");
@@ -5541,7 +5554,7 @@ async function addChapter() {
       ? outlineNodes.value.map((item) => ({ ...item }))
       : [];
     if (!nodes.length) {
-      const slim = await request(`/api/writing/tasks/${encodeURIComponent(persistTid)}/doc-outline`);
+      const slim = await requestDocOutline(persistTid);
       nodes = (slim?.chapters || []).map((item) => ({ ...item }));
     }
     const anchor = nodes.find((item) => item.key === selectedKey.value) || nodes[nodes.length - 1] || {};
@@ -5611,7 +5624,7 @@ async function removeSelectedChapters() {
       ? outlineNodes.value.map((item) => ({ ...item }))
       : [];
     if (!nodes.length) {
-      const slim = await request(`/api/writing/tasks/${encodeURIComponent(persistTid)}/doc-outline`);
+      const slim = await requestDocOutline(persistTid);
       nodes = (slim?.chapters || []).map((item) => ({ ...item }));
     }
     const next = nodes.filter((item) => !drop.has(String(item.key || "").trim()));
@@ -5646,7 +5659,7 @@ async function removeChapter() {
       ? outlineNodes.value.map((item) => ({ ...item }))
       : [];
     if (!nodes.length) {
-      const slim = await request(`/api/writing/tasks/${encodeURIComponent(persistTid)}/doc-outline`);
+      const slim = await requestDocOutline(persistTid);
       nodes = (slim?.chapters || []).map((item) => ({ ...item }));
     }
     const next = nodes.filter((item) => String(item.key || "") !== key);
@@ -6537,9 +6550,7 @@ async function resolveMaterialsPackIdFromOutline(data, tid, writingTid) {
     packId = String(data?.materials_pack_id || "").trim();
   } else if (writingTid && writingTid !== tid) {
     try {
-      const wData = await request(
-        `/api/writing/tasks/${encodeURIComponent(writingTid)}/doc-outline`
-      );
+      const wData = await requestDocOutline(writingTid, { fresh: true });
       if (wData && Object.prototype.hasOwnProperty.call(wData, "materials_pack_id")) {
         packId = String(wData.materials_pack_id || "").trim();
       }
@@ -6629,9 +6640,7 @@ async function loadFullOutline({ force = false } = {}) {
       } else if (writingTid && writingTid !== tid && !/^w/i.test(tid)) {
         // 兼容：无 writingTaskId 挂在文档上时仍可能只拿到库蓝本 id
         try {
-          const wData = await request(
-            `/api/writing/tasks/${encodeURIComponent(writingTid)}/doc-outline${qs}`
-          );
+          const wData = await requestDocOutline(writingTid, { fresh: true });
           const wByKey = new Map(
             (wData?.chapters || [])
               .filter((ch) => ch?.key)
