@@ -1127,7 +1127,14 @@
 import { computed, inject, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "../ui.js";
 
-import { authHeaders, getUserId, isAbortError, readStream, request } from "../api";
+import {
+  authHeaders,
+  getUserId,
+  isAbortError,
+  isTransientNetworkError,
+  readStream,
+  request,
+} from "../api";
 import {
   mergeWizardPayload,
   normalizeWizardStep,
@@ -3821,36 +3828,8 @@ function onDocWindowConfigSaved(payload) {
   }
   applyChapterSnapshotToSession(tid, key, chapter);
 
-  // 文档窗已 PUT 到文档副本（w*）；勿再 configure_chapter / force 重拉，否则旧进度或缓存会盖回
-  if (payload?.alreadyPersisted || payload?.syncSession === false) {
-    if (!payload?.quiet) ElMessage.success("章节配置已保存到本文档副本");
-    schedulePersistUiState(true);
-    return;
-  }
-  const progress = (messages.value || [])
-    .flatMap((m) => m.cards || [])
-    .reverse()
-    .find(
-      (c) =>
-        c?.type === "progress" &&
-        String(c?.payload?.task_id || "").trim() === tid
-    );
-  const chapters = progress?.payload?.chapters || [];
-  const hit = chapters.find((ch) => ch?.key === key);
-  if (progress?.payload?.task_id === tid && hit) {
-    sendAction("configure_chapter", configPayload(tid, hit))
-      .then(() => {
-        driveDocWindow("config_saved", { taskId: tid, chapterKey: key, tab: "config" });
-        bumpDocOutlineReload({ force: true });
-      })
-      .catch(() => {
-        bumpDocOutlineReload({ force: true });
-      });
-  } else {
-    ElMessage.success("章节配置已保存到本文档副本");
-    driveDocWindow("config_saved", { taskId: tid, chapterKey: key, tab: "config" });
-    bumpDocOutlineReload({ force: true });
-  }
+  // 文档窗配置一律静默：已 PUT 到副本，勿再 configure_chapter 刷对话
+  if (!payload?.quiet) ElMessage.success("章节配置已保存");
   schedulePersistUiState(true);
 }
 
@@ -4150,7 +4129,7 @@ async function onDocWindowWriteAction(payload) {
     navigateTo?.("materials");
     return;
   }
-  // 管理关联：本地立刻弹面板，不依赖会话流 / 进度卡（分析中也可点）
+  // 文档窗关联：本地弹面板 + 静默落盘，不走对话流、不刷气泡
   if (action === "associate_elements") {
     if (!tid) {
       ElMessage.warning("还没有文档任务，无法关联要素");
@@ -4202,17 +4181,11 @@ async function onDocWindowWriteAction(payload) {
         edit.pointsText = pointsFromPointItems(pointSnapshot).join("\n");
       }
     }
-    await sendAction("associate_elements", {
-      task_id: tid,
-      chapter_key: chapter.key,
-      sequence: String(chapter.sequence || "").trim(),
-      title: String(chapter.title || "").trim(),
-      chapter_title: String(chapter.title || "").trim(),
-      associateScope: isPointAssociate ? "point" : "chapter",
-      pointItemId: String(payload?.pointItemId || "").trim(),
-      pointIndex: payload?.pointIndex,
-      pointSlot: String(payload?.pointSlot || "").trim(),
-      pointItems: pointSnapshot,
+    await openChapterElementAssociate(tid, chapter);
+    driveDocWindow("elements_associated", {
+      taskId: tid,
+      chapterKey: chapter.key,
+      tab: "config",
     });
     return;
   }
@@ -4957,7 +4930,8 @@ function writingSupplementHint(card) {
 
 async function onElementConfigureSaved(result) {
   await applyElementConfigureSavedResult(result);
-  await restoreCurrentSession({ suppressAutoPopups: false });
+  // 抑制自动弹窗：加要素后只入队待收录角标，不弹出收录弹窗
+  await restoreCurrentSession({ suppressAutoPopups: true });
   await applyElementConfigureSavedResult(result);
 }
 
@@ -5034,37 +5008,6 @@ async function applyElementConfigureSavedResult(result) {
 }
 
 /** 关联要素确认后写入对话（打开弹窗不写气泡，避免刷屏） */
-function appendElementAssociateChatTranscript(phase, payload = {}) {
-  if (phase !== "done") return;
-  const docId = currentFocusDocumentId();
-  const chapterLabel = String(payload.chapterLabel || "").trim() || "当前章节";
-  const slot = String(payload.slot || "").trim();
-  const elementSummary = String(payload.elementSummary || "").trim() || "—";
-  const lines = [
-    `章节：${chapterLabel}`,
-    slot ? `写作要点待补项：${slot}` : null,
-    payload.pointText ? `要点：${String(payload.pointText).slice(0, 160)}` : null,
-    `关联要素：${elementSummary}`,
-  ].filter(Boolean);
-  const bg = String(payload.describes || "").trim();
-  if (bg) {
-    lines.push(
-      `章节说明（背景）：${bg.slice(0, 120)}${bg.length > 120 ? "…" : ""}`
-    );
-  }
-  messages.value.push({
-    role: "assistant",
-    text: slot
-      ? `已将要素关联到待补项「${slot}」：${elementSummary}`
-      : `本章要素关联已更新：${elementSummary}`,
-    cards: [],
-    steps: lines.map((message) => ({ message, kind: "process" })),
-    document_id: docId,
-    document_key: docId,
-  });
-  scheduleScrollChatToBottom(true);
-}
-
 function onSupplementGapRowClick(card, item, msgIndex, cardIndex, event) {
   if (card?.payload?.readonly || isCardUsed(msgIndex, cardIndex)) return;
   const tag = String(event?.target?.tagName || "").toLowerCase();
@@ -5126,12 +5069,67 @@ async function recheckWritingSupplements(card) {
 }
 
 async function saveChapterConfig(taskId, ch) {
-  await sendAction("configure_chapter", configPayload(taskId, ch));
-  driveDocWindow("config_saved", {
-    taskId,
-    chapterKey: ch?.key,
-    tab: "config",
-  });
+  // 文档窗/进度卡「保存配置」：静默落盘，不刷对话气泡
+  const tid = String(taskId || "").trim();
+  const key = String(ch?.key || "").trim();
+  if (!tid || !key) return;
+  try {
+    const body = configPayload(tid, ch);
+    const slim = await request(
+      `/api/writing/tasks/${encodeURIComponent(tid)}/doc-outline?fresh=1`
+    );
+    const chapters = (slim?.chapters || []).map((item) => ({ ...item }));
+    const idx = chapters.findIndex((item) => String(item.key || "") === key);
+    if (idx < 0) throw new Error("未找到该章节");
+    const prev = chapters[idx] || {};
+    const pointItems = Array.isArray(body.point_items)
+      ? body.point_items.map((row) => ({ ...row }))
+      : Array.isArray(prev.point_items)
+        ? prev.point_items.map((row) => ({ ...row }))
+        : [];
+    const points = String(body.points_text || "")
+      .split(/\n+/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const savedChapter = {
+      ...prev,
+      key,
+      sequence: body.sequence || prev.sequence,
+      title: body.title || prev.title || key,
+      points: points.length ? points : Array.isArray(prev.points) ? [...prev.points] : [],
+      point_items: pointItems,
+      describes: body.describes ?? prev.describes,
+      aux_prompt: body.aux_prompt ?? prev.aux_prompt,
+      reference_text: body.reference_text ?? prev.reference_text,
+      compose: body.compose || prev.compose,
+      presence: body.presence || prev.presence,
+      structure_only: Boolean(body.structure_only),
+      element_ids: Array.isArray(body.element_ids)
+        ? [...body.element_ids]
+        : Array.isArray(prev.element_ids)
+          ? [...prev.element_ids]
+          : [],
+    };
+    chapters[idx] = savedChapter;
+    await request(`/api/writing/tasks/${encodeURIComponent(tid)}/outline`, {
+      method: "PUT",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ chapters }),
+    });
+    applyChapterSnapshotToSession(tid, key, savedChapter);
+    ElMessage.success("章节配置已保存");
+    driveDocWindow("config_saved", {
+      taskId: tid,
+      chapterKey: key,
+      chapter: savedChapter,
+      tab: "config",
+      alreadyPersisted: true,
+      syncSession: false,
+      quiet: true,
+    });
+  } catch (error) {
+    ElMessage.error(error?.message || "保存章节配置失败");
+  }
 }
 
 async function retryChapter(taskId, ch, { writeMode = "start", alreadyPersisted = false, chapterConfig = null } = {}) {
@@ -6833,19 +6831,6 @@ async function onChapterElementAssociateConfirm({ linkedIds, newElements }) {
   edit.point_items = pointItems;
   edit.pointsText = pointsLines.join("\n");
   chapterEdits.value = { ...chapterEdits.value, [key]: { ...edit } };
-  const linkedElements = linkedIds
-    .map((id) => all.find((item) => String(item?.id || "") === String(id || "").trim()))
-    .filter(Boolean);
-  const elementSummary = linkedElements
-    .map((el) => `${el.name || el.id}（${elementKindLabel(el.kind)}）`)
-    .join("、");
-  let slotLabel = String(pointItemLink?.slot || "").trim();
-  let pointText = "";
-  const pi = Number(pointItemLink?.index);
-  if (Number.isFinite(pi) && pi >= 0 && pointItems[pi]) {
-    pointText = String(pointItems[pi].text || "");
-    if (!slotLabel) slotLabel = String(pointItems[pi].slot || "").trim();
-  }
   associatePointContext.value = null;
   touchTaskElements(tid);
   const pointPatch = {
@@ -6909,14 +6894,6 @@ async function onChapterElementAssociateConfirm({ linkedIds, newElements }) {
     if (savedChapter) {
       applyChapterSnapshotToSession(tid, chapterKey, savedChapter);
     }
-    const editSnap = chapterEdits.value[chapterEditKey(tid, chapterKey)] || {};
-    appendElementAssociateChatTranscript("done", {
-      chapterLabel: String(chapterElementAssociate.value?.label || "").trim() || chapterKey,
-      slot: slotLabel,
-      pointText,
-      elementSummary,
-      describes: editSnap.describes || "",
-    });
   } catch (error) {
     ElMessage.error(error?.message || "保存要素关联失败");
   }
@@ -6924,7 +6901,7 @@ async function onChapterElementAssociateConfirm({ linkedIds, newElements }) {
   // 落盘后再推一次，防止 configure 的 config_saved / loadHistory 冲掉乐观态
   patchChapterElementIdsEverywhere(tid, chapterKey, chapterElementIds, pointPatch);
   driveDocWindow("elements_associated", elementsAssociatedLocate);
-  // 新建要素：入队待收录并提示；纯勾选已有库要素不打扰
+  // 新建要素：入队待收录（只亮角标，不自动弹窗）；纯勾选已有库要素不打扰
   const brandNew = (newElements || []).filter(
     (el) => el?.id && !String(el.library_item_id || "").trim()
   );
@@ -6935,7 +6912,7 @@ async function onChapterElementAssociateConfirm({ linkedIds, newElements }) {
       chapterTitle: String(chapterElementAssociate.value?.label || "").trim(),
       elementIds: brandNew.map((el) => el.id),
       elements: brandNew,
-      openDialog: true,
+      openDialog: false,
     });
   }
   // 本地已是真值；软刷新即可，force 重拉易与进度卡旧 point_items 竞态冲掉关联
@@ -8571,14 +8548,14 @@ async function onLibraryPendingChanged(payload) {
   }
 }
 
-/** 文档窗静默新增要素后入队待收录，并刷新角标 / 必要时打开对话框 */
+/** 文档窗静默新增要素后入队待收录，并刷新角标（默认不弹窗，用户点「待收录要素」再开） */
 async function queueElementLibraryPending({
   taskId,
   chapterKey = "",
   chapterTitle = "",
   elementIds = [],
   elements = [],
-  openDialog = true,
+  openDialog = false,
 } = {}) {
   const sid = String(sessionId.value || "").trim();
   const tid = String(taskId || "").trim();
@@ -8909,9 +8886,14 @@ function applyDoneMeta(data) {
       .filter(Boolean);
     return live.trigger_begin_study === true || keys.length > 0;
   })();
-  if (studyKickFromWizard) {
+  // softSync/GET 路径不得因残留卡 payload 重新武装；仅 SSE done 显式带 kick 时才 arm
+  const allowArmFromDone = data?._allowStudyKickArm === true;
+  if (studyKickFromWizard && allowArmFromDone) {
     pageStudyKickArmed = true;
     applyLiveWizardFromSource(studyKickFromWizard);
+  } else if (studyKickFromWizard && !allowArmFromDone) {
+    // GET/softSync 偶发带回 trigger：剥掉，禁止自动开跑
+    applyLiveWizardFromSource(stripEphemeralWizardTriggers(studyKickFromWizard));
   } else if (pageStudyInflight || (liveHasStudyKick && pageStudyKickArmed)) {
     // 本轮已排队/开跑的分析：softSync 剥过的 GET 快照不得清掉 trigger
   } else if (liveHasStudyKick) {
@@ -9445,7 +9427,7 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
       const doneCardsFallback = Array.isArray(event.cards) ? event.cards : [];
       if (serverReply) msgRef.text = serverReply;
       try {
-      applyDoneMeta(event);
+      applyDoneMeta({ ...event, _allowStudyKickArm: true });
       const doneFocus = normalizeDocumentRegistryKey(
         String(
           event.runtime?.focus_document_key ||
@@ -9605,7 +9587,32 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
           action === "go_study" ||
           action === "confirm_outline" ||
           action === "resolve_intent_clarify");
-      if (isWriteTurn) {
+      // 关联要素 / 加要素 / 保存配置等：即使 done 误带残留 trigger 也禁止开跑
+      const blockStudyKickAction = new Set([
+        "associate_elements",
+        "add_chapter_element",
+        "configure_chapter_element",
+        "save_chapter_config",
+        "set_session_meta",
+        "confirm_writing_document_name",
+        "focus_document",
+        "open_element_library",
+        "open_knowledge",
+      ]);
+      const nonStudyAction =
+        blockStudyKickAction.has(String(action || "").trim()) ||
+        (nextCards || []).some(
+          (c) =>
+            c?.type === "associate_elements" ||
+            c?.type === "element_configure" ||
+            c?.type === "element_configure_pending" ||
+            c?.type === "chapter_element_picker"
+        ) ||
+        // 口语「给×章添加要素」action 为空，靠回复/卡识别，禁止残留 trigger 开分析
+        /生成.+要素草稿|保存并关联本章|添加章节要素|已为「[^」]+」打开关联面板/.test(
+          String(serverReply || event.reply || "")
+        );
+      if (isWriteTurn || nonStudyAction) {
         pageStudyKickArmed = false;
         liveBlueprintWizard.value = stripEphemeralWizardTriggers(
           liveBlueprintWizard.value || {}
@@ -9619,10 +9626,15 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
             source.trigger_chapter_study.length > 0) ||
           (Array.isArray(source?.chapter_study_keys) &&
             source.chapter_study_keys.length > 0));
+      // 口语「分析第×章」action 为空，靠 done 上的 trigger；显式非分析动作不得靠残留 trigger 开跑
+      const allowStudyKickThisTurn =
+        !isWriteTurn &&
+        !nonStudyAction &&
+        (studyIntentAction || studyCardPayload || doneHasStudyKick);
       // 依据样本在 study 步常被判 freeform：有分析 trigger 时仍须 apply + kick
       if (source && typeof source === "object" && (allowWizardLive || (studyIntentAction && hasStudyTriggerInSource))) {
         let applySource =
-          studyIntentAction || studyCardPayload || doneHasStudyKick
+          allowStudyKickThisTurn
             ? source
             : stripEphemeralWizardTriggers(source);
         // chapter_study_keys 与 trigger_chapter_study 对齐，kick 两边都能读到
@@ -9651,11 +9663,7 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
           (Array.isArray(applySource?.trigger_chapter_study) &&
             applySource.trigger_chapter_study.length > 0);
         // 分析卡不进气泡：仅在本轮真有分析意图时兜底开跑
-        if (
-          !isWriteTurn &&
-          (studyIntentAction || studyCardPayload || doneHasStudyKick) &&
-          hasStudyTrigger
-        ) {
+        if (allowStudyKickThisTurn && hasStudyTrigger) {
           if (String(applySource?.study_method || "").trim()) {
             stashPendingStudySource({ method: String(applySource.study_method).trim() });
           }
@@ -10353,7 +10361,9 @@ async function _softSyncSessionAfterWizardAction(sid) {
     );
     restoreUiStateFromSession(session, { preferLocalAdvance: true });
     if (liveBlueprintWizard.value && !pageStudyInflight) {
+      // 仅本轮已武装的分析 trigger 才保留；残留 trigger + 未武装不得靠 softSync 保活
       const keepStudy =
+        pageStudyKickArmed &&
         Array.isArray(liveBlueprintWizard.value.trigger_chapter_study) &&
         liveBlueprintWizard.value.trigger_chapter_study.length > 0;
       const liveNow = liveBlueprintWizard.value;
@@ -11435,6 +11445,8 @@ function stashPendingStudySource({ method = "", text = "" } = {}) {
 
 /** 剥掉学习自驱残留并解锁文档窗，同步 per-doc 缓存 */
 function clearStudyTriggersAndUnlock(extra = {}) {
+  // 分析结束后必须卸武装：否则下一轮关联要素/闲聊若又见到残留 trigger 会再次开跑
+  pageStudyKickArmed = false;
   const live = liveBlueprintWizard.value || {};
   const cleaned = mergeWizardPayload(live, {
     study_stream_active: false,
@@ -11583,8 +11595,9 @@ async function runPageLevelStudy(studyTaskId, chapterKeys, { beginAll = false } 
       sessionId: ownerSid,
     });
   }
+  let resolvedStudyKeys = [...(chapterKeys || [])];
   try {
-    let keys = [...(chapterKeys || [])];
+    let keys = [...resolvedStudyKeys];
     if (beginAll || !keys.length) {
       try {
         const slim = await request(`/api/writing/tasks/${encodeURIComponent(ownerStudyTid)}/doc-outline?fresh=1`);
@@ -11597,6 +11610,7 @@ async function runPageLevelStudy(studyTaskId, chapterKeys, { beginAll = false } 
         keys = [];
       }
     }
+    resolvedStudyKeys = [...keys];
     if (!stillHere()) return;
     if (!keys.length) {
       ElMessage.info("没有待分析的章节");
@@ -11817,20 +11831,73 @@ async function runPageLevelStudy(studyTaskId, chapterKeys, { beginAll = false } 
     bumpDocOutlineReload({ force: true });
   } catch (error) {
     if (!isAbortError(error) && stillHere()) {
-      {
-        const progressMsg = resolveProgressAssistantMessage(
-          libraryBp || ownerStudyTid,
-          ownerStudyTid
-        );
-        settleStudyRunningSteps(progressMsg, { all: true });
-        finalizeAssistantProcessSteps(progressMsg);
+      const progressMsg = resolveProgressAssistantMessage(
+        libraryBp || ownerStudyTid,
+        ownerStudyTid
+      );
+      settleStudyRunningSteps(progressMsg, { all: true });
+      finalizeAssistantProcessSteps(progressMsg);
+      // 长分析流易被刷新/代理掐断；服务端常已写完，先刷目录再决定要不要报失败
+      if (isTransientNetworkError(error)) {
+        pushStudyProgress("连接中断，正在核对分析进度…", "process", {
+          epoch: ownerEpoch,
+          sid: ownerSid,
+          blueprintId: libraryBp || ownerStudyTid,
+        });
+        try {
+          bumpDocOutlineReload({ force: true });
+          const slim = await request(
+            `/api/writing/tasks/${encodeURIComponent(ownerStudyTid)}/doc-outline?fresh=1`
+          );
+          if (!stillHere()) return;
+          const chapters = Array.isArray(slim?.chapters) ? slim.chapters : [];
+          const want = (resolvedStudyKeys || []).map((k) => String(k || "").trim()).filter(Boolean);
+          const doneN = chapters.filter((ch) => {
+            const key = String(ch?.key || "").trim();
+            if (want.length && !want.includes(key)) return false;
+            if (ch?.structure_only) return false;
+            return Array.isArray(ch?.points) && ch.points.length > 0;
+          }).length;
+          const targetN = want.length || chapters.filter((ch) => !ch?.structure_only).length;
+          if (doneN > 0 && (want.length ? doneN >= want.length : doneN > 0)) {
+            pushStudyProgress(
+              `✓ 章节分析已完成（连接中断前已落盘 ${doneN}${targetN ? `/${targetN}` : ""} 章）`,
+              "step",
+              {
+                epoch: ownerEpoch,
+                sid: ownerSid,
+                blueprintId: libraryBp || ownerStudyTid,
+              }
+            );
+            ElMessage.success("章节分析已完成");
+          } else {
+            pushStudyProgress(
+              `分析连接中断：已确认 ${doneN} 章落盘，可再说「继续分析」补跑未完成的章节`,
+              "error",
+              {
+                epoch: ownerEpoch,
+                sid: ownerSid,
+                blueprintId: libraryBp || ownerStudyTid,
+              }
+            );
+            ElMessage.warning("分析连接中断，已落盘部分可继续分析");
+          }
+        } catch {
+          pushStudyProgress(`分析失败：${error?.message || "网络中断"}`, "error", {
+            epoch: ownerEpoch,
+            sid: ownerSid,
+            blueprintId: libraryBp || ownerStudyTid,
+          });
+          ElMessage.error(error?.message || "分析失败");
+        }
+      } else {
+        pushStudyProgress(`分析失败：${error?.message || "未知错误"}`, "error", {
+          epoch: ownerEpoch,
+          sid: ownerSid,
+          blueprintId: libraryBp || ownerStudyTid,
+        });
+        ElMessage.error(error?.message || "分析失败");
       }
-      pushStudyProgress(`分析失败：${error?.message || "未知错误"}`, "error", {
-        epoch: ownerEpoch,
-        sid: ownerSid,
-        blueprintId: libraryBp || ownerStudyTid,
-      });
-      ElMessage.error(error?.message || "分析失败");
     }
   } finally {
     const ownedThisRun =

@@ -224,3 +224,66 @@ def test_clear_leftover_study_triggers_drops_arm_flag():
     public = dict(runtime_public_view(session).get("blueprint_wizard") or {})
     leftover = attach_turn_study_kick(public, wiz)
     assert "trigger_chapter_study" not in leftover
+
+
+def test_clear_leftover_also_strips_workflow_and_migrate_does_not_revive():
+    """关联要素等非分析回合：workflow 残留 trigger 不得经 migrate 复活后再贴进 SSE done。"""
+    session = ChatSession(
+        id="cs_clear_wf",
+        freeform={
+            "blueprint_wizard": {
+                "blueprint_id": "bp_k",
+                "step": "study",
+                "trigger_chapter_study": ["c1.3"],
+                "chapter_study_keys": ["c1.3"],
+                "_arm_study_kick": True,
+            },
+            "runtime": {
+                "version": 1,
+                "workflows": {
+                    WORKFLOW_BLUEPRINT: {
+                        "blueprint_id": "bp_k",
+                        "step": "study",
+                        "trigger_chapter_study": ["c1.3"],
+                        "chapter_study_keys": ["c1.3"],
+                        "_arm_study_kick": True,
+                    }
+                },
+            },
+        },
+    )
+    clear_leftover_study_triggers(session)
+    wiz = dict((session.freeform or {}).get("blueprint_wizard") or {})
+    wf = workflow_get(session, WORKFLOW_BLUEPRINT)
+    assert "trigger_chapter_study" not in wiz
+    assert "_arm_study_kick" not in wiz
+    assert "trigger_chapter_study" not in wf
+    assert "_arm_study_kick" not in wf
+
+    # 模拟 workflow 里仍有旧残留、freeform 已清：migrate 不得把 trigger 写回 freeform
+    session.freeform = {
+        **(session.freeform or {}),
+        "blueprint_wizard": {
+            "blueprint_id": "bp_k",
+            "step": "study",
+        },
+        "runtime": {
+            "version": 1,
+            "workflows": {
+                WORKFLOW_BLUEPRINT: {
+                    "blueprint_id": "bp_k",
+                    "step": "study",
+                    "trigger_chapter_study": ["c1.3"],
+                    "_arm_study_kick": True,
+                }
+            },
+        },
+    }
+    migrate_legacy_freeform(session)
+    merged = dict((session.freeform or {}).get("blueprint_wizard") or {})
+    assert "trigger_chapter_study" not in merged
+    assert "_arm_study_kick" not in merged
+    disarm_study_kick_this_turn()
+    public = dict(runtime_public_view(session).get("blueprint_wizard") or {})
+    leftover = attach_turn_study_kick(public, merged)
+    assert "trigger_chapter_study" not in leftover

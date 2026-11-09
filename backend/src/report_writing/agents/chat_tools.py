@@ -1763,11 +1763,12 @@ def build_chat_tools(state: ChatControlState) -> list:
     @tool(
         "configure_chapter",
         description=(
-            "何时：保存某章配置。可改：标题、序号、父级、仅目录、写作策略 compose"
+            "何时：用户口语要求改某章配置时保存。可改：标题、序号、父级、仅目录、写作策略 compose"
             "（source_only/template_fill/hybrid/auto_generate/fixed）、要点 points 或 point_items、"
             "章节说明 describes、补充提示词 aux_prompt、参考正文 reference_text、关联要素 element_ids。"
             "缺了：问配置哪一章；只填用户明确说的字段，没有的不要编、不要清空未提到的项。"
-            "不要：用本工具查看配置（用 get_chapter_info）；不要自动生成补充提示词。"
+            "不要：文档窗里保存配置（窗内静默落盘）；不要用本工具查看配置（用 get_chapter_info）；"
+            "不要自动生成补充提示词。"
         ),
     )
     def configure_chapter(
@@ -1912,11 +1913,11 @@ def build_chat_tools(state: ChatControlState) -> list:
         _set_cards(state, cards)
         return _dump({"ok": True, "reply_hint": reply})
 
-    @tool("add_chapter_element", description="何时：为某章新建要素草稿（键值、固定文案、文件、引用槽位等）。缺了：从用户原话拆 kind/名称/哪一章；拆不出就问，不要留空让用户手填、不要编造章。不要：与 collect_to_element_library（收入个人库）混淆。")
+    @tool("add_chapter_element", description="何时：用户在对话里说要给某章加要素（键值/固定文案/文件/引用槽等）。缺了：从原话拆 kind/名称/哪一章；拆不出就问。不要：文档窗里配要素（窗内直接配）；不要与 collect_to_element_library 混淆。")
     def add_chapter_element(payload_json: Annotated[str, Field(description="必填 JSON。至少 kind、name；chapter_key 或当前焦点章。从原话填全，拆不出就问，不要编章。")]) -> str:
         """
 
-        何时：为某章新建要素草稿（键值、固定文案、文件、引用槽位等）。
+        何时：用户在对话里说要给某章加要素（键值、固定文案、文件、引用槽位等）。
 
         必填：payload_json，至少含 kind、name；能确定 chapter_key（或当前焦点章）。
 
@@ -1924,7 +1925,7 @@ def build_chat_tools(state: ChatControlState) -> list:
 
         缺了：从用户原话拆 kind/名称/哪一章；拆不出就问，不要留空让用户手填、不要编造章。
 
-        不要：与 collect_to_element_library（收入个人库）混淆。
+        不要：文档窗里配/关联要素（窗内直接操作，不走对话）；不要与 collect_to_element_library（收入个人库）混淆。
 
         """
         from report_writing.chat import _action_add_chapter_element
@@ -1983,11 +1984,11 @@ def build_chat_tools(state: ChatControlState) -> list:
             }
         )
 
-    @tool("associate_elements", description="何时：把已有要素勾选关联到某章（打开关联面板）。用户说「关联要素[序号 标题]」或点关联按钮时用。缺了：问关联到哪一章、哪个要素，不要猜。不要：用本工具新建要素。")
+    @tool("associate_elements", description="何时：用户口语要求把已有要素关联到某章（打开关联面板）。缺了：问关联到哪一章。不要：文档窗点「关联要素」（窗内直接弹面板）；不要用本工具新建要素。")
     def associate_elements(payload_json: Annotated[str, Field(description="JSON。须能确定 chapter_key（或焦点章）；可选 element_id/name。缺了就问。")] = "") -> str:
         """
 
-        何时：把已有要素勾选关联到某章（打开关联面板）。
+        何时：用户口语要求把已有要素关联到某章（打开关联面板）。
 
         必填：payload_json 能确定 chapter_key（或焦点章）。
 
@@ -1995,7 +1996,7 @@ def build_chat_tools(state: ChatControlState) -> list:
 
         缺了：问关联到哪一章、哪个要素，不要猜。
 
-        不要：用本工具新建要素。
+        不要：文档窗点「关联要素」（窗内直接弹面板，不走对话）；不要用本工具新建要素。
 
         """
         from report_writing.chat.writing_control_route import apply_writing_control_classification
@@ -2027,11 +2028,11 @@ def build_chat_tools(state: ChatControlState) -> list:
             fail_slots=["chapter_key"],
         )
 
-    @tool("dissociate_chapter_element", description="何时：取消某章与要素的关联。缺了：同名多个先澄清；缺章或要素名则问，不要乱取消。不要：删除要素节点或个人要素库。")
+    @tool("dissociate_chapter_element", description="何时：用户口语要求取消某章与要素的关联。缺了：同名多个先澄清；缺章或要素名则问。不要：文档窗取消勾选（窗内直接保存）；不要删除要素节点或个人要素库。")
     def dissociate_chapter_element(payload_json: Annotated[str, Field(description="JSON。必填 chapter_key，以及 element_id 或 element_name。同名多个先澄清。")] = "") -> str:
         """
 
-        何时：取消某章与要素的关联。
+        何时：用户口语要求取消某章与要素的关联。
 
         必填：chapter_key；element_id 或 element_name 之一。
 
@@ -2039,7 +2040,7 @@ def build_chat_tools(state: ChatControlState) -> list:
 
         缺了：同名多个先澄清；缺章或要素名则问，不要乱取消。
 
-        不要：删除要素节点或个人要素库。
+        不要：文档窗取消勾选（窗内直接保存）；不要删除要素节点或个人要素库。
 
         """
         from report_writing.chat.writing_control_route import apply_writing_control_classification
@@ -2061,11 +2062,11 @@ def build_chat_tools(state: ChatControlState) -> list:
             fail_hint="请说明要取消哪一章、哪个要素的关联。",
         )
 
-    @tool("remove_document_element", description="何时：从当前写作文档删除要素（含各章关联）。缺了：问删哪一个，破坏性动作没把握先澄清。不要：删除个人要素库条目。")
+    @tool("remove_document_element", description="何时：用户口语要求从当前写作文档删除要素（含各章关联）。缺了：问删哪一个，破坏性动作没把握先澄清。不要：文档窗里删（窗内直接操作）；不要删除个人要素库条目。")
     def remove_document_element(payload_json: Annotated[str, Field(description="JSON。须能确定哪个要素（id 或名称）。破坏性动作没把握先问。")] = "") -> str:
         """
 
-        何时：从当前写作文档删除要素（含各章关联）。
+        何时：用户口语要求从当前写作文档删除要素（含各章关联）。
 
         必填：能确定哪个要素（id 或名称）。
 
@@ -2073,7 +2074,7 @@ def build_chat_tools(state: ChatControlState) -> list:
 
         缺了：问删哪一个，破坏性动作没把握先澄清。
 
-        不要：删除个人要素库条目。
+        不要：文档窗里删（窗内直接操作）；不要删除个人要素库条目。
 
         """
         from report_writing.chat.writing_control_route import apply_writing_control_classification

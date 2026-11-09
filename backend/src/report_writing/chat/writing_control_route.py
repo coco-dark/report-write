@@ -299,7 +299,7 @@ def _action_associate_elements(
         auto_open=True,
         extra=body,
     )
-    return f"已为「{label or chapter_key}」打开关联面板，勾选要关联的要素后保存即可。", [card]
+    return f"好，已打开「{label or chapter_key}」的关联面板，勾选后保存即可。", [card]
 
 def _structural_chapter_hint(message: str) -> dict[str, Any]:
     """仅结构补全：从原话抽章序号，不作意图判决。"""

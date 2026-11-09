@@ -205,10 +205,10 @@ def _try_ui_action_shortcut(state: ChatControlState, user_text: str) -> str | No
         return str(error).strip() or None
     if raw is None:
         return None
-        try:
-            data = json.loads(raw or "{}")
-        except json.JSONDecodeError:
-            data = {}
+    try:
+        data = json.loads(raw or "{}")
+    except json.JSONDecodeError:
+        data = {}
     if isinstance(data, dict):
         hint = str((data or {}).get("reply_hint") or "").strip()
         if hint:

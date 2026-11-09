@@ -247,6 +247,9 @@ def dissociate_chapter_element(
     except ValueError as err:
         return str(err), []
     store.save(task)
+    from report_writing.chat.session_runtime import clear_leftover_study_triggers
+
+    clear_leftover_study_triggers(session)
     return (
         f"已取消「{label}」与要素「{el.name or eid}」的关联；要素仍保留在本文档，可再关联其它章。"
         "（不会删除个人要素库里的条目。）",
@@ -317,6 +320,9 @@ def remove_document_element(
         if lib_id
         else ""
     )
+    from report_writing.chat.session_runtime import clear_leftover_study_triggers
+
+    clear_leftover_study_triggers(session)
     return (
         f"已从本文档删除要素「{name}」（各章关联已一并去掉）。{lib_note}".strip(),
         [],

@@ -1892,6 +1892,10 @@ def _action_add_chapter_element(home: Path, session: ChatSession, payload: ChatP
 
     if not active_blueprint_wizard(session):
         session.phase = ChatPhase.CONFIRM_EXPORT.value
+    # 加要素不是开分析：清掉残留自驱，避免 SSE done 把上一轮章节再跑一遍
+    from report_writing.chat.session_runtime import clear_leftover_study_triggers
+
+    clear_leftover_study_triggers(session)
     kind = (draft.get("kind") or "kv").strip()
     kind_label = {
         "kv": "键值",

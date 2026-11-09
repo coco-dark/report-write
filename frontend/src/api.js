@@ -67,6 +67,21 @@ export function isAbortError(error) {
   return msg.includes("aborted") || msg.includes("abort");
 }
 
+/** 流式中途断连（刷新/切会话/代理抖动）：常伴 network error，不一定是业务失败。 */
+export function isTransientNetworkError(error) {
+  if (!error) return false;
+  if (isAbortError(error)) return true;
+  const msg = String(error.message || error || "").toLowerCase();
+  return (
+    msg.includes("network error") ||
+    msg.includes("failed to fetch") ||
+    msg.includes("networkerror") ||
+    msg.includes("load failed") ||
+    msg.includes("connection") ||
+    error.name === "TypeError"
+  );
+}
+
 export async function readStream(response, onEvent, { signal } = {}) {
   if (!response.ok) {
     let detail = response.statusText;

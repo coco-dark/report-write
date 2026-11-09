@@ -63,26 +63,48 @@ def study_kick_armed_this_turn(live_wizard: dict[str, Any] | None = None) -> boo
     return dict(live_wizard or {}).get(STUDY_KICK_ARM_KEY) is True
 
 
-def clear_leftover_study_triggers(session: ChatSession) -> None:
-    """清掉向导里残留的分析自驱，禁止闲聊/开写把上一轮章节再跑一遍。"""
-    ff = dict(session.freeform or {})
-    wizard = dict(ff.get("blueprint_wizard") or {})
-    if not wizard:
-        return
+_STUDY_EPHEMERAL_KEYS = (
+    "trigger_begin_study",
+    "trigger_chapter_study",
+    "chapter_study_keys",
+    "study_stream_active",
+    STUDY_KICK_ARM_KEY,
+)
+
+
+def _strip_study_ephemerals(wizard: dict[str, Any]) -> bool:
     changed = False
-    for key in (
-        "trigger_begin_study",
-        "trigger_chapter_study",
-        "chapter_study_keys",
-        "study_stream_active",
-        STUDY_KICK_ARM_KEY,
-    ):
+    for key in _STUDY_EPHEMERAL_KEYS:
         if key in wizard:
             wizard.pop(key, None)
             changed = True
+    return changed
+
+
+def clear_leftover_study_triggers(session: ChatSession) -> None:
+    """清掉向导里残留的分析自驱，禁止闲聊/开写把上一轮章节再跑一遍。
+
+    必须同时清 freeform.blueprint_wizard 与 runtime.workflows.blueprint_wizard：
+    否则 migrate_legacy_freeform 会把 workflow 里的 trigger / _arm_study_kick
+    又合并回 freeform，关联要素等非分析回合的 SSE done 会再次点燃前端 study 流。
+    """
+    ff = dict(session.freeform or {})
+    changed = False
+    wizard = dict(ff.get("blueprint_wizard") or {})
+    if wizard and _strip_study_ephemerals(wizard):
+        ff["blueprint_wizard"] = wizard
+        changed = True
+    rt = ff.get("runtime")
+    if isinstance(rt, dict):
+        workflows = dict(rt.get("workflows") or {})
+        bp = dict(workflows.get(WORKFLOW_BLUEPRINT) or {})
+        if bp and _strip_study_ephemerals(bp):
+            workflows[WORKFLOW_BLUEPRINT] = bp
+            ff["runtime"] = {**rt, "workflows": workflows}
+            changed = True
     if not changed:
         return
-    session.freeform = {**ff, "blueprint_wizard": wizard}
+    session.freeform = ff
 
 
 def suppress_study_kick_for_document_scope(session: ChatSession) -> None:
@@ -176,6 +198,10 @@ def migrate_legacy_freeform(session: ChatSession) -> None:
             merged = dict(legacy_bp)
         else:
             merged = {**runtime_bp, **legacy_bp}
+            # 分析自驱只认当前 freeform：legacy 已清掉的字段不得从 runtime 复活
+            for key in _STUDY_EPHEMERAL_KEYS:
+                if key not in legacy_bp:
+                    merged.pop(key, None)
         bid = str(merged.get("blueprint_id") or "").strip()
         if bool(legacy_bp.get("fresh_meta")):
             bid = str(legacy_bp.get("blueprint_id") or "").strip()

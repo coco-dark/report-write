@@ -5438,7 +5438,7 @@ async function saveElementDraft() {
         });
         if (Number(data?.queued) > 0) {
           ElMessage.info("新要素可收入个人库，请点「待收录要素」");
-          openLibraryPendingAfterRefresh = true;
+          // 只入队刷新角标，不自动弹出收录弹窗
           emit("library-pending-changed");
         }
       } catch {
@@ -5939,25 +5939,30 @@ function togglePointItemRequireElement(row, requireOn) {
   const on = requireOn === true || requireOn === 1 || requireOn === "true";
   if (on) {
     const text = String(row.text || "").trim();
-    let slot = String(row.slot || "").trim() || parseSlotFromText(text);
+    let slot =
+      String(row.slot || "").trim() ||
+      parseSlotFromText(text) ||
+      humanLabel(row.element_name) ||
+      "";
+    // 普通要点打开「需关联」时必须落 slot + 占位；否则 onConfigPointRowEdit 会立刻把 needs_supplement 清回 false，开关看起来点不动
     if (!slot) {
-      slot = humanLabel(row.element_name) || "";
+      const plain = stripSupplementMarkers(text) || text;
+      slot = (plain.replace(/[（(].*$/, "").trim() || plain || "待补充项").slice(0, 24);
     }
-    if (slot) {
-      row.slot = slot;
-      if (!textNeedsSupplement(text)) {
-        // 打开开关时补上占位，便于开写前检查与展示
-        row.text = `${stripSupplementMarkers(text) || text}（待补充：${slot}）`.trim();
-      }
+    row.slot = slot;
+    if (!textNeedsSupplement(text)) {
+      row.text = `${stripSupplementMarkers(text) || text || slot}（待补充：${slot}）`.trim();
     }
     row.needs_supplement = true;
   } else {
     row.text = stripSupplementMarkers(String(row.text || ""));
-    delete row.slot;
+    row.slot = "";
     row.needs_supplement = false;
   }
-  onConfigPointRowEdit(row);
-  if (!on) row.needs_supplement = false;
+  // 勿再走 onConfigPointRowEdit：它会按「无 slot / 无占位」把显式开关意图抹掉
+  if (String(row.element_id || "").trim()) {
+    row.needs_supplement = false;
+  }
   syncConfigPointItemsToLocalOutline();
   schedulePersistChapterConfig();
 }
