@@ -41,6 +41,71 @@ def test_save_outline_keeps_element_ids_when_incoming_empty(tmp_path: Path):
     assert by_key["c1"].title == "一（改）"
 
 
+def test_save_outline_allows_empty_chapter_ids_when_on_points(tmp_path: Path):
+    path = tmp_path / "tasks" / "wPtCh"
+    ensure_task(path)
+    save_outline(
+        path,
+        [
+            OutlineNode(
+                key="law",
+                sequence="1.5",
+                title="法规",
+                element_ids=["el-a", "el-b"],
+                point_items=[{"id": "p0", "text": "表", "element_id": "el-a"}],
+            )
+        ],
+    )
+    updated = save_outline(
+        path,
+        [
+            OutlineNode(
+                key="law",
+                sequence="1.5",
+                title="法规",
+                element_ids=[],
+                point_items=[{"id": "p0", "text": "表", "element_id": "el-a"}],
+            )
+        ],
+    )
+    node = updated.outline.chapters[0]
+    assert node.element_ids == []
+
+
+def test_save_outline_keeps_point_link_only_on_point_row(tmp_path: Path):
+    path = tmp_path / "tasks" / "wPtOnly"
+    ensure_task(path)
+    save_outline(
+        path,
+        [
+            OutlineNode(
+                key="law",
+                sequence="1.5.1",
+                title="法律",
+                point_items=[
+                    {"id": "p0", "text": "法律名称清单", "element_id": "el-law", "element_name": "法律名称清单"}
+                ],
+                element_ids=[],
+            )
+        ],
+    )
+    updated = save_outline(
+        path,
+        [
+            OutlineNode(
+                key="law",
+                sequence="1.5.1",
+                title="法律",
+                point_items=[{"id": "p0", "text": "法律名称清单"}],
+                element_ids=[],
+            )
+        ],
+    )
+    node = updated.outline.chapters[0]
+    assert node.element_ids == []
+    assert node.point_items[0].get("element_id") == "el-law"
+
+
 def test_save_outline_keeps_point_item_element_id(tmp_path: Path):
     path = tmp_path / "tasks" / "wKeepPt"
     ensure_task(path)
@@ -73,7 +138,8 @@ def test_save_outline_keeps_point_item_element_id(tmp_path: Path):
     )
     row = updated.outline.chapters[0].point_items[0]
     assert row.get("element_id") == "el-scale"
-    assert updated.outline.chapters[0].element_ids == ["el-scale"]
+    # 要点关联保留后章级可分存为空
+    assert updated.outline.chapters[0].element_ids == []
 
 
 def test_save_outline_merges_when_incoming_adds_without_old_ids(tmp_path: Path):

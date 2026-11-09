@@ -85,9 +85,15 @@ def chapters_linking_element(task: WritingTask | None, element_id: str) -> list[
     eid = (element_id or "").strip()
     if not task or not eid or not getattr(task, "outline", None):
         return []
+    from report_writing.domain.point_items_sync import (
+        element_ids_for_chapter_node,
+        elements_by_id_from_task,
+    )
+
+    by_id = elements_by_id_from_task(task)
     rows: list[tuple[str, str]] = []
     for ch in list(task.outline.chapters or []):
-        ids = [str(x).strip() for x in (getattr(ch, "element_ids", None) or []) if str(x).strip()]
+        ids = element_ids_for_chapter_node(ch, elements_by_id=by_id)
         if eid not in ids:
             continue
         label = f"{getattr(ch, 'sequence', '') or ''} {getattr(ch, 'title', '') or ''}".strip()

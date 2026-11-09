@@ -307,25 +307,36 @@ def _preserve_chapter_element_bindings(
         if str(getattr(node, "key", "") or "").strip()
     }
 
+    def _point_element_ids(node: OutlineNode) -> set[str]:
+        out: set[str] = set()
+        for row in list(getattr(node, "point_items", None) or []):
+            if not isinstance(row, dict):
+                continue
+            eid = str(row.get("element_id") or "").strip()
+            if eid:
+                out.add(eid)
+        return out
+
     def _restore_point_links(old_node: OutlineNode, new_node: OutlineNode) -> None:
         old_items = list(getattr(old_node, "point_items", None) or [])
         new_items = list(getattr(new_node, "point_items", None) or [])
         if not old_items or not new_items:
             return
-        by_id: dict[str, str] = {}
-        by_text: dict[str, str] = {}
+        by_id: dict[str, tuple[str, str]] = {}
+        by_text: dict[str, tuple[str, str]] = {}
         for row in old_items:
             if not isinstance(row, dict):
                 continue
             eid = str(row.get("element_id") or "").strip()
             if not eid:
                 continue
+            ename = str(row.get("element_name") or "").strip()
             rid = str(row.get("id") or "").strip()
             if rid:
-                by_id[rid] = eid
+                by_id[rid] = (eid, ename)
             text = str(row.get("text") or "").strip()
             if text:
-                by_text[text] = eid
+                by_text[text] = (eid, ename)
         restored = False
         next_items = []
         for row in new_items:
@@ -334,11 +345,17 @@ def _preserve_chapter_element_bindings(
                 continue
             nxt = dict(row)
             if not str(nxt.get("element_id") or "").strip():
-                eid = by_id.get(str(nxt.get("id") or "").strip()) or by_text.get(
+                # 用户已取消要点关联（needs_supplement）时勿从旧稿补回 element_id
+                if nxt.get("needs_supplement") is True:
+                    next_items.append(nxt)
+                    continue
+                hit = by_id.get(str(nxt.get("id") or "").strip()) or by_text.get(
                     str(nxt.get("text") or "").strip()
                 )
-                if eid:
-                    nxt["element_id"] = eid
+                if hit:
+                    nxt["element_id"] = hit[0]
+                    if hit[1] and not str(nxt.get("element_name") or "").strip():
+                        nxt["element_name"] = hit[1]
                     restored = True
             next_items.append(nxt)
         if restored:
@@ -352,7 +369,20 @@ def _preserve_chapter_element_bindings(
         new_ids = [str(x).strip() for x in (node.element_ids or []) if str(x).strip()]
         old_ids = [str(x).strip() for x in (old.element_ids or []) if str(x).strip()]
         if not new_ids and old_ids:
-            node.element_ids = list(old_ids)
+            incoming_points = list(getattr(node, "point_items", None) or [])
+            if incoming_points:
+                new_pts = _point_element_ids(node)
+                old_pts = _point_element_ids(old)
+                if set(old_ids).issubset(new_pts):
+                    node.element_ids = []
+                elif new_pts != old_pts:
+                    node.element_ids = []
+                elif set(old_ids) - new_pts:
+                    node.element_ids = []
+                else:
+                    node.element_ids = list(old_ids)
+            else:
+                node.element_ids = list(old_ids)
         elif new_ids and old_ids:
             old_set = set(old_ids)
             # 只提交新关联时不要冲掉已有；纯删减（incoming ⊆ old）仍按提交列表落盘

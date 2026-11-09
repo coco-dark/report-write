@@ -143,3 +143,86 @@ def test_link_orphan_element_to_supplement_row():
     linked = link_point_items_to_element_ids(items, ["el-job"], elements_by_id)
     assert linked[0]["element_id"] == "el-job"
     assert linked[0]["needs_supplement"] is False
+
+
+def test_element_ids_heal_by_element_name_when_id_missing():
+    from report_writing.domain.models import OutlineNode
+    from report_writing.domain.point_items_sync import (
+        element_ids_for_chapter_node,
+        sanitize_point_item_row,
+    )
+
+    by_id = {
+        "el-law": {"id": "el-law", "name": "法律名称清单"},
+        "el-other": {"id": "el-other", "name": "其它"},
+    }
+    node = OutlineNode(
+        key="laws",
+        title="法律",
+        element_ids=[],
+        point_items=[
+            {
+                "id": "p0",
+                "text": "按本项目填写法律名称清单",
+                "element_name": "法律名称清单",
+                # element_id 被某次同步洗掉，只剩名称
+            }
+        ],
+    )
+    assert element_ids_for_chapter_node(node, elements_by_id=by_id) == ["el-law"]
+    healed = sanitize_point_item_row(node.point_items[0], by_id)
+    assert healed["element_id"] == "el-law"
+    assert healed["element_name"] == "法律名称清单"
+    assert healed.get("needs_supplement") is False
+
+
+def test_element_ids_heal_skips_ambiguous_duplicate_names():
+    from report_writing.domain.models import OutlineNode
+    from report_writing.domain.point_items_sync import element_ids_for_chapter_node
+
+    by_id = {
+        "el-a": {"id": "el-a", "name": "法律名称清单"},
+        "el-b": {"id": "el-b", "name": "法律名称清单"},
+    }
+    node = OutlineNode(
+        key="laws",
+        title="法律",
+        element_ids=[],
+        point_items=[
+            {"id": "p0", "text": "清单", "element_name": "法律名称清单"},
+        ],
+    )
+    assert element_ids_for_chapter_node(node, elements_by_id=by_id) == []
+
+
+def test_infer_file_slot_from_point_text_for_retrieval():
+    from report_writing.domain.models import OutlineNode
+    from report_writing.domain.point_items_sync import element_ids_for_chapter_node
+
+    by_id = {
+        "el-law": {
+            "id": "el-law",
+            "name": "法律名称清单",
+            "kind": "file_slot",
+            "file_slots": [{"no": 1, "name": "法律法规", "query": "法律"}],
+            "tags": ["法律"],
+        },
+        "el-layout": {
+            "id": "el-layout",
+            "name": "法律条目排列逻辑",
+            "kind": "fixed",
+            "tags": ["法律", "版式"],
+        },
+    }
+    node = OutlineNode(
+        key="laws",
+        title="法律",
+        element_ids=[],
+        point_items=[
+            {"id": "p0", "text": "【分项】按表格展示"},
+            {"id": "p1", "text": "法律法规资料"},
+        ],
+    )
+    # 短标签「法律」不得误挂；「法律法规资料」应对上槽位「法律法规」的 file_slot
+    ids = element_ids_for_chapter_node(node, elements_by_id=by_id, infer_unlinked=True)
+    assert ids == ["el-law"]

@@ -997,7 +997,13 @@ import {
   linkPointItemsToElements,
   normalizePointItemRow,
   parseSlotFromText,
+  applyPendingPointItemBindings,
+  bindingsAligned,
+  chapterElementIdsForPersist,
+  shouldClearBindings,
+  collectPointItemBindings,
   elementIdsFromPointItems,
+  mergeChapterElementIds,
   pickPointItemsAuthoritative,
   pickRicherPointItems,
   pointItemsFromChapter,
@@ -1007,6 +1013,11 @@ import {
   syncPointItemsFromPoints,
   textNeedsSupplement,
 } from "../pointItemsSync";
+import {
+  beginChapterBindingFlight,
+  chapterBindingInFlight,
+  endChapterBindingFlight,
+} from "../chapterBindingsFlight";
 import {
   documentWindowOptionLabel,
   hasWritingCopyWithLibrarySource,
@@ -1604,15 +1615,177 @@ function pickElementIds(...candidates) {
   return fallback ? [...fallback] : [];
 }
 
-/** 关联确认后、目录尚未拉齐时暂存；拉齐/刷新时合并，避免标签被空数据冲掉 */
+/** 要素关联 PUT 飞行中：乐观态暂存；落盘成功或 GET 对齐后必须清空，勿长期当第二真源 */
 const pendingChapterElementIds = new Map();
+const pendingPointItemBindings = new Map();
+let bindingRevision = 0;
+/** 重分析已清空要素关联的章：合并大纲时勿把旧 element_ids / 要点关联加回来 */
+const studyClearedElementKeys = new Set();
 
-function rememberPendingElementIds(chapterKey, ids) {
+function rememberPendingElementIds(chapterKey, ids, { replace = true } = {}) {
   const key = String(chapterKey || "").trim();
   if (!key) return;
-  const list = unionElementIds(pendingChapterElementIds.get(key), ids);
-  if (list.length) pendingChapterElementIds.set(key, list);
-  else pendingChapterElementIds.delete(key);
+  const list = unionElementIds(ids);
+  if (!list.length) {
+    pendingChapterElementIds.delete(key);
+    bindingRevision += 1;
+    return;
+  }
+  if (replace) {
+    pendingChapterElementIds.set(key, list);
+  } else {
+    const merged = unionElementIds(pendingChapterElementIds.get(key), list);
+    pendingChapterElementIds.set(key, merged);
+  }
+  bindingRevision += 1;
+}
+
+function rememberPendingPointItemBindings(chapterKey, pointItems) {
+  const key = String(chapterKey || "").trim();
+  if (!key) return;
+  const collected = collectPointItemBindings(pointItems);
+  if (!collected.size) return;
+  const prev = pendingPointItemBindings.get(key) || new Map();
+  for (const [rid, bind] of collected) {
+    prev.set(rid, { ...bind });
+  }
+  pendingPointItemBindings.set(key, prev);
+  bindingRevision += 1;
+}
+
+function patchChapterBindingsFromServer(chapterKey, serverChapter) {
+  const key = String(chapterKey || "").trim();
+  if (!key || !serverChapter || typeof serverChapter !== "object") return;
+  const items = pickPointItemsAuthoritative([
+    serverChapter.point_items,
+    serverChapter.config?.point_items,
+  ]);
+  const ids = chapterElementIdsForPersist(
+    unionElementIds(serverChapter.element_ids, serverChapter.config?.element_ids),
+    items
+  );
+  const pts = pickRicherList(serverChapter.points, serverChapter.config?.points);
+  const applyOne = (ch) => {
+    if (String(ch?.key || "") !== key) return ch;
+    const cfg = ch.config && typeof ch.config === "object" ? ch.config : {};
+    const nextCfg =
+      serverChapter.config && typeof serverChapter.config === "object"
+        ? serverChapter.config
+        : {};
+    return {
+      ...ch,
+      ...serverChapter,
+      element_ids: [...ids],
+      points: pts.length ? pts : ch.points,
+      point_items: items.map((row) => ({ ...row })),
+      config: {
+        ...cfg,
+        ...nextCfg,
+        element_ids: [...ids],
+        points: pts.length ? pts : cfg.points,
+        point_items: items.map((row) => ({ ...row })),
+      },
+    };
+  };
+  outlineNodes.value = outlineNodes.value.map(applyOne);
+  extraChapters.value = extraChapters.value.map(applyOne);
+  if (String(selectedKey.value || "") === key) hydrateConfigDraft();
+}
+
+/** 关联/配置落盘后：以服务端本章覆盖本地并结束飞行，pending 不再参与 merge */
+function commitChapterBindingsFromServer(chapterKey, serverChapter) {
+  const key = String(chapterKey || "").trim();
+  if (!key) return;
+  if (serverChapter) patchChapterBindingsFromServer(key, serverChapter);
+  pendingChapterElementIds.delete(key);
+  pendingPointItemBindings.delete(key);
+  endChapterBindingFlight(key);
+  bindingRevision += 1;
+}
+
+async function refreshChapterBindingsFromServer(tid, chapterKey) {
+  const key = String(chapterKey || "").trim();
+  const docTid = String(tid || "").trim();
+  if (!docTid || !key) return;
+  const wid = String(activeDoc.value?.writingTaskId || "").trim();
+  try {
+    const data = await request(docOutlineUrl(docTid, { fresh: true, writingTaskId: wid }));
+    const hit = (data?.chapters || []).find((c) => String(c?.key || "") === key);
+    if (hit) commitChapterBindingsFromServer(key, hit);
+    else {
+      pendingChapterElementIds.delete(key);
+      pendingPointItemBindings.delete(key);
+      endChapterBindingFlight(key);
+    }
+  } catch {
+    /* 刷新失败：保留本地已落盘写入 */
+    endChapterBindingFlight(key);
+  }
+}
+
+function markStudyClearedElementBindings(chapterKey) {
+  const key = String(chapterKey || "").trim();
+  if (!key) return;
+  studyClearedElementKeys.add(key);
+  pendingChapterElementIds.delete(key);
+  pendingPointItemBindings.delete(key);
+  bindingRevision += 1;
+}
+
+function clearChapterElementBindingsLocal(chapterKey) {
+  const key = String(chapterKey || "").trim();
+  if (!key) return;
+  markStudyClearedElementBindings(key);
+  const stripOne = (ch) => {
+    if (String(ch?.key || "") !== key) return ch;
+    const prevItems = Array.isArray(ch.point_items)
+      ? ch.point_items
+      : Array.isArray(ch?.config?.point_items)
+        ? ch.config.point_items
+        : [];
+    const nextItems = (prevItems || []).map((row, i) => {
+      const norm = normalizePointItemRow(row, i);
+      if (!norm) return null;
+      const next = { ...norm };
+      delete next.element_id;
+      delete next.element_name;
+      const text = String(next.text || "");
+      const slot = String(next.slot || "").trim() || parseSlotFromText(text);
+      if (slot) next.slot = slot;
+      if (slot || textNeedsSupplement(text)) next.needs_supplement = true;
+      else delete next.needs_supplement;
+      return next;
+    }).filter(Boolean);
+    const cfg = ch.config && typeof ch.config === "object" ? ch.config : {};
+    return {
+      ...ch,
+      element_ids: [],
+      point_items: nextItems,
+      config: {
+        ...cfg,
+        element_ids: [],
+        point_items: nextItems,
+      },
+    };
+  };
+  outlineNodes.value = (outlineNodes.value || []).map(stripOne);
+  extraChapters.value = (extraChapters.value || []).map(stripOne);
+  if (String(selectedKey.value || "") === key) {
+    const rows = (configDraft.point_items || []).map((row, i) => {
+      const norm = normalizePointItemRow(row, i);
+      if (!norm) return null;
+      const next = { ...norm };
+      delete next.element_id;
+      delete next.element_name;
+      const text = String(next.text || "");
+      const slot = String(next.slot || "").trim() || parseSlotFromText(text);
+      if (slot) next.slot = slot;
+      if (slot || textNeedsSupplement(text)) next.needs_supplement = true;
+      else delete next.needs_supplement;
+      return next;
+    }).filter(Boolean);
+    configDraft.point_items.splice(0, configDraft.point_items.length, ...rows);
+  }
 }
 
 function pickRicherList(nextVal, prevVal) {
@@ -1660,14 +1833,21 @@ function mergeOutlinePreserveElementIds(prevList, nextList, { keepMissing = fals
   const mergeOne = (ch) => {
     const key = String(ch?.key || "").trim();
     const prev = prevByKey.get(key);
-    const pending = pendingChapterElementIds.get(key);
-    const ids = unionElementIds(
-      pending,
-      ch?.element_ids,
-      ch?.config?.element_ids,
-      prev?.element_ids,
-      prev?.config?.element_ids
-    );
+    const bindingFlight = chapterBindingInFlight(key);
+    const pending = bindingFlight ? pendingChapterElementIds.get(key) : null;
+    const studyCleared = studyClearedElementKeys.has(key);
+    const pendingPt = bindingFlight ? pendingPointItemBindings.get(key) : null;
+    // 重分析已清空关联：勿用本地旧 element_ids 盖回（章级分存，不含要点行 id）
+    const ids = studyCleared
+      ? mergeChapterElementIds(pending, ch?.element_ids, ch?.config?.element_ids)
+      : mergeChapterElementIds(
+          pending,
+          ch?.element_ids,
+          ch?.config?.element_ids,
+          prev?.element_ids,
+          prev?.config?.element_ids
+        );
+    if (studyCleared && ids.length) studyClearedElementKeys.delete(key);
     const nextStatus = String(ch?.status || "").trim();
     const prevStatus = String(prev?.status || "").trim();
     const prevWritten =
@@ -1733,19 +1913,52 @@ function mergeOutlinePreserveElementIds(prevList, nextList, { keepMissing = fals
       ? prevItems
       : nextItems.length
         ? nextItems
-        : pickPointItemsAuthoritative(
-            [ch?.point_items, ch?.config?.point_items],
-            prev?.point_items,
-            prev?.config?.point_items
-          );
+        : studyCleared
+          ? pickPointItemsAuthoritative([ch?.point_items, ch?.config?.point_items])
+          : pickPointItemsAuthoritative(
+              [ch?.point_items, ch?.config?.point_items],
+              prev?.point_items,
+              prev?.config?.point_items
+            );
     if (points.length) {
       const ptsText = points.map((p) => String(p || "").trim()).filter(Boolean).join("\n");
       const itemsText = pointsFromPointItems(point_items).join("\n");
+      // 重分析后不得再按旧行继承 element_id
+      const inheritBase = studyCleared ? [] : point_items.length ? point_items : prevItems;
       if (ptsText && itemsText && ptsText !== itemsText) {
-        point_items = syncPointItemsFromPoints(points, point_items.length ? point_items : prevItems);
+        point_items = syncPointItemsFromPoints(points, inheritBase);
       } else if (!point_items.length) {
-        point_items = syncPointItemsFromPoints(points, prevItems);
+        point_items = syncPointItemsFromPoints(points, inheritBase);
+      } else if (studyCleared) {
+        point_items = syncPointItemsFromPoints(points, []);
       }
+    }
+    // 目录软刷新常带回「同文无 element_id」的要点行；未清关联时从本地 prev 补回，避免刚关联就被冲掉
+    if (!studyCleared && prevItems.length && point_items.length) {
+      const prevByRowId = new Map(
+        prevItems
+          .map((row) => [String(row?.id || "").trim(), row])
+          .filter(([id]) => id)
+      );
+      point_items = point_items.map((row, i) => {
+        if (String(row?.element_id || "").trim()) return row;
+        const prevRow =
+          prevByRowId.get(String(row?.id || "").trim()) ||
+          prevItems[i] ||
+          null;
+        const eid = String(prevRow?.element_id || "").trim();
+        if (!eid) return row;
+        const next = { ...row, element_id: eid, needs_supplement: false };
+        const ename = humanLabel(prevRow?.element_name, row?.element_name, row?.slot);
+        if (ename) next.element_name = ename;
+        return next;
+      });
+    }
+    if (!studyCleared && pendingPt?.size) {
+      point_items = pickPointItemsAuthoritative(
+        [point_items],
+        [applyPendingPointItemBindings(point_items, pendingPt)]
+      );
     }
     const structureOnly = Boolean(
       Object.prototype.hasOwnProperty.call(ch || {}, "structure_only")
@@ -1867,6 +2080,9 @@ function applyChapterPointsLocal(chapterKey, extra = {}) {
   const describesProvided = Object.prototype.hasOwnProperty.call(extra, "describes");
   const describes = describesProvided ? String(extra.describes || "").trim() : null;
   if (!points?.length && !keywords?.length && !describesProvided && !pointItemsIn?.length) return;
+  // 仅显式重分析/换要点时清空关联；普通分析进度回写不得仅因带了 points 就洗掉 element_id
+  const clearBindings = shouldClearBindings(extra.clear_element_bindings);
+  if (clearBindings) markStudyClearedElementBindings(key);
   const patchOne = (ch) => {
     const nextPoints = points?.length ? points : pickRicherList(ch.points, ch.config?.points);
     const nextKeywords = keywords?.length
@@ -1877,12 +2093,23 @@ function applyChapterPointsLocal(chapterKey, extra = {}) {
     // 分析进度只带 points 时，必须重算 point_items，否则右侧表仍显示上一轮串章行
     let nextItems = null;
     if (pointItemsIn?.length) {
-      nextItems = pointItemsIn.map((row, i) => normalizePointItemRow(row, i)).filter(Boolean);
+      nextItems = pointItemsIn.map((row, i) => {
+        const norm = normalizePointItemRow(row, i);
+        if (!norm) return null;
+        if (!clearBindings) return norm;
+        const next = { ...norm };
+        delete next.element_id;
+        delete next.element_name;
+        const text = String(next.text || "");
+        const slot = String(next.slot || "").trim() || parseSlotFromText(text);
+        if (slot) next.slot = slot;
+        if (slot || textNeedsSupplement(text)) next.needs_supplement = true;
+        else delete next.needs_supplement;
+        return next;
+      }).filter(Boolean);
     } else if (points?.length) {
-      nextItems = syncPointItemsFromPoints(
-        points,
-        ch?.point_items || ch?.config?.point_items || []
-      );
+      // 重分析不继承旧行 element_id
+      nextItems = syncPointItemsFromPoints(points, clearBindings ? [] : (ch?.point_items || ch?.config?.point_items || []));
     }
     const cfg = ch.config && typeof ch.config === "object" ? ch.config : {};
     const epoch = Date.now();
@@ -1891,6 +2118,7 @@ function applyChapterPointsLocal(chapterKey, extra = {}) {
       key: ch.key || key,
       points: nextPoints,
       ...(nextItems ? { point_items: nextItems } : {}),
+      ...(clearBindings ? { element_ids: [] } : {}),
       keywords: nextKeywords,
       describes: nextDescribes,
       structure_only: Boolean(extra.structure_only ?? ch.structure_only),
@@ -1899,6 +2127,7 @@ function applyChapterPointsLocal(chapterKey, extra = {}) {
         ...cfg,
         points: nextPoints,
         ...(nextItems ? { point_items: nextItems } : {}),
+        ...(clearBindings ? { element_ids: [] } : {}),
         keywords: nextKeywords,
         describes: nextDescribes,
         structure_only: Boolean(extra.structure_only ?? cfg.structure_only ?? ch.structure_only),
@@ -1923,96 +2152,136 @@ function applyChapterPointsLocal(chapterKey, extra = {}) {
 function applyChapterElementIdsLocal(chapterKey, ids, incomingElements, opts = {}) {
   const key = String(chapterKey || "").trim();
   if (!key) return;
+  beginChapterBindingFlight(key);
   const list = unionElementIds(ids);
-  rememberPendingElementIds(key, list);
   if (Array.isArray(incomingElements) && incomingElements.length) {
     elementNodes.value = mergeElementNodes(elementNodes.value, incomingElements);
   }
   const isPointScope =
     String(opts.associateScope || "").trim() === "point" ||
     Boolean(opts.pointItemLink || pendingPointItemLink.value);
-  const linkOpts = {
-    elementIds: isPointScope ? list : [],
-    newElementIds: opts.newElementIds || [],
-    pointLink: opts.pointItemLink || pendingPointItemLink.value || null,
-    assignOrphans: false,
-  };
+  const pointLink = opts.pointItemLink || pendingPointItemLink.value || null;
+  const incomingPointItems =
+    Array.isArray(opts.pointItems) && opts.pointItems.length
+      ? opts.pointItems.map((row) => ({ ...row }))
+      : null;
   let linkedItems = null;
   if (isPointScope) {
-    const baseItems =
-      Array.isArray(opts.pointItems) && opts.pointItems.length
-        ? opts.pointItems.map((row) => ({ ...row }))
-        : configDraft.point_items.map((row) => ({ ...row }));
+    // 要点作用域：只回写 point_items，绝不碰章级 element_ids / pending
+    const baseItems = incomingPointItems?.length
+      ? incomingPointItems
+      : configDraft.point_items.map((row) => ({ ...row }));
     if (baseItems.length) {
-      linkedItems = linkPointItemsToElements(baseItems, elementNodes.value, {
-        ...linkOpts,
-        elementIds: list.length ? list : linkOpts.elementIds,
-      });
+      const alreadyLinked = baseItems.some((row) => String(row?.element_id || "").trim());
+      if (alreadyLinked && incomingPointItems?.length) {
+        linkedItems = baseItems;
+      } else {
+        const pointElementIds = unionElementIds(
+          opts.newElementIds,
+          baseItems.map((row) => row?.element_id)
+        );
+        linkedItems = linkPointItemsToElements(baseItems, elementNodes.value, {
+          elementIds: pointElementIds,
+          newElementIds: opts.newElementIds || [],
+          pointLink,
+          assignOrphans: false,
+        });
+      }
     }
+    if (String(selectedKey.value || "") === key && linkedItems?.length) {
+      const prevById = new Map(
+        configDraft.point_items.map((row) => [String(row?.id || ""), row])
+      );
+      const mergedRows = linkedItems.map((row, i) => {
+        const prev =
+          prevById.get(String(row?.id || "")) ||
+          configDraft.point_items[i] ||
+          null;
+        const text =
+          String(row?.text || "").trim() ||
+          String(prev?.text || "").trim() ||
+          "";
+        return text ? { ...row, text } : { ...row };
+      });
+      const keepRows = mergedRows.filter((row) => String(row?.text || "").trim());
+      if (keepRows.length) {
+        configDraft.point_items.splice(0, configDraft.point_items.length, ...keepRows);
+      }
+      saveHint.value = "";
+    }
+    const patchPointOnly = (ch) => {
+      if (!linkedItems?.length) return ch;
+      const nextItems = linkedItems.map((row) => ({ ...row }));
+      const nextPoints = pointsFromPointItems(nextItems);
+      const keepPoints = nextPoints.length
+        ? nextPoints
+        : pickRicherList(ch?.points, ch?.config?.points);
+      return {
+        ...ch,
+        point_items: nextItems,
+        points: keepPoints.length ? keepPoints : ch.points,
+        config: {
+          ...(ch.config && typeof ch.config === "object" ? ch.config : {}),
+          point_items: nextItems,
+          points: keepPoints.length ? keepPoints : ch?.config?.points,
+        },
+      };
+    };
+    outlineNodes.value = outlineNodes.value.map((item) =>
+      String(item?.key || "") === key ? patchPointOnly(item) : item
+    );
+    extraChapters.value = extraChapters.value.map((item) =>
+      String(item?.key || "") === key ? patchPointOnly(item) : item
+    );
+    if (linkedItems?.length) rememberPendingPointItemBindings(key, linkedItems);
+    pendingPointItemLink.value = null;
+    return;
   }
-  if (String(selectedKey.value || "") === key && linkedItems?.length) {
-    configDraft.point_items.splice(0, configDraft.point_items.length, ...linkedItems);
-    saveHint.value = "";
-  }
+  // 章级作用域：更新 pending + chapter.element_ids
+  if (list.length) studyClearedElementKeys.delete(key);
   const existingChapterIds = unionElementIds(
     outlineNodes.value.find((item) => String(item.key || "") === key)?.element_ids,
     extraChapters.value.find((item) => String(item.key || "") === key)?.element_ids,
     pendingChapterElementIds.get(key)
   );
   const incomingIds = unionElementIds(list);
-  const addingNew =
-    !isPointScope && incomingIds.some((id) => !existingChapterIds.includes(id));
-  const chapterIds = isPointScope
-    ? existingChapterIds
-    : addingNew
-      ? unionElementIds(existingChapterIds, incomingIds)
-      : incomingIds;
-  if (isPointScope && !chapterIds.length) {
-    const pending = pendingChapterElementIds.get(key);
-    if (Array.isArray(pending) && pending.length) {
-      chapterIds.push(...pending);
-    }
-  }
-  const patchPointItems = (ch) => {
-    if (!linkedItems?.length) return ch;
-    return {
-      ...ch,
-      point_items: linkedItems.map((row) => ({ ...row })),
-      points: pointsFromPointItems(linkedItems),
-      config: {
-        ...(ch.config && typeof ch.config === "object" ? ch.config : {}),
-        point_items: linkedItems.map((row) => ({ ...row })),
-        points: pointsFromPointItems(linkedItems),
-      },
-    };
-  };
+  const addingNew = incomingIds.some((id) => !existingChapterIds.includes(id));
+  const chapterIds = addingNew
+    ? unionElementIds(existingChapterIds, incomingIds)
+    : incomingIds;
+  rememberPendingElementIds(key, chapterIds, { replace: true });
   const idx = outlineNodes.value.findIndex((item) => String(item.key || "") === key);
   if (idx >= 0) {
     outlineNodes.value = outlineNodes.value.map((item, i) =>
       i === idx
-        ? patchPointItems({
+        ? {
             ...item,
             element_ids: [...chapterIds],
             config: {
               ...(item.config && typeof item.config === "object" ? item.config : {}),
               element_ids: [...chapterIds],
             },
-          })
+          }
         : item
     );
-  }
-  // 目录尚未到位：写入 extraChapters 占位，等全量大纲合并时仍能回显
-  if (idx < 0 && chapterIds.length) {
+  } else if (chapterIds.length) {
     const extraIdx = extraChapters.value.findIndex((item) => String(item.key || "") === key);
     if (extraIdx >= 0) {
       extraChapters.value = extraChapters.value.map((item, i) =>
-        i === extraIdx ? patchPointItems({ ...item, element_ids: [...chapterIds] }) : item
+        i === extraIdx
+          ? {
+              ...item,
+              element_ids: [...chapterIds],
+              config: {
+                ...(item.config && typeof item.config === "object" ? item.config : {}),
+                element_ids: [...chapterIds],
+              },
+            }
+          : item
       );
     }
   }
-  if (!isPointScope) {
-    rememberPendingElementIds(key, chapterIds);
-  }
+  if (incomingPointItems?.length) rememberPendingPointItemBindings(key, incomingPointItems);
   pendingPointItemLink.value = null;
 }
 
@@ -2928,13 +3197,15 @@ const selectedElementIds = computed(() => {
   const node = selectedOutlineNode.value;
   const ch = selectedChapter.value;
   const key = String(selectedKey.value || node?.key || ch?.key || "").trim();
-  // 大纲节点优先，避免文档侧空 [] 把刚关联的要素盖掉
-  return unionElementIds(
+  const pointItems = chapterPointItemsForState(ch || node);
+  const raw = unionElementIds(
     node?.element_ids,
     ch?.element_ids,
     ch?.config?.element_ids,
     key ? pendingChapterElementIds.get(key) : null
   );
+  // 章节要素区只展示章级 element_ids，不把要点行上的 id 当作「章」标签
+  return chapterElementIdsForPersist(raw, pointItems);
 });
 
 /** 配置完成后在基本/内容 Tab 顶部展示章节说明与要点关联概况 */
@@ -3599,6 +3870,9 @@ function clearLocalOutlineState() {
   Object.assign(configDraft, emptyConfigDraft());
   loadedOutlineTaskId = "";
   pendingChapterElementIds.clear();
+  pendingPointItemBindings.clear();
+  studyClearedElementKeys.clear();
+  bindingRevision = 0;
 }
 
 function applyPreviewPayload(tid, data) {
@@ -4219,6 +4493,7 @@ function applyLocate(cmd) {
         keywords: cmd.keywords,
         describes: cmd.describes,
         structure_only: cmd.structure_only,
+        ...(cmd.clear_element_bindings ? { clear_element_bindings: true } : {}),
       });
       outlineConfirmedLocal.value = true;
     }
@@ -4235,6 +4510,19 @@ function applyLocate(cmd) {
   const elementId = String(cmd?.elementId || "").trim();
   const wantKnowledge = Boolean(cmd?.associateKnowledge) || reason === "associate_element_knowledge";
   // 关联确认后乐观合并要素库与本章 element_ids，标签立刻可见
+  if (reason === "bindings_committed" && key) {
+    if (cmd?.serverChapter) {
+      commitChapterBindingsFromServer(key, cmd.serverChapter);
+    } else {
+      pendingChapterElementIds.delete(key);
+      pendingPointItemBindings.delete(key);
+      endChapterBindingFlight(key);
+      bindingRevision += 1;
+    }
+  }
+  if (reason === "bindings_refresh" && key && tid) {
+    void refreshChapterBindingsFromServer(tid, key);
+  }
   if (
     reason === "elements_associated" ||
     (reason === "config_saved" && Array.isArray(cmd?.elementIds))
@@ -4421,6 +4709,8 @@ async function submitRestudyDialog() {
   if (!(await flushConfigBeforeWrite())?.ok) return;
   const focusKey = String(target.key || keys[0] || "").trim();
   if (focusKey) selectChapter(focusKey, "config");
+  // 确认重分析即清空本章旧要素关联（结果落地前先清 UI，避免残留标签）
+  for (const k of keys) clearChapterElementBindingsLocal(k);
   restudyDialogVisible.value = false;
   const compose = composeOfChapter(focusKey);
   if (method === "auto") {
@@ -5472,59 +5762,125 @@ async function saveElementDraft() {
   }
 }
 
+function clearElementLinkOnChapter(ch, elementId) {
+  const id = String(elementId || "").trim();
+  const key = String(ch?.key || "").trim();
+  if (!id || !key) return ch;
+  const nextIds = (Array.isArray(ch.element_ids) ? ch.element_ids : []).filter(
+    (item) => String(item || "") !== id
+  );
+  const prevItems = Array.isArray(ch.point_items)
+    ? ch.point_items
+    : Array.isArray(ch?.config?.point_items)
+      ? ch.config.point_items
+      : [];
+  const nextItems = (prevItems || []).map((row) => {
+    if (!row || typeof row !== "object") return row;
+    if (String(row.element_id || "").trim() !== id) return { ...row };
+    const next = { ...row };
+    delete next.element_id;
+    delete next.element_name;
+    const text = String(next.text || "");
+    const slot = String(next.slot || "").trim() || parseSlotFromText(text);
+    if (slot) next.slot = slot;
+    if (slot || textNeedsSupplement(text)) next.needs_supplement = true;
+    return next;
+  });
+  return {
+    ...ch,
+    element_ids: nextIds,
+    point_items: nextItems,
+    points: pointsFromPointItems(nextItems),
+    config: {
+      ...(ch.config && typeof ch.config === "object" ? ch.config : {}),
+      element_ids: nextIds,
+      point_items: nextItems,
+      points: pointsFromPointItems(nextItems),
+    },
+  };
+}
+
 async function unlinkCurrentElement() {
   const id = String(elementDraft.value?.id || "").trim();
   const key = String(selectedKey.value || "").trim();
   const persistTid = outlineSourceTaskId();
   if (!id || !key || !persistTid) return;
-  let nodes = outlineNodes.value.length
-    ? outlineNodes.value.map((item) => ({ ...item }))
-    : [];
-  if (!nodes.length) {
-    try {
-      const slim = await requestDocOutline(persistTid);
-      nodes = (slim?.chapters || []).map((item) => ({ ...item }));
-    } catch (error) {
-      ElMessage.error(error?.message || "读取目录失败");
-      return;
+  beginChapterBindingFlight(key);
+  // 先清本地（含仅挂在要点上的乐观关联），再调后端；后端已幂等，不再弹「该章未关联」
+  const hadLocalPointLink = (configDraft.point_items || []).some(
+    (row) => String(row?.element_id || "").trim() === id
+  );
+  outlineNodes.value = outlineNodes.value.map((ch) =>
+    String(ch?.key || "") === key ? clearElementLinkOnChapter(ch, id) : ch
+  );
+  extraChapters.value = extraChapters.value.map((ch) =>
+    String(ch?.key || "") === key ? clearElementLinkOnChapter(ch, id) : ch
+  );
+  if (String(selectedKey.value || "") === key) {
+    configDraft.point_items.splice(
+      0,
+      configDraft.point_items.length,
+      ...configDraft.point_items.map((row) => {
+        if (String(row?.element_id || "").trim() !== id) return row;
+        const next = { ...row };
+        delete next.element_id;
+        delete next.element_name;
+        const text = String(next.text || "");
+        const slot = String(next.slot || "").trim() || parseSlotFromText(text);
+        if (slot) next.slot = slot;
+        if (slot || textNeedsSupplement(text)) next.needs_supplement = true;
+        return next;
+      })
+    );
+  }
+  pendingChapterElementIds.delete(key);
+  const ptMap = pendingPointItemBindings.get(key);
+  if (ptMap?.size) {
+    for (const [rid, bind] of [...ptMap]) {
+      if (String(bind?.element_id || "").trim() === id) ptMap.delete(rid);
     }
+    if (!ptMap.size) pendingPointItemBindings.delete(key);
   }
-  const idx = nodes.findIndex((item) => String(item.key || "") === key);
-  if (idx < 0) {
-    ElMessage.warning("未找到该章节");
-    return;
-  }
-  const prevIds = Array.isArray(nodes[idx].element_ids) ? nodes[idx].element_ids : [];
-  nodes[idx] = {
-    ...nodes[idx],
-    element_ids: prevIds.filter((item) => String(item || "") !== id),
-  };
   try {
-    const remaining = prevIds.filter((item) => String(item || "") !== id);
-    if (!remaining.length) {
-      await request(
-        `/api/writing/tasks/${encodeURIComponent(persistTid)}/chapters/${encodeURIComponent(key)}/elements/${encodeURIComponent(id)}`,
-        { method: "DELETE", headers: authHeaders() }
-      );
-      nodes[idx] = { ...nodes[idx], element_ids: [] };
-      pendingChapterElementIds.delete(key);
-      outlineNodes.value = outlineNodes.value.map((ch) =>
-        String(ch?.key || "") === key ? { ...ch, element_ids: [] } : ch
-      );
-    } else {
-      await persistOutlineNodes(nodes, { selectKey: key });
+    await request(
+      `/api/writing/tasks/${encodeURIComponent(persistTid)}/chapters/${encodeURIComponent(key)}/elements/${encodeURIComponent(id)}`,
+      { method: "DELETE", headers: authHeaders() }
+    );
+    // 本地要点关联可能尚未落盘：再静默写回本章 point_items，避免刷新后又挂上
+    if (hadLocalPointLink) {
+      syncConfigPointItemsToLocalOutline();
+      schedulePersistChapterConfig(0);
     }
     elementDialogVisible.value = false;
+    const chapter =
+      outlineNodes.value.find((ch) => String(ch?.key || "") === key) ||
+      extraChapters.value.find((ch) => String(ch?.key || "") === key) ||
+      null;
     emit("config-saved", {
       taskId: persistTid,
       chapterKey: key,
-      chapter: nodes[idx],
+      chapter,
       elementNodes: elementNodes.value,
       syncSession: false,
+      alreadyPersisted: true,
+      quiet: true,
     });
-    ElMessage.success("已取消本章关联");
+    await refreshChapterBindingsFromServer(persistTid, key);
+    ElMessage.success("已取消关联");
   } catch (error) {
-    ElMessage.error(error?.message || "取消关联失败");
+    const msg = String(error?.message || "");
+    if (msg.includes("该章未关联此要素")) {
+      if (hadLocalPointLink) {
+        syncConfigPointItemsToLocalOutline();
+        schedulePersistChapterConfig(0);
+      }
+      elementDialogVisible.value = false;
+      await refreshChapterBindingsFromServer(persistTid, key);
+      ElMessage.success("已取消关联");
+      return;
+    }
+    ElMessage.error(msg || "取消关联失败");
+    endChapterBindingFlight(key);
   }
 }
 
@@ -5542,7 +5898,10 @@ async function persistOutlineNodes(nodes, { selectKey = "", replaceTree = false 
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ chapters: nodes, replace_tree: Boolean(replaceTree) }),
     });
-    outlineNodes.value = (updated?.outline?.chapters || nodes).map((item) => ({ ...item }));
+    const nextList = (updated?.outline?.chapters || nodes).map((item) => ({ ...item }));
+    outlineNodes.value = mergeOutlinePreserveElementIds(outlineNodes.value, nextList, {
+      preferOutlineCompose: true,
+    });
     extraChapters.value = outlineNodes.value.map((ch) => ({
       key: ch.key,
       sequence: ch.sequence,
@@ -5760,15 +6119,30 @@ function hydrateConfigDraft() {
     ),
   });
   configDraft.fixed_output = isFixedCompose(configDraft.compose);
+  const chapterKey = String(selectedKey.value || node?.key || ch?.key || "").trim();
   const loadedItems = pointItemsFromChapter(node, ch, cfg);
-  const loadedTexts = pointsFromPointItems(loadedItems);
+  const pendingPt = pendingPointItemBindings.get(chapterKey);
+  const draftFallback =
+    chapterKey && chapterKey === String(selectedKey.value || "").trim()
+      ? configDraft.point_items.map((row) => ({ ...row }))
+      : [];
+  let rows = pickPointItemsAuthoritative(
+    [loadedItems],
+    draftFallback.length ? [draftFallback] : [],
+    pendingPt?.size ? [applyPendingPointItemBindings(loadedItems, pendingPt)] : []
+  );
+  const loadedTexts = pointsFromPointItems(rows);
   const pointsSig = (points || []).map((p) => String(p || "").trim()).filter(Boolean).join("\n");
   const itemsSig = loadedTexts.join("\n");
   // 大纲/进度已换新 points，但 point_items 仍是旧串章行时，按 points 重建表格
-  let rows =
-    points.length && (!loadedItems.length || (pointsSig && pointsSig !== itemsSig))
-      ? syncPointItemsFromPoints(points, loadedItems)
-      : loadedItems;
+  if (points.length && (!rows.length || (pointsSig && pointsSig !== itemsSig))) {
+    rows = syncPointItemsFromPoints(points, rows);
+    rows = pickPointItemsAuthoritative(
+      [rows],
+      draftFallback.length ? [draftFallback] : [],
+      pendingPt?.size ? [applyPendingPointItemBindings(rows, pendingPt)] : []
+    );
+  }
   // 只补全已关联行的展示名；禁止按章 element_ids 自动挂回「刚取消关联」的要点
   if (rows.length && elementNodes.value.length) {
     rows = rows.map((row) => {
@@ -5805,7 +6179,8 @@ function pointItemElementLabel(row) {
   if (!eid) return "";
   const el = elementNodes.value.find((item) => String(item?.id || "") === eid);
   const name = humanLabel(el?.name, row.element_name, row.slot);
-  if (!name) return "";
+  // 要素体尚未合入本地库时，仍用 slot / 占位名回显，避免「已关联却空白」
+  if (!name) return el ? `已关联要素（${elementKindLabel(el.kind)}）` : "已关联要素";
   return el ? `${name}（${elementKindLabel(el.kind)}）` : name;
 }
 
@@ -6237,6 +6612,7 @@ async function saveChapterConfig(opts = {}) {
   const primaryTid = targets[0] || "";
   const key = String(selectedKey.value || "").trim();
   if (!primaryTid || !key || saving.value) return null;
+  beginChapterBindingFlight(key);
   if (configAutosaveTimer) {
     clearTimeout(configAutosaveTimer);
     configAutosaveTimer = 0;
@@ -6250,11 +6626,10 @@ async function saveChapterConfig(opts = {}) {
   try {
     const local = outlineNodes.value.find((item) => String(item.key || "") === key) || {};
     const draftItems = configDraft.structure_only ? [] : draftPointItemsForSave();
-    // 章级 element_ids 与要点 element_id 分开存：保存配置不把要点要素并进章节
-    const chapterElementIds = unionElementIds(
-      local.element_ids,
-      local.config?.element_ids,
-      selectedElementIds.value
+    // 章级只取大纲章级字段；剔除已挂在要点上的 id（清洗历史泄漏）
+    const chapterElementIds = chapterElementIdsForPersist(
+      unionElementIds(local.element_ids, local.config?.element_ids),
+      draftItems
     );
     const fields = {
       sequence: configDraft.sequence,
@@ -6287,6 +6662,11 @@ async function saveChapterConfig(opts = {}) {
       outlineNodes.value = mergeOutlinePreserveElementIds(outlineNodes.value, primaryNodes, {
         preferOutlineCompose: true,
       });
+      if (primaryChapter) {
+        commitChapterBindingsFromServer(key, primaryChapter);
+      } else {
+        endChapterBindingFlight(key);
+      }
       if (!quiet) {
         extraChapters.value = outlineNodes.value.map((ch) => ({
           key: ch.key,
@@ -6342,6 +6722,7 @@ async function saveChapterConfig(opts = {}) {
   } catch (error) {
     saveHint.value = error?.message || "保存失败";
     if (!quiet) ElMessage.error(saveHint.value);
+    endChapterBindingFlight(key);
     return false;
   } finally {
     if (!quiet) saving.value = false;
@@ -6768,18 +7149,32 @@ async function loadFullOutline({ force = false } = {}) {
       projectFolderIdsLocal.value = projectIds.map((x) => String(x || "").trim()).filter(Boolean);
       projectFolderLabel.value = projectLabel || folderLabelFromTree(projectFolderIdsLocal.value);
       await loadMaterialsPack(packId);
-      // 服务端已带回非空关联时，清掉对应 pending
+      // 服务端与 pending 对齐后再清暂存（章级 + 要点行）
       for (const ch of outlineNodes.value) {
         const key = String(ch?.key || "").trim();
-        const serverIds = pickElementIds(
-          list.find((row) => String(row?.key || "") === key)?.element_ids,
-          list.find((row) => String(row?.key || "") === key)?.config?.element_ids
-        );
-        if (key && serverIds.length) pendingChapterElementIds.delete(key);
+        if (!key) continue;
+        const serverRaw = list.find((row) => String(row?.key || "") === key) || ch;
+        const aligned = bindingsAligned(serverRaw, {
+          chapterIds: pendingChapterElementIds.get(key),
+          pointBindings: pendingPointItemBindings.get(key),
+        });
+        if (aligned) {
+          pendingChapterElementIds.delete(key);
+          pendingPointItemBindings.delete(key);
+          endChapterBindingFlight(key);
+        }
       }
-      emit("elements-saved", { taskId: tid, elementNodes: elementNodes.value });
+      emit("elements-saved", {
+        taskId: tid,
+        elementNodes: elementNodes.value,
+        fromOutlineLoad: true,
+      });
       if (writingTid && writingTid !== tid) {
-        emit("elements-saved", { taskId: writingTid, elementNodes: elementNodes.value });
+        emit("elements-saved", {
+          taskId: writingTid,
+          elementNodes: elementNodes.value,
+          fromOutlineLoad: true,
+        });
       }
       extraChapters.value = outlineNodes.value.map((ch) => ({
         key: ch.key,

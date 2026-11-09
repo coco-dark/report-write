@@ -1,5 +1,7 @@
 /** 要素展示文案（对话 / 拓扑 / 关联弹窗共用） */
 
+import { humanLabel } from "./pointItemsSync.js";
+
 export function elementKindLabel(kind) {
   return (
     {

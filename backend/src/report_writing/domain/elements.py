@@ -215,15 +215,25 @@ def resolve_elements_for_chapter(
     by_id = {item.id: item for item in elements if item.id}
     results = []
     element_ids = [str(item).strip() for item in (requirement.element_ids or []) if str(item).strip()]
-    # brief 上的关联可能落后于大纲：合并章 element_ids 与 point_items 关联
+    # brief 上的关联可能落后于大纲：合并章/要点关联；无显式关联时按要点文案推断 file_slot
     if outline is not None:
         from report_writing.domain.point_items_sync import element_ids_for_chapter_node
 
         node = next((item for item in outline.chapters if item.key == requirement.key), None)
         if node is not None:
-            for extra_id in element_ids_for_chapter_node(node, elements_by_id=by_id):
+            for extra_id in element_ids_for_chapter_node(
+                node, elements_by_id=by_id, infer_unlinked=True
+            ):
                 if extra_id not in element_ids:
                     element_ids.append(extra_id)
+    elif not element_ids:
+        from report_writing.domain.point_items_sync import element_ids_for_chapter_node
+
+        for extra_id in element_ids_for_chapter_node(
+            requirement, elements_by_id=by_id, infer_unlinked=True
+        ):
+            if extra_id not in element_ids:
+                element_ids.append(extra_id)
     for element_id in element_ids:
         node = by_id.get(element_id)
         if node is None:

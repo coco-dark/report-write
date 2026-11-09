@@ -85,3 +85,29 @@ def test_apply_points_replace_drops_old_grounding_rows():
         }
     )
     assert [row["text"] for row in payload_items] == node.points
+
+
+def test_apply_points_replace_clears_element_bindings():
+    from report_writing.domain.models import OutlineNode
+    from report_writing.domain.point_items_sync import apply_points_to_outline_node
+
+    node = OutlineNode(
+        title="法律条目",
+        points=["按序号名称文号日期排列"],
+        point_items=[
+            {
+                "id": "p0",
+                "text": "按序号名称文号日期排列",
+                "element_id": "el-law-order",
+                "element_name": "法律条目排列逻辑",
+            }
+        ],
+        element_ids=["el-law-order", "el-chapter"],
+    )
+    apply_points_to_outline_node(
+        node,
+        ["按序号名称文号日期排列", "补充层级顺序说明"],
+        replace=True,
+    )
+    assert node.element_ids == []
+    assert all(not str(row.get("element_id") or "").strip() for row in node.point_items)

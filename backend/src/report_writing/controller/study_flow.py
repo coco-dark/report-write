@@ -1028,6 +1028,7 @@ def auto_study_selected_chapters(
                     "keywords": list(keywords),
                     "describes": describes or "",
                     "structure_only": structure_only,
+                    "clear_element_bindings": True,
                     "study_analyzed": analyzed_n,
                     "study_unanalyzed": max(0, total_n - analyzed_n),
                 }
@@ -1093,6 +1094,7 @@ def _apply_study_drafts_to_outline(task, drafts: list) -> set[str]:
             node.point_items = []
             node.keywords = []
             node.content_blocks = []
+            node.element_ids = []
         else:
             if draft.points:
                 raw_items = getattr(draft, "point_items", None)
@@ -1102,6 +1104,18 @@ def _apply_study_drafts_to_outline(task, drafts: list) -> set[str]:
                     raw_point_items=raw_items if isinstance(raw_items, list) else None,
                     replace=True,
                 )
+            elif list(getattr(draft, "point_items", None) or []):
+                # 仅结构化要点也算重分析：清空旧要素关联
+                apply_points_to_outline_node(
+                    node,
+                    [],
+                    raw_point_items=list(getattr(draft, "point_items", None) or []),
+                    replace=True,
+                )
+            # 清空后按新要点文案/槽位名把任务内已有要素挂回，避免重分析后写作检索落空
+            from report_writing.domain.point_items_sync import relink_chapter_elements_after_study
+
+            relink_chapter_elements_after_study(task, node)
             slots = list(getattr(draft, "project_slots", None) or [])
             draft_keywords = [
                 item.strip() for item in (getattr(draft, "keywords", None) or []) if str(item).strip()

@@ -975,12 +975,15 @@ def put_elements(task_id: str, body: SaveElementsRequest) -> WritingTask:
 
 @router.delete("/api/writing/tasks/{task_id}/chapters/{chapter_key}/elements/{element_id}")
 def delete_chapter_element_link(task_id: str, chapter_key: str, element_id: str) -> dict:
-    """取消某章与要素的关联；不删除要素节点。空 element_ids 的目录 PUT 不再当取消关联。"""
+    """取消某章与要素的关联（含要点级）；不删除要素节点。空 element_ids 的目录 PUT 不再当取消关联。"""
     from report_writing.chat.writing import _apply_dissociate_chapter_element
     from report_writing.services.store import TaskStore
 
     task = load_task(task_id)
-    label = _apply_dissociate_chapter_element(task, chapter_key, element_id)
+    try:
+        label = _apply_dissociate_chapter_element(task, chapter_key, element_id)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     TaskStore(task_dir(task_id)).save(task)
     return {"ok": True, "chapter_label": label, "chapter_key": chapter_key, "element_id": element_id}
 

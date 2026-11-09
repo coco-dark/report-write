@@ -75,12 +75,13 @@ def _chapter_elements(task: Any, chapter_key: str, *, limit: int = 6) -> list[tu
             break
     if node is None:
         return []
-    ids = [str(i).strip() for i in list(getattr(node, "element_ids", None) or []) if str(i).strip()]
-    by_id = {
-        str(getattr(el, "id", "") or "").strip(): el
-        for el in list(getattr(task, "element_nodes", None) or [])
-        if str(getattr(el, "id", "") or "").strip()
-    }
+    from report_writing.domain.point_items_sync import (
+        element_ids_for_chapter_node,
+        elements_by_id_from_task,
+    )
+
+    by_id = elements_by_id_from_task(task)
+    ids = element_ids_for_chapter_node(node, elements_by_id=by_id)
     file_first: list[tuple[str, str]] = []
     other: list[tuple[str, str]] = []
     for eid in ids:

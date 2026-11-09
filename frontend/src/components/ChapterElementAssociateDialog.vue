@@ -22,17 +22,26 @@
       class="intro-alert"
       show-icon
       :message="
-        seedCreateDraft
-          ? '已根据待补项预填要素信息，请核对后保存并关联到本条要点；也可切到「选择关联」勾选已有要素。'
-          : associateScope === 'point'
-            ? '所选要素只关联到当前写作要点，不会自动挂到整章或其它要点。'
-            : '所选要素关联到整章（章级），不会自动挂到各条写作要点；要点内请单独点「关联要素」。'
+        associateScope === 'point'
+          ? '可先勾选已有要素；需要新建时再点「根据要点信息生成要素」或手动配置。'
+          : '所选要素关联到整章（章级），不会自动挂到各条写作要点；要点内请单独点「关联要素」。'
       "
     />
 
     <div class="nav-actions" role="group" aria-label="快捷查看">
       <a-button size="small" @click="goViewElements" shape="round">查看要素</a-button>
       <a-button size="small" @click="goViewMaterials" shape="round">查看资料库</a-button>
+      <a-button
+        v-if="associateScope === 'point' && pointSeed"
+        size="small"
+        type="primary"
+        ghost
+        :loading="generatingFromPoint"
+        shape="round"
+        @click="generateFromPoint"
+      >
+        根据要点信息生成要素
+      </a-button>
     </div>
 
     <section class="linked-strip">
@@ -122,8 +131,23 @@
 
       <a-tab-pane v-if="allowCreate" tab="新建并关联" key="create">
         <p v-if="configureHint" class="tab-hint">{{ configureHint }}</p>
-        <p class="tab-hint">与要素库相同配置表单；保存后才会写入任务并自动勾到本章。</p>
-        <a-button type="primary" @click="openCreateElementDialog">+ 配置新要素</a-button>
+        <p class="tab-hint">
+          {{
+            associateScope === "point"
+              ? "可手动配置，或点上方「根据要点信息生成要素」预填后再保存关联。"
+              : "与要素库相同配置表单；保存后才会写入任务并自动勾到本章。"
+          }}
+        </p>
+        <div class="create-actions">
+          <a-button type="primary" @click="openCreateElementDialog">+ 配置新要素</a-button>
+          <a-button
+            v-if="associateScope === 'point' && pointSeed"
+            :loading="generatingFromPoint"
+            @click="generateFromPoint"
+          >
+            根据要点信息生成要素
+          </a-button>
+        </div>
         <ul v-if="stagedConfigured.length" class="staged-list">
           <li v-for="el in stagedConfigured" :key="el.id">
             <a-tag size="small">{{ elementKindLabel(el.kind) }}</a-tag>
@@ -164,13 +188,15 @@
     </a-form>
     <template #footer>
       <a-button @click="createDialogVisible = false">取消</a-button>
-      <a-button type="primary" @click="saveCreateElement">保存并关联本章</a-button>
+      <a-button type="primary" @click="saveCreateElement">
+        {{ associateScope === "point" ? "保存并关联本要点" : "保存并关联本章" }}
+      </a-button>
     </template>
   </a-modal>
 </template>
 
 <script setup>
-import { computed, inject, nextTick, ref, watch } from "vue";
+import { computed, inject, ref } from "vue";
 import { ElMessage } from "../ui.js";
 import { request } from "../api";
 import ElementConfigFields from "./ElementConfigFields.vue";
@@ -196,8 +222,8 @@ const props = defineProps({
   robotId: { type: String, default: "" },
   /** 写作任务 id：图片要素上传/文生图 API 需要 */
   taskId: { type: String, default: "" },
-  /** 从要点待补项生成的要素草稿（打开时直接进入配置确认） */
-  seedCreateDraft: { type: Object, default: null },
+  /** 要点作用域：供「根据要点信息生成要素」按钮调用；打开面板时不自动生成 */
+  pointSeed: { type: Object, default: null },
   /** chapter=章级关联；point=仅挂到指定写作要点 */
   associateScope: { type: String, default: "chapter" },
 });
@@ -226,6 +252,7 @@ const libraryTags = ref([]);
 const libraryCategories = ref([]);
 const createDialogVisible = ref(false);
 const createDraft = ref(null);
+const generatingFromPoint = ref(false);
 
 const refTargetOptions = computed(() =>
   [...(props.allElements || []), ...stagedElements.value, ...stagedConfigured.value].map((el) => ({
@@ -287,8 +314,45 @@ async function loadLibrary() {
   }
 }
 
-function applySeedCreateDraft() {
-  const seed = props.seedCreateDraft;
+function localDraftFromPointSeed(seed) {
+  const slot = String(seed?.slot || "").trim();
+  const pointText = String(seed?.pointText || "").trim();
+  const title = String(seed?.title || "").trim();
+  const sequence = String(seed?.sequence || "").trim();
+  const name = (slot || pointText || "写作要素").slice(0, 24);
+  const label = `${sequence} ${title}`.trim() || "本章";
+  const purpose = `用于「${label}」中「${name}」要点的资料要素`;
+  const blob = `${slot} ${pointText}`;
+  const looksFile = /责任书|报告|方案|合同|协议|批复|文件|资料|证书|清单|表格|证明|纪要|通知|制度|标准/.test(
+    blob
+  );
+  if (looksFile) {
+    return {
+      kind: "file",
+      name,
+      category: name,
+      purpose,
+      tags: [name],
+      query: String(slot || pointText || name).trim().slice(0, 48),
+      value: "",
+      prompt: "",
+      kv_pairs: [{ key: "", value: "" }],
+    };
+  }
+  return {
+    kind: "kv",
+    name,
+    category: name,
+    purpose,
+    tags: [name],
+    query: "",
+    value: "",
+    prompt: "",
+    kv_pairs: [{ key: slot || name, value: "" }],
+  };
+}
+
+function openCreateDraftFromSeed(seed) {
   if (!seed || typeof seed !== "object") return;
   const kind = String(seed.kind || "kv").trim() || "kv";
   const base = blankElementDraft(kind, { library: true });
@@ -303,6 +367,46 @@ function applySeedCreateDraft() {
   createDialogVisible.value = true;
 }
 
+/** 仅要点作用域：用户点击后才根据要点生成要素草稿 */
+async function generateFromPoint() {
+  if (props.associateScope !== "point" || !props.pointSeed || generatingFromPoint.value) return;
+  const seed = props.pointSeed;
+  const tid = String(props.taskId || "").trim();
+  generatingFromPoint.value = true;
+  let draft = localDraftFromPointSeed(seed);
+  try {
+    if (tid) {
+      const data = await request(
+        `/api/writing/tasks/${encodeURIComponent(tid)}/elements/draft-from-point`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chapter_key: String(seed.chapterKey || "").trim(),
+            title: String(seed.title || "").trim(),
+            sequence: String(seed.sequence || "").trim(),
+            describes: String(seed.describes || "").trim(),
+            point_text: String(seed.pointText || "").trim(),
+            slot: String(seed.slot || "").trim(),
+            point_id: String(seed.pointId || "").trim(),
+          }),
+        }
+      );
+      if (data?.draft && typeof data.draft === "object") {
+        draft = { ...draft, ...data.draft };
+      }
+      ElMessage.success(data?.from_llm ? "已根据要点生成要素草稿，请确认" : "已预填要素草稿，请确认");
+    } else {
+      ElMessage.success("已预填要素草稿，请确认");
+    }
+  } catch (error) {
+    ElMessage.warning(error?.message || "已用要点预填要素草稿，请核对");
+  } finally {
+    generatingFromPoint.value = false;
+  }
+  openCreateDraftFromSeed(draft);
+}
+
 function onOpen() {
   activeTab.value = "pick";
   localLinkedIds.value = [...(props.linkedIds || [])];
@@ -314,19 +418,9 @@ function onOpen() {
   libraryPickChecked.value = [];
   createDialogVisible.value = false;
   createDraft.value = null;
+  generatingFromPoint.value = false;
   loadLibrary();
-  if (props.seedCreateDraft) {
-    applySeedCreateDraft();
-  }
 }
-
-watch(
-  () => [props.modelValue, props.seedCreateDraft],
-  ([open, seed]) => {
-    if (!open || !seed) return;
-    nextTick(() => applySeedCreateDraft());
-  }
-);
 
 function unlinkOne(id) {
   localLinkedIds.value = localLinkedIds.value.filter((x) => x !== id);
@@ -430,7 +524,12 @@ function confirm() {
   emit("confirm", { linkedIds: ids, newElements: allNew });
   emit("update:modelValue", false);
   if (stagedConfigured.value.length) {
-    ElMessage.success(`已新建 ${stagedConfigured.value.length} 个要素并关联到本章`);
+    const toPoint = String(props.associateScope || "").trim() === "point";
+    ElMessage.success(
+      toPoint
+        ? `已新建 ${stagedConfigured.value.length} 个要素并关联到要点`
+        : `已新建 ${stagedConfigured.value.length} 个要素并关联到本章`
+    );
   }
 }
 </script>
@@ -521,6 +620,12 @@ function confirm() {
   font-size: 12px;
   color: var(--ay-muted);
   line-height: 1.45;
+}
+.create-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
 }
 .block {
   margin-top: 12px;

@@ -301,24 +301,32 @@ def soft_prompt_materials_pack_if_needed(
 
 
 def _chapter_element_ids(task: WritingTask, key: str) -> list[str]:
+    """本章检索用要素 id：brief∪大纲章级∪要点关联（与写作 resolve 一致）。"""
     kid = (key or "").strip()
     if not kid:
         return []
+    from report_writing.domain.point_items_sync import (
+        element_ids_for_chapter_node,
+        elements_by_id_from_task,
+    )
+
+    by_id = elements_by_id_from_task(task)
+    outline = getattr(task, "outline", None)
+    node = None
+    if outline is not None:
+        by_key = {str(item.key): item for item in (outline.chapters or [])}
+        node = by_key.get(kid)
+    if node is not None:
+        return element_ids_for_chapter_node(node, elements_by_id=by_id)
     brief = getattr(task, "brief", None)
     if brief is not None:
         try:
             req = brief.chapter(kid)
-            ids = [str(x).strip() for x in (getattr(req, "element_ids", None) or []) if str(x).strip()]
-            if ids:
-                return ids
         except KeyError:
-            pass
-    outline = getattr(task, "outline", None)
-    if outline is not None:
-        by_key = {str(item.key): item for item in (outline.chapters or [])}
-        node = by_key.get(kid)
-        if node is not None:
-            return [str(x).strip() for x in (getattr(node, "element_ids", None) or []) if str(x).strip()]
+            req = None
+        if req is not None:
+            # brief 无完整 point_items 时仍可能已带并集；再并一次要点行以防陈旧
+            return element_ids_for_chapter_node(req, elements_by_id=by_id)
     return []
 
 

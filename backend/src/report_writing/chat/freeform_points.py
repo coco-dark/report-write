@@ -280,6 +280,7 @@ def llm_draft_chapter_points(
             data["points"] = []
             data["point_items"] = []
             data["keywords"] = []
+            data["element_ids"] = []
             data["describes"] = (
                 str(draft.get("describes") or "").strip()
                 or f"目录节点「{data.get('title') or key}」，正文由子节展开。"
@@ -299,12 +300,13 @@ def llm_draft_chapter_points(
                 )
             from report_writing.domain.point_items_sync import merge_generated_point_items
 
-            prev_items = list(getattr(node, "point_items", None) or [])
+            # 重新生成要点：不继承旧行要素关联，并清空章级 element_ids
             pts, items = merge_generated_point_items(
-                pts[:12], raw_items if isinstance(raw_items, list) else None, prev_items=prev_items
+                pts[:12], raw_items if isinstance(raw_items, list) else None, prev_items=[]
             )
             data["points"] = pts
             data["point_items"] = items
+            data["element_ids"] = []
             describes = str(draft.get("describes") or "").strip()
             if not describes:
                 describes = _fallback_describes(
@@ -397,6 +399,7 @@ def apply_generated_points(
                     "keywords": kws,
                     "describes": describes,
                     "structure_only": False,
+                    "clear_element_bindings": True,
                     "study_analyzed": analyzed,
                     "study_unanalyzed": unanalyzed,
                     "freeform_points": True,

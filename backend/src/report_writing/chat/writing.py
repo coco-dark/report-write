@@ -543,23 +543,12 @@ def _apply_chapter_config(task: WritingTask, chapter_key: str, payload: ChatPayl
         if node.point_items:
             node.points = points_from_point_items(node.point_items)
     elif "points" in payload or "points_text" in payload:
-        from report_writing.domain.point_items_sync import (
-            link_point_items_to_element_ids,
-            sync_point_items_from_points,
-        )
+        from report_writing.domain.point_items_sync import sync_point_items_from_points
 
+        # 仅按正文同步 point_items，保留同行已有 element_id；
+        # 禁止用章级 element_ids 按 slot 名自动串挂到要点（章/要点分存）。
         prev_items = list(getattr(node, "point_items", None) or [])
         node.point_items = sync_point_items_from_points(list(node.points or []), prev_items)
-        by_id = {
-            str(getattr(el, "id", "") or "").strip(): el
-            for el in list(getattr(task, "element_nodes", None) or [])
-            if str(getattr(el, "id", "") or "").strip()
-        }
-        node.point_items = link_point_items_to_element_ids(
-            node.point_items,
-            list(node.element_ids or []),
-            by_id,
-        )
     if "keywords" in payload or "keywords_text" in payload:
         raw_keywords = payload.get("keywords", payload.get("keywords_text"))
         node.keywords = _split_lines(raw_keywords)
@@ -850,19 +839,21 @@ def _apply_add_chapter_element(task: WritingTask, chapter_key: str, payload: Cha
     merged: dict[str, ElementNode] = {item.id: item for item in (task.element_nodes or []) if item.id}
     merged[element.id] = element
     save_elements(task, list(merged.values()))
-    ids = list(node.element_ids or [])
-    if element.id not in ids:
-        ids.append(element.id)
-    node.element_ids = ids
-    sync_brief_from_outline(task)
-    if task.brief is not None:
-        try:
-            req = task.brief.chapter(chapter_key)
-        except KeyError:
-            req = None
-        if req is not None:
-            req.element_ids = list(node.element_ids or [])
+    # 要点作用域：只挂 point_items，禁止写入章级 element_ids
+    pi_raw = payload.get("point_index")
+    try:
+        point_index = int(pi_raw) if pi_raw is not None else -1
+    except (TypeError, ValueError):
+        point_index = -1
+    scope = str(payload.get("associate_scope") or payload.get("associateScope") or "").strip().lower()
+    point_scoped = point_index >= 0 or scope == "point"
+    if not point_scoped:
+        ids = list(node.element_ids or [])
+        if element.id not in ids:
+            ids.append(element.id)
+        node.element_ids = ids
     _link_new_element_to_chapter_points(task, node, element, payload)
+    sync_brief_from_outline(task)
     return element
 
 
@@ -872,7 +863,7 @@ def _link_new_element_to_chapter_points(
     element: Any,
     payload: ChatPayload,
 ) -> None:
-    """新增要素后：写入章 element_ids 并回写 point_items 行关联。"""
+    """新增要素后：按作用域回写 point_items；章级关联仅在未挂要点时写入 element_ids。"""
     from report_writing.domain.models import ChatActionPayload
 
     payload = ChatActionPayload.parse(payload)
@@ -893,6 +884,8 @@ def _link_new_element_to_chapter_points(
         point_index = int(pi_raw) if pi_raw is not None else -1
     except (TypeError, ValueError):
         point_index = -1
+    scope = str(payload.get("associate_scope") or payload.get("associateScope") or "").strip().lower()
+    point_scoped = point_index >= 0 or scope == "point"
     slot_hint = human_label(
         payload.get("slot"),
         payload.get("slot_label"),
@@ -911,22 +904,36 @@ def _link_new_element_to_chapter_points(
             row["slot"] = slot_hint
         row["needs_supplement"] = False
         prev_items[point_index] = row
-    elif slot_hint and prev_items:
-        for i, row in enumerate(prev_items):
-            if str(row.get("element_id") or "").strip():
-                continue
-            slot = human_label(row.get("slot"), row.get("element_name")) or str(row.get("text") or "")
-            if is_element_id_token(slot):
-                slot = ""
-            if slot == slot_hint or slot_hint in slot or slot in slot_hint:
-                patched = dict(row)
-                patched["element_id"] = element.id
-                patched["element_name"] = human_label(
-                    getattr(element, "name", ""), slot_hint, patched.get("slot")
-                ) or slot_hint
-                patched["needs_supplement"] = False
-                prev_items[i] = patched
-                break
+    elif prev_items and point_scoped:
+        # 先按 slot/名称对上；对不上也落到首条未关联要点，避免「建了要素却没挂上、写作检索为空」
+        target_idx = -1
+        if slot_hint:
+            for i, row in enumerate(prev_items):
+                if str(row.get("element_id") or "").strip():
+                    continue
+                slot = human_label(row.get("slot"), row.get("element_name")) or str(row.get("text") or "")
+                if is_element_id_token(slot):
+                    slot = ""
+                if slot == slot_hint or slot_hint in slot or slot in slot_hint:
+                    target_idx = i
+                    break
+        if target_idx < 0:
+            target_idx = next(
+                (
+                    i
+                    for i, row in enumerate(prev_items)
+                    if not str(row.get("element_id") or "").strip()
+                ),
+                -1,
+            )
+        if target_idx >= 0:
+            patched = dict(prev_items[target_idx])
+            patched["element_id"] = element.id
+            patched["element_name"] = human_label(
+                getattr(element, "name", ""), slot_hint, patched.get("slot")
+            ) or slot_hint or human_label(getattr(element, "name", ""))
+            patched["needs_supplement"] = False
+            prev_items[target_idx] = patched
     by_id = {item.id: item for item in (task.element_nodes or []) if getattr(item, "id", None)}
     eid = str(getattr(element, "id", "") or "").strip()
     point_linked = point_index >= 0 or any(
@@ -935,7 +942,8 @@ def _link_new_element_to_chapter_points(
     if point_linked:
         node.point_items = prev_items
         node.points = points_from_point_items(prev_items)
-    elif eid:
+    elif eid and not point_scoped:
+        # 仅章级关联才写入 element_ids；要点作用域绝不能落到章上
         ids = [str(x).strip() for x in (node.element_ids or []) if str(x).strip()]
         if eid not in ids:
             node.element_ids = [*ids, eid]
@@ -951,13 +959,20 @@ def _link_new_element_to_chapter_points(
             from report_writing.domain.point_items_sync import element_ids_for_chapter_node
 
             req.points = list(node.points or [])
+            # brief 用写作并集；outline.node.element_ids 仍只保留章级
             req.element_ids = element_ids_for_chapter_node(node, elements_by_id=by_id)
 
 
 def _apply_dissociate_chapter_element(
     task: WritingTask, chapter_key: str, element_id: str
 ) -> str:
-    """取消单章与要素的关联；保留 element_nodes 条目。"""
+    """取消单章与要素的关联（章级 element_ids 或要点 point_items.element_id）；保留要素节点。"""
+    from report_writing.domain.point_items_sync import (
+        parse_slot_from_text,
+        points_from_point_items,
+        text_needs_supplement,
+    )
+
     ck = (chapter_key or "").strip()
     eid = (element_id or "").strip()
     if task.outline is None:
@@ -966,19 +981,54 @@ def _apply_dissociate_chapter_element(
     if node is None:
         raise ValueError(f"章节不存在：{ck}")
     ids = [str(x).strip() for x in (node.element_ids or []) if str(x).strip()]
-    if eid not in ids:
-        raise ValueError("该章未关联此要素")
-    node.element_ids = [x for x in ids if x != eid]
+    cleared_chapter = eid in ids
+    if cleared_chapter:
+        node.element_ids = [x for x in ids if x != eid]
+
+    cleared_points = False
+    items = [dict(row) for row in list(getattr(node, "point_items", None) or []) if isinstance(row, dict)]
+    if items:
+        next_items: list[dict] = []
+        for row in items:
+            if str(row.get("element_id") or "").strip() != eid:
+                next_items.append(row)
+                continue
+            patched = dict(row)
+            patched.pop("element_id", None)
+            patched.pop("element_name", None)
+            text = str(patched.get("text") or "")
+            slot = str(patched.get("slot") or "").strip() or parse_slot_from_text(text)
+            if slot:
+                patched["slot"] = slot
+            if slot or text_needs_supplement(text):
+                patched["needs_supplement"] = True
+            next_items.append(patched)
+            cleared_points = True
+        if cleared_points:
+            node.point_items = next_items
+            node.points = points_from_point_items(next_items)
+
+    label = f"{node.sequence or ''} {node.title or ''}".strip() or ck
+    # 幂等：章级/要点都未挂时也视为已取消（前端乐观关联未落盘、或重复点取消）
+    if not cleared_chapter and not cleared_points:
+        return label
+
     from report_writing.domain.elements import sync_brief_from_outline
+    from report_writing.domain.point_items_sync import element_ids_for_chapter_node
 
     sync_brief_from_outline(task)
     if task.brief is not None:
         try:
             req = task.brief.chapter(ck)
-            req.element_ids = list(node.element_ids or [])
+            by_id = {
+                str(getattr(el, "id", "") or "").strip(): el
+                for el in list(getattr(task, "element_nodes", None) or [])
+                if str(getattr(el, "id", "") or "").strip()
+            }
+            req.element_ids = element_ids_for_chapter_node(node, elements_by_id=by_id)
+            req.points = list(getattr(node, "points", None) or [])
         except KeyError:
             pass
-    label = f"{node.sequence or ''} {node.title or ''}".strip() or ck
     return label
 
 
