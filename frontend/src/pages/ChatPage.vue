@@ -3806,6 +3806,7 @@ function onDocWindowElementsSaved(payload) {
       tags: [...(item.tags || [])],
     })),
   };
+  bumpDocOutlineReload({ force: true });
 }
 
 /** 文档窗保存的项目资料根：开写时一并带入（会话侧由后端写入 freeform） */
@@ -3830,6 +3831,7 @@ function onDocWindowConfigSaved(payload) {
 
   // 文档窗配置一律静默：已 PUT 到副本，勿再 configure_chapter 刷对话
   if (!payload?.quiet) ElMessage.success("章节配置已保存");
+  if (payload?.alreadyPersisted) bumpDocOutlineReload({ force: true });
   schedulePersistUiState(true);
 }
 
@@ -6915,8 +6917,7 @@ async function onChapterElementAssociateConfirm({ linkedIds, newElements }) {
       openDialog: false,
     });
   }
-  // 本地已是真值；软刷新即可，force 重拉易与进度卡旧 point_items 竞态冲掉关联
-  bumpDocOutlineReload({ force: false });
+  bumpDocOutlineReload({ force: true });
 }
 const renderTemplates = ref([]);
 const wordStyles = ref([]);

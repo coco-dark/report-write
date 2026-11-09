@@ -4867,13 +4867,24 @@ async function saveElementNodes(elements) {
   try {
     let latest = elements || [];
     for (const tid of targets) {
+      let toWrite = elements || [];
+      try {
+        const slim = await request(
+          `/api/writing/tasks/${encodeURIComponent(tid)}/doc-outline?fresh=1`
+        );
+        const server = Array.isArray(slim?.element_nodes) ? slim.element_nodes : [];
+        toWrite = mergeElementNodesLocal(server, toWrite);
+      } catch {
+        toWrite = mergeElementNodesLocal(elementNodes.value, toWrite);
+      }
       const updated = await request(`/api/writing/tasks/${encodeURIComponent(tid)}/elements`, {
         method: "PUT",
         headers: authHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ elements }),
+        body: JSON.stringify({ elements: toWrite }),
       });
+      latest = updated?.element_nodes || toWrite || [];
       if (tid === targets[0]) {
-        latest = updated?.element_nodes || elements || [];
+        latest = [...latest];
       }
     }
     elementNodes.value = latest;
@@ -4882,6 +4893,7 @@ async function saveElementNodes(elements) {
     for (const tid of targets) {
       emit("elements-saved", { taskId: tid, elementNodes: elementNodes.value });
     }
+    await loadFullOutline({ force: true });
   } catch (error) {
     saveHint.value = error?.message || "保存要素失败";
     throw error;

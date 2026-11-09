@@ -1050,6 +1050,12 @@ def _action_start_writing(
     fresh = _load_task(home, writing.id)
     if fresh is not None:
         writing = fresh
+    if getattr(writing, "brief", None) is not None and bool(getattr(writing, "outline_confirmed", False)):
+        from report_writing.domain.elements import sync_brief_from_outline
+        from report_writing.services.store import TaskStore as _TaskStoreBrief
+
+        sync_brief_from_outline(writing)
+        _TaskStoreBrief(home / "tasks" / writing.id).save(writing)
     cfg_key = str(body.get("chapter_key") or "").strip()
     already_persisted = bool(body.get("already_persisted") or body.get("from_doc_window"))
     configure_fields = (

@@ -91,17 +91,12 @@ def save_elements(task: WritingTask, elements: list[ElementNode]) -> WritingTask
     merged: dict[str, ElementNode] = {
         str(item.id).strip(): item for item in existing if str(item.id or "").strip()
     }
-    incoming_ids = set()
     for item in incoming:
         eid = str(getattr(item, "id", "") or "").strip()
         if not eid:
             continue
-        incoming_ids.add(eid)
         merged[eid] = item
-    referenced = referenced_element_ids(task)
-    for eid in list(merged.keys()):
-        if eid not in incoming_ids and eid not in referenced:
-            merged.pop(eid, None)
+    # 勿按「未引用」删掉库中已有要素：文档窗常逐条保存，刚配好尚未挂章的草稿也会被误删。
     # 保序：已有 → 新来
     ordered: list[ElementNode] = []
     seen: set[str] = set()

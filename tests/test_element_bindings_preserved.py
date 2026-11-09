@@ -158,7 +158,7 @@ def test_save_elements_keeps_referenced_when_payload_incomplete():
     ids = {e.id for e in task.element_nodes}
     assert "el-a" in ids
     assert "el-new" in ids
-    assert "el-orphan" not in ids
+    assert "el-orphan" in ids
 
 
 def test_save_element_nodes_empty_keeps_disk(tmp_path: Path):

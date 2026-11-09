@@ -455,6 +455,10 @@ def save_outline(
         normalize_chapter_point_items_on_node(task, node)
     if task.outline_confirmed:
         _ensure_brief_ready(task)
+        if task.brief is not None:
+            from report_writing.domain.elements import sync_brief_from_outline
+
+            sync_brief_from_outline(task)
     else:
         task.brief = None
         task.brief_confirmed = False
@@ -483,6 +487,10 @@ def save_element_nodes(task_dir: Path, elements: list) -> WritingTask:
     save_elements(task, nodes)
     if task.brief is not None and task.outline is not None:
         _lock_brief_to_outline(task.brief, task.outline)
+        if bool(getattr(task, "outline_confirmed", False)):
+            from report_writing.domain.elements import sync_brief_from_outline
+
+            sync_brief_from_outline(task)
     store.save(task)
     # task_dir = <task_root>/tasks/<id>；要素库 API 以 task_root 为 home
     home = task_dir.parent.parent
