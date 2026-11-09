@@ -1129,6 +1129,7 @@ import { ElMessage, ElMessageBox } from "../ui.js";
 
 import {
   authHeaders,
+  docOutlineUrl,
   getUserId,
   isAbortError,
   isTransientNetworkError,
@@ -1295,10 +1296,27 @@ const docOutlineReloadToken = ref(0);
 const docOutlineForceReloadToken = ref(0);
 /** 写完一章后强制重拉全文预览，避免仍显示上一稿 */
 const docPreviewReloadToken = ref(0);
+/** 文档窗 PUT 落盘后递增，经 ui-state 同步以失效服务端 turn_context */
+const clientConfigRevision = ref(0);
+
+function bumpClientConfigRevision() {
+  clientConfigRevision.value += 1;
+  schedulePersistUiState(true);
+}
 
 function bumpDocOutlineReload({ force = false } = {}) {
   if (force) docOutlineForceReloadToken.value += 1;
   else docOutlineReloadToken.value += 1;
+}
+
+function writingTaskIdForTask(taskId) {
+  const tid = String(taskId || "").trim();
+  if (!tid) return "";
+  const docs = conversationDocuments.value || [];
+  const hit =
+    docs.find((d) => String(d.writingTaskId || "") === tid) ||
+    docs.find((d) => String(d.taskId || "") === tid);
+  return String(hit?.writingTaskId || "").trim();
 }
 
 function bumpDraftPreviewReload() {
@@ -3812,6 +3830,7 @@ function onDocWindowElementsSaved(payload) {
     })),
   };
   bumpDocOutlineReload({ force: true });
+  bumpClientConfigRevision();
 }
 
 /** 文档窗保存的项目资料根：开写时一并带入（会话侧由后端写入 freeform） */
@@ -3836,7 +3855,10 @@ function onDocWindowConfigSaved(payload) {
 
   // 文档窗配置一律静默：已 PUT 到副本，勿再 configure_chapter 刷对话
   if (!payload?.quiet) ElMessage.success("章节配置已保存");
-  if (payload?.alreadyPersisted) bumpDocOutlineReload({ force: true });
+  if (payload?.alreadyPersisted) {
+    bumpDocOutlineReload({ force: true });
+    bumpClientConfigRevision();
+  }
   schedulePersistUiState(true);
 }
 
@@ -5083,7 +5105,7 @@ async function saveChapterConfig(taskId, ch) {
   try {
     const body = configPayload(tid, ch);
     const slim = await request(
-      `/api/writing/tasks/${encodeURIComponent(tid)}/doc-outline?fresh=1`
+      docOutlineUrl(tid, { fresh: true, writingTaskId: writingTaskIdForTask(tid) })
     );
     const chapters = (slim?.chapters || []).map((item) => ({ ...item }));
     const idx = chapters.findIndex((item) => String(item.key || "") === key);
@@ -5186,7 +5208,11 @@ async function retryChapter(taskId, ch, { writeMode = "start", alreadyPersisted 
     _write_mode: writeMode === "rewrite" ? "rewrite" : "start",
     ...(packId ? { materials_pack_id: packId, pack_id: packId } : {}),
   };
-  const body = alreadyPersisted
+  const preferDisk =
+    alreadyPersisted ||
+    /^w/i.test(String(taskId || "").trim()) ||
+    Boolean(chapterConfig && typeof chapterConfig === "object");
+  const body = preferDisk
     ? { ...overlay, ...base, already_persisted: true, from_doc_window: true }
     : { ...configPayload(taskId, ch), ...overlay, ...base };
   await sendAction("retry_chapter", body, { force: true });
@@ -6619,7 +6645,7 @@ async function collectChapterLinkedIds(taskId, ch, edit) {
   if (ids.length || !tid || !ck) return ids;
   try {
     const slim = await request(
-      `/api/writing/tasks/${encodeURIComponent(tid)}/doc-outline`
+      docOutlineUrl(tid, { writingTaskId: writingTaskIdForTask(tid) })
     );
     const node = (slim?.chapters || []).find((item) => String(item?.key || "") === ck);
     ids = unionElementIds(ids, node?.element_ids, node?.config?.element_ids);
@@ -6874,7 +6900,7 @@ async function onChapterElementAssociateConfirm({ linkedIds, newElements }) {
       });
     }
     const slim = await request(
-      `/api/writing/tasks/${encodeURIComponent(tid)}/doc-outline?fresh=1`
+      docOutlineUrl(tid, { fresh: true, writingTaskId: writingTaskIdForTask(tid) })
     );
     const chapters = (slim?.chapters || []).map((item) => ({ ...item }));
     const idx = chapters.findIndex((item) => String(item.key || "") === chapterKey);
@@ -8130,6 +8156,7 @@ function buildUiStatePayload() {
     template_wizard: tplPatch,
     export_prefs: exportPatch,
     chapter_edits,
+    config_revision: clientConfigRevision.value,
   };
   if (focusKey) {
     freeform_patch.focus_document_key = focusKey;
@@ -9383,7 +9410,7 @@ async function streamChat({ message = "", action = "", action_payload = {}, clie
         });
       }
       // 软刷目录：把已写章节 status/has_draft 合回蓝本树；刷完后钉回写作进度（获取到的要素）
-      bumpDocOutlineReload({ force: false });
+      bumpDocOutlineReload({ force: docWindowOpen.value });
       if (doneTid && doneKey) {
         nextTick(() => {
           bumpDraftPreviewReload();
@@ -11609,7 +11636,12 @@ async function runPageLevelStudy(studyTaskId, chapterKeys, { beginAll = false } 
     let keys = [...resolvedStudyKeys];
     if (beginAll || !keys.length) {
       try {
-        const slim = await request(`/api/writing/tasks/${encodeURIComponent(ownerStudyTid)}/doc-outline?fresh=1`);
+        const slim = await request(
+          docOutlineUrl(ownerStudyTid, {
+            fresh: true,
+            writingTaskId: writingTaskIdForTask(ownerStudyTid),
+          })
+        );
         if (!stillHere()) return;
         keys = (slim?.chapters || [])
           .filter((ch) => !ch.structure_only && !(Array.isArray(ch.points) && ch.points.length))
@@ -11856,7 +11888,10 @@ async function runPageLevelStudy(studyTaskId, chapterKeys, { beginAll = false } 
         try {
           bumpDocOutlineReload({ force: true });
           const slim = await request(
-            `/api/writing/tasks/${encodeURIComponent(ownerStudyTid)}/doc-outline?fresh=1`
+            docOutlineUrl(ownerStudyTid, {
+              fresh: true,
+              writingTaskId: writingTaskIdForTask(ownerStudyTid),
+            })
           );
           if (!stillHere()) return;
           const chapters = Array.isArray(slim?.chapters) ? slim.chapters : [];

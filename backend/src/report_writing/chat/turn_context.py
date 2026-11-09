@@ -9,6 +9,28 @@ from typing import Any
 from report_writing.domain.models import ChatSession, SessionGoal
 
 
+def _turn_context_revision(session: ChatSession, home: Path | None = None) -> str:
+    from report_writing.chat.session_config_revision import session_config_revision
+    from report_writing.chat.session_documents import focus_document_meta
+
+    focus = focus_document_meta(session)
+    fwid = str(
+        focus.get("writing_task_id") or focus.get("task_id") or session.task_id or ""
+    ).strip()
+    saved = ""
+    if home is not None and fwid:
+        from report_writing.chat.helpers import _load_task
+
+        task = _load_task(home, fwid)
+        if task is not None:
+            try:
+                saved = str((task.to_dict() or {}).get("_saved_at") or "").strip()
+            except Exception:
+                saved = ""
+    cfg = session_config_revision(session)
+    return f"{session.phase}:{fwid}:{cfg}:{saved}"
+
+
 @dataclass
 class WritingTurnContext:
     """一次用户输入对应的可序列化会话视图。"""
@@ -53,7 +75,7 @@ def build_writing_turn_context(
     if sid and raw:
         from report_writing.infra.redis_cache import cache_get_json, turn_context_cache_key
 
-        rev = f"{session.phase}:{session.task_id}"
+        rev = _turn_context_revision(session, home)
         hit = cache_get_json(turn_context_cache_key(sid, raw, revision=rev))
         if isinstance(hit, dict) and hit.get("user_message") == raw:
             return WritingTurnContext(
@@ -86,7 +108,7 @@ def build_writing_turn_context(
 
     tid = (session.task_id or "").strip() or str(focus_doc.get("writing_task_id") or focus_doc.get("task_id") or "").strip()
     if not tid or home is None:
-        _cache_turn_context(session, ctx, raw)
+        _cache_turn_context(session, ctx, raw, home=home)
         return ctx
 
     from report_writing.chat.helpers import _load_task
@@ -94,7 +116,7 @@ def build_writing_turn_context(
 
     task = _load_task(home, tid)
     if task is None:
-        _cache_turn_context(session, ctx, raw)
+        _cache_turn_context(session, ctx, raw, home=home)
         return ctx
 
     focus_key = pick_focus_chapter_key_extended(session, task, expanded)
@@ -111,17 +133,19 @@ def build_writing_turn_context(
         ),
         "document_key": str(focus_doc.get("registry_key") or ""),
     }
-    _cache_turn_context(session, ctx, raw)
+    _cache_turn_context(session, ctx, raw, home=home)
     return ctx
 
 
-def _cache_turn_context(session: ChatSession, ctx: WritingTurnContext, raw: str) -> None:
+def _cache_turn_context(
+    session: ChatSession, ctx: WritingTurnContext, raw: str, *, home: Path | None = None
+) -> None:
     sid = (session.id or "").strip()
     if not sid or not raw:
         return
     from report_writing.infra.redis_cache import cache_set_json, turn_context_cache_key
 
-    rev = f"{session.phase}:{session.task_id}"
+    rev = _turn_context_revision(session, home)
     cache_set_json(turn_context_cache_key(sid, raw, revision=rev), ctx.to_dict(), ttl_seconds=600)
 
 

@@ -35,3 +35,12 @@ def test_turn_context_includes_dialogue_and_goal():
     snap = (session.freeform or {}).get("last_turn_snapshot") or {}
     assert snap.get("user_message") == "请重写本章，部门研发"
     assert "李志" in str(snap.get("session_goal_brief") or "")
+
+
+def test_turn_context_revision_includes_config_revision():
+    from report_writing.chat.turn_context import _turn_context_revision
+
+    session = ChatSession(id="s1", phase=ChatPhase.WRITING.value, task_id="w1")
+    session.freeform = {"config_revision": 3}
+    rev = _turn_context_revision(session, home=None)
+    assert rev.split(":")[2] == "3"

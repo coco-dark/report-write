@@ -1081,6 +1081,9 @@ def _action_start_writing(
 
         _TaskStoreCfg(home / "tasks" / writing.id).save(writing)
         writing = _load_task(home, writing.id) or writing
+        from report_writing.chat.session_config_revision import touch_session_config_revision
+
+        touch_session_config_revision(session)
     force_skip_sup = bool(
         body.get("skip_supplement_check") or body.get("_skip_supplement_check")
     )
@@ -1515,19 +1518,49 @@ def _action_configure_chapter(
     path = home / "tasks" / task_id
     store = TaskStore(path)
     task = store.load()
+    body = payload.as_dict()
+    already_persisted = bool(body.get("already_persisted") or body.get("from_doc_window"))
+    configure_fields = (
+        "points",
+        "points_text",
+        "point_items",
+        "keywords",
+        "keywords_text",
+        "describes",
+        "aux_prompt",
+        "reference_text",
+        "fixed_output",
+        "presence",
+        "compose",
+        "structure_only",
+        "search_terms_separate",
+        "element_ids",
+        "elements",
+    )
     before_ids = {str(e.id or "").strip() for e in (task.element_nodes or []) if str(e.id or "").strip()}
-    _apply_chapter_config(task, chapter_key, payload, model=model)
-    store.save(task)
-    from report_writing.chat.writing_supplement_check import mark_gaps_filled_for_element, mark_resolved_gaps_in_registry
+    if (not already_persisted) and any(k in body for k in configure_fields):
+        _apply_chapter_config(task, chapter_key, payload, model=model)
+        store.save(task)
+        from report_writing.chat.writing_supplement_check import mark_gaps_filled_for_element, mark_resolved_gaps_in_registry
 
-    for eid in list(payload.get("element_ids") or []):
-        mark_gaps_filled_for_element(session, task, str(eid))
-    if payload.get("elements"):
-        for row in payload.get("elements") or []:
-            if isinstance(row, dict) and row.get("id"):
-                mark_gaps_filled_for_element(session, task, str(row.get("id")))
-    mark_resolved_gaps_in_registry(session, task, home)
-    store.save(task)
+        for eid in list(payload.get("element_ids") or []):
+            mark_gaps_filled_for_element(session, task, str(eid))
+        if payload.get("elements"):
+            for row in payload.get("elements") or []:
+                if isinstance(row, dict) and row.get("id"):
+                    mark_gaps_filled_for_element(session, task, str(row.get("id")))
+        mark_resolved_gaps_in_registry(session, task, home)
+        store.save(task)
+        task = store.load()
+    elif getattr(task, "brief", None) is not None and bool(getattr(task, "outline_confirmed", False)):
+        from report_writing.domain.elements import sync_brief_from_outline
+
+        sync_brief_from_outline(task)
+        store.save(task)
+        task = store.load()
+    from report_writing.chat.session_config_revision import touch_session_config_revision
+
+    touch_session_config_revision(session)
     from report_writing.services.doc_outline_cache import invalidate_doc_outline_cache
 
     invalidate_doc_outline_cache(task_id)

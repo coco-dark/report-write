@@ -974,7 +974,7 @@ import { ElMessage, ElMessageBox } from "../ui.js";
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 
 import { htmlToPlain } from "../chatHtml";
-import { authHeaders, request } from "../api";
+import { authHeaders, docOutlineUrl, request } from "../api";
 import {
   COMPOSE_HYBRID,
   COMPOSE_OPTIONS,
@@ -4845,7 +4845,10 @@ async function saveElementNodes(elements) {
       let toWrite = elements || [];
       try {
         const slim = await request(
-          `/api/writing/tasks/${encodeURIComponent(tid)}/doc-outline?fresh=1`
+          docOutlineUrl(tid, {
+            fresh: true,
+            writingTaskId: String(activeDoc.value?.writingTaskId || "").trim(),
+          })
         );
         const server = Array.isArray(slim?.element_nodes) ? slim.element_nodes : [];
         toWrite = mergeElementNodes(server, toWrite);
@@ -6079,7 +6082,8 @@ function draftPointItemsForSave() {
  */
 async function patchChapterConfigOnTask(tid, key, chapterFields) {
   // 保存前一律拉库真值再 PATCH，避免用陈旧 outlineNodes 整树覆盖
-  const slim = await request(`/api/writing/tasks/${encodeURIComponent(tid)}/doc-outline?fresh=1`);
+  const wid = String(activeDoc.value?.writingTaskId || "").trim();
+  const slim = await request(docOutlineUrl(tid, { fresh: true, writingTaskId: wid }));
   let nodes = (slim?.chapters || []).map((item) => ({ ...item }));
   if (!nodes.length) throw new Error("未找到该章节");
   let idx = nodes.findIndex((item) => String(item.key || "") === key);
@@ -6577,10 +6581,8 @@ async function loadFullOutline({ force = false } = {}) {
   outlineInflight = (async () => {
     try {
       // 服务端已直读落库；?fresh=1 仅作语义标记。软刷新仍防抖，避免分析中频繁全量拉 200+ 章
-      const qs = "?fresh=1";
-      const data = await request(
-        `/api/writing/tasks/${encodeURIComponent(tid)}/doc-outline${qs}`
-      );
+      const wid = String(activeDoc.value?.writingTaskId || "").trim();
+      const data = await request(docOutlineUrl(tid, { fresh: true, writingTaskId: wid }));
       // 确认态：force 可对齐真值；软刷新只允许 false→true，避免旧响应把已确认打回
       if (data && Object.prototype.hasOwnProperty.call(data, "outline_confirmed")) {
         const confirmed = Boolean(data.outline_confirmed);

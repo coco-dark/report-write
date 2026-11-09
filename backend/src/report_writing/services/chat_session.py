@@ -371,6 +371,20 @@ def apply_chat_ui_state(session: ChatSession, body) -> ChatSession:
         rebind_session_to_focus_document(session, home=None)
 
     patch = getattr(body, "freeform_patch", None) or {}
+    cfg_incoming = 0
+    if isinstance(patch, dict):
+        try:
+            cfg_incoming = int(patch.get("config_revision") or 0)
+        except (TypeError, ValueError):
+            cfg_incoming = 0
+    if cfg_incoming > 0:
+        from report_writing.chat.session_config_revision import session_config_revision
+
+        cur = session_config_revision(session)
+        if cfg_incoming > cur:
+            ff = dict(session.freeform or {})
+            ff["config_revision"] = cfg_incoming
+            session.freeform = ff
     if isinstance(patch, dict) and patch:
         from report_writing.chat.wizard_state import is_freeform_sample_wizard_mode
 

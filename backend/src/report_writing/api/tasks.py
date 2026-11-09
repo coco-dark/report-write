@@ -691,6 +691,10 @@ def get_draft_preview(
 def get_doc_outline(
     task_id: str,
     fresh: bool = Query(False, description="为 true 时跳过缓存，直读落库真值"),
+    writing_task_id: str = Query(
+        "",
+        description="请求库蓝本 bp* 时指定本会话绑定的写作副本 w*，避免误用全局最近一次",
+    ),
 ) -> dict:
     """文档窗轻量目录：不含 steps/写作正文等大字段。一律直读落库，避免目录/插槽与写作不同步。"""
     from report_writing.services.users import current_user_id
@@ -712,7 +716,19 @@ def get_doc_outline(
     }
     writing = None
     if not is_writing_task_id(task_id):
-        wid = latest_writing_task_id_for_blueprint(task_id)
+        wid = (writing_task_id or "").strip()
+        if wid:
+            try:
+                cand = load_task(wid)
+                src = str(getattr(cand, "source_blueprint_id", "") or "").strip()
+                if src and src != task_id:
+                    wid = ""
+                elif not src and wid != task_id:
+                    wid = ""
+            except Exception:
+                wid = ""
+        if not wid:
+            wid = latest_writing_task_id_for_blueprint(task_id)
         writing = load_writing_task(wid) if wid else None
         if writing is None and wid:
             try:

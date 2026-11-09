@@ -125,3 +125,15 @@ export async function readStream(response, onEvent, { signal } = {}) {
     }
   }
 }
+
+/** 文档窗目录：蓝本 id 可附带本会话写作副本，避免 doc-outline 误合并全局 latest w* */
+export function docOutlineUrl(taskId, { fresh = true, writingTaskId = "" } = {}) {
+  const tid = String(taskId || "").trim();
+  if (!tid) return "";
+  const params = new URLSearchParams();
+  if (fresh) params.set("fresh", "1");
+  const wid = String(writingTaskId || "").trim();
+  if (wid && !/^w/i.test(tid)) params.set("writing_task_id", wid);
+  const q = params.toString();
+  return `/api/writing/tasks/${encodeURIComponent(tid)}/doc-outline${q ? `?${q}` : ""}`;
+}
