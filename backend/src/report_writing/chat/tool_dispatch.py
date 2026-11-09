@@ -386,13 +386,16 @@ def execute_dispatch_tool(
             return None
         keys = args.get("chapter_keys") if isinstance(args.get("chapter_keys"), list) else None
         pace = str(args.get("writing_pace") or "").strip()
+        body = dict(args or {})
+        if not body.get("already_persisted") and not body.get("from_doc_window"):
+            body["_via_agent_tool"] = True
         reply, cards, events = _action_start_writing(
             home,
             session,
             emit=emit,
             writing_pace=pace,
             chapter_keys=keys,
-            payload=ChatActionPayload.parse(args),
+            payload=ChatActionPayload.parse(body),
             invoke=invoke,
         )
         return reply, list(cards or []), list(events or [])

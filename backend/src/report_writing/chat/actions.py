@@ -802,6 +802,10 @@ def _action_start_writing(
     model=None,
 ) -> tuple[str, list[ChatCard], list[dict]]:
     payload = ChatActionPayload.parse(payload)
+    from report_writing.chat.chapter_configure_sanitize import prepare_configure_chapter_body
+
+    body0 = prepare_configure_chapter_body(payload.as_dict())
+    payload = ChatActionPayload.parse(body0)
     # 前端节奏卡片可能再次带上 chapter_keys，优先写入会话，避免丢勾选
     from report_writing.chat.cards import _offer_chapter_picker_cards, _progress_and_confirm_cards
     from report_writing.chat.gates import _analysis_gate_if_needed, is_blueprint_valid, partition_blueprint_chapters
@@ -1046,10 +1050,7 @@ def _action_start_writing(
         reply, cards = offer_materials_pack_cards(session, home, writing)
         return reply, cards, []
 
-    from report_writing.chat.chapter_configure_sanitize import prepare_configure_chapter_body
-
-    body = prepare_configure_chapter_body(payload.as_dict())
-    payload = ChatActionPayload.parse(body)
+    body = payload.as_dict()
     fresh = _load_task(home, writing.id)
     if fresh is not None:
         writing = fresh
@@ -2028,7 +2029,10 @@ def _action_retry_chapter(
     model=None,
 ) -> tuple[str, list[ChatCard], list[dict]]:
     payload = ChatActionPayload.parse(payload)
-    body = payload.as_dict()
+    from report_writing.chat.chapter_configure_sanitize import prepare_configure_chapter_body
+
+    body = prepare_configure_chapter_body(payload.as_dict())
+    payload = ChatActionPayload.parse(body)
     key = str(body.get("chapter_key") or "").strip()
     keys = [str(k).strip() for k in (body.get("chapter_keys") or []) if str(k).strip()]
     if key and key not in keys:

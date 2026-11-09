@@ -11,6 +11,29 @@ from report_writing.domain.models import ChatSession, ElementNode, OutlineNode, 
 from report_writing.services.store import TaskStore
 
 
+def test_prepare_configure_strips_inline_content_without_persist_mark():
+    body = prepare_configure_chapter_body(
+        {
+            "chapter_key": "c1",
+            "point_items": [{"id": "p0", "text": "猜测要点"}],
+            "element_ids": ["el-x"],
+        }
+    )
+    assert "point_items" not in body
+    assert "element_ids" not in body
+    assert body.get("chapter_key") == "c1"
+
+
+def test_prepare_configure_keeps_inline_when_explicitly_allowed():
+    body = prepare_configure_chapter_body(
+        {
+            "allow_inline_chapter_config": True,
+            "point_items": [{"id": "p0", "text": "信任内联"}],
+        }
+    )
+    assert body.get("point_items") == [{"id": "p0", "text": "信任内联"}]
+
+
 def test_prepare_configure_keeps_structure_only_for_agent():
     body = prepare_configure_chapter_body(
         {

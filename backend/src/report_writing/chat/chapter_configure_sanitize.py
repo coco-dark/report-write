@@ -16,12 +16,14 @@ _AGENT_CONTENT_FIELDS = frozenset(
 
 
 def prepare_configure_chapter_body(body: dict | None) -> dict:
-    """文档窗/UI 全量保存原样；经 Agent 工具入口时剔除要点与要素字段。"""
+    """文档窗/UI 全量保存原样；Agent 或未落盘内联要点/要素一律剔除。"""
     out = dict(body or {})
     if out.get("already_persisted") or out.get("from_doc_window"):
+        out.pop("_via_agent_tool", None)
         return out
-    if not out.get("_via_agent_tool"):
-        return out
-    out = {k: v for k, v in out.items() if k not in _AGENT_CONTENT_FIELDS}
-    out.pop("_via_agent_tool", None)
+    agent = bool(out.pop("_via_agent_tool", False))
+    has_content = any(k in out for k in _AGENT_CONTENT_FIELDS)
+    allow_inline = bool(out.get("allow_inline_chapter_config"))
+    if agent or (has_content and not allow_inline):
+        out = {k: v for k, v in out.items() if k not in _AGENT_CONTENT_FIELDS}
     return out
