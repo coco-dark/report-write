@@ -2276,6 +2276,8 @@ def build_chat_tools(state: ChatControlState) -> list:
                 task_id=state.session.task_id or "",
             )
         payload = ChatActionPayload.parse(payload_json).as_dict()
+        if not payload.get("already_persisted") and not payload.get("from_doc_window"):
+            payload["_via_agent_tool"] = True
         reply, cards, events = _action_retry_chapter(
             state.home,
             state.session,
@@ -2314,6 +2316,8 @@ def build_chat_tools(state: ChatControlState) -> list:
                 }
             )
         payload = ChatActionPayload.parse(payload_json).as_dict()
+        if not payload.get("already_persisted") and not payload.get("from_doc_window"):
+            payload["_via_agent_tool"] = True
         reply, cards, events = _action_retry_search_chapter(
             state.home, state.session, payload, emit=state.emit, model=state.chat_model
         )

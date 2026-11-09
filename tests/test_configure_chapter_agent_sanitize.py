@@ -11,6 +11,18 @@ from report_writing.domain.models import ChatSession, ElementNode, OutlineNode, 
 from report_writing.services.store import TaskStore
 
 
+def test_prepare_configure_keeps_structure_only_for_agent():
+    body = prepare_configure_chapter_body(
+        {
+            "_via_agent_tool": True,
+            "structure_only": True,
+            "point_items": [{"id": "p0", "text": "x"}],
+        }
+    )
+    assert body.get("structure_only") is True
+    assert "point_items" not in body
+
+
 def test_prepare_configure_strips_agent_content_fields():
     body = prepare_configure_chapter_body(
         {

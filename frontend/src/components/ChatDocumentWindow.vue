@@ -4029,6 +4029,25 @@ watch(
 );
 
 watch(
+  () => Boolean(configDraft.structure_only),
+  (on, prev) => {
+    if (hydratingConfig.value || prev === on) return;
+    if (on) {
+      configDraft.point_items.splice(0, configDraft.point_items.length);
+    } else if (!configDraft.point_items.length) {
+      configDraft.point_items.push({
+        id: "p0",
+        text: "",
+        slot: "",
+        needs_supplement: false,
+      });
+    }
+    syncStructureOnlyToLocalOutline();
+    if (!on) syncConfigPointItemsToLocalOutline();
+  }
+);
+
+watch(
   () => props.documents.map((item) => item.id).join("|"),
   () => {
     // 会话清空文档列表时必须丢掉本地大纲缓存，禁止展示上一会话残留
@@ -6013,6 +6032,33 @@ function addConfigPointRow() {
     needs_supplement: false,
   });
   nextTick(() => openPointItemEditor(i));
+}
+
+function syncStructureOnlyToLocalOutline() {
+  const key = String(selectedKey.value || "").trim();
+  if (!key) return;
+  const flag = Boolean(configDraft.structure_only);
+  const patchChapter = (ch) => {
+    if (String(ch?.key || "") !== key) return ch;
+    const cfg = ch?.config && typeof ch.config === "object" ? ch.config : {};
+    const next = {
+      ...ch,
+      structure_only: flag,
+      config: { ...cfg, structure_only: flag },
+    };
+    if (flag) {
+      next.points = [];
+      next.point_items = [];
+      next.config = {
+        ...next.config,
+        points: [],
+        point_items: [],
+      };
+    }
+    return next;
+  };
+  outlineNodes.value = outlineNodes.value.map(patchChapter);
+  extraChapters.value = extraChapters.value.map(patchChapter);
 }
 
 function syncConfigPointItemsToLocalOutline() {

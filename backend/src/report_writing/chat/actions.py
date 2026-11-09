@@ -1046,7 +1046,10 @@ def _action_start_writing(
         reply, cards = offer_materials_pack_cards(session, home, writing)
         return reply, cards, []
 
-    body = payload.as_dict()
+    from report_writing.chat.chapter_configure_sanitize import prepare_configure_chapter_body
+
+    body = prepare_configure_chapter_body(payload.as_dict())
+    payload = ChatActionPayload.parse(body)
     fresh = _load_task(home, writing.id)
     if fresh is not None:
         writing = fresh
@@ -2081,11 +2084,15 @@ def _action_retry_search_chapter(
     path = home / "tasks" / task_id
     store = TaskStore(path)
     task = store.load()
+    from report_writing.chat.chapter_configure_sanitize import prepare_configure_chapter_body
+
+    body = prepare_configure_chapter_body(payload.as_dict())
+    payload = ChatActionPayload.parse(body)
     already_persisted = bool(
-        payload.get("already_persisted") or payload.get("from_doc_window")
+        body.get("already_persisted") or body.get("from_doc_window")
     )
     if (not already_persisted) and any(
-        key in payload
+        key in body
         for key in (
             "points",
             "points_text",
