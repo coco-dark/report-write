@@ -526,7 +526,16 @@ def _apply_chapter_config(task: WritingTask, chapter_key: str, payload: ChatPayl
 
     if "points" in payload or "points_text" in payload:
         raw_points = payload.get("points", payload.get("points_text"))
-        node.points = _split_lines(raw_points)
+        new_lines = _split_lines(raw_points)
+        mode = str(payload.get("points_mode") or "replace").strip().lower()
+        if mode == "append":
+            from report_writing.domain.point_items_sync import points_for_writing_from_node
+
+            existing = points_for_writing_from_node(node) or [
+                str(p or "").strip() for p in list(node.points or []) if str(p or "").strip()
+            ]
+            new_lines = existing + new_lines
+        node.points = new_lines
     if "point_items" in payload and isinstance(payload.get("point_items"), list):
         from report_writing.domain.point_items_sync import points_from_point_items
 
@@ -534,11 +543,22 @@ def _apply_chapter_config(task: WritingTask, chapter_key: str, payload: ChatPayl
         if node.point_items:
             node.points = points_from_point_items(node.point_items)
     elif "points" in payload or "points_text" in payload:
-        from report_writing.domain.point_items_sync import sync_point_items_from_points
+        from report_writing.domain.point_items_sync import (
+            link_point_items_to_element_ids,
+            sync_point_items_from_points,
+        )
 
-        node.point_items = sync_point_items_from_points(
-            list(node.points or []),
-            list(getattr(node, "point_items", None) or []),
+        prev_items = list(getattr(node, "point_items", None) or [])
+        node.point_items = sync_point_items_from_points(list(node.points or []), prev_items)
+        by_id = {
+            str(getattr(el, "id", "") or "").strip(): el
+            for el in list(getattr(task, "element_nodes", None) or [])
+            if str(getattr(el, "id", "") or "").strip()
+        }
+        node.point_items = link_point_items_to_element_ids(
+            node.point_items,
+            list(node.element_ids or []),
+            by_id,
         )
     if "keywords" in payload or "keywords_text" in payload:
         raw_keywords = payload.get("keywords", payload.get("keywords_text"))

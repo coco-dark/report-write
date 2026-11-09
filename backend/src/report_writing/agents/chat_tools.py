@@ -1764,11 +1764,12 @@ def build_chat_tools(state: ChatControlState) -> list:
         "configure_chapter",
         description=(
             "何时：用户口语要求改某章配置时保存。可改：标题、序号、父级、仅目录、写作策略 compose"
-            "（source_only/template_fill/hybrid/auto_generate/fixed）、要点 points 或 point_items、"
-            "章节说明 describes、补充提示词 aux_prompt、参考正文 reference_text、关联要素 element_ids。"
+            "（source_only/template_fill/hybrid/auto_generate/fixed）、口语写作要点 points 或 points_text"
+            "（多行或逗号分条；points_mode=append 追加）、章节说明 describes、补充提示词 aux_prompt、"
+            "参考正文 reference_text。"
             "缺了：问配置哪一章；只填用户明确说的字段，没有的不要编、不要清空未提到的项。"
             "不要：文档窗里保存配置（窗内静默落盘）；不要用本工具查看配置（用 get_chapter_info）；"
-            "不要自动生成补充提示词。不要：通过本工具改 points/point_items/element_ids（用户在文档窗操作）。"
+            "不要自动生成补充提示词。不要提交 point_items/element_ids（改关联要素走 add_chapter_element）。"
         ),
     )
     def configure_chapter(
@@ -1777,9 +1778,9 @@ def build_chat_tools(state: ChatControlState) -> list:
             Field(
                 description=(
                     "JSON。必填 chapter_key。可选 title/sequence/parent/structure_only/compose/presence/"
-                    "points_text 或 point_items/describes/aux_prompt/reference_text/element_ids。"
+                    "points 或 points_text、points_mode（replace|append）、describes/aux_prompt/reference_text。"
                     "compose 口语：资料驱动、模板填槽、混合、自动生成、固定内容输出。"
-                    "没有的不要编。"
+                    "没有的不要编；要点只写用户口述的条文，不要擅自加待补充占位。"
                 )
             ),
         ] = "{}",

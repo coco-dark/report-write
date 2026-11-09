@@ -34,6 +34,21 @@ def test_prepare_configure_keeps_inline_when_explicitly_allowed():
     assert body.get("point_items") == [{"id": "p0", "text": "信任内联"}]
 
 
+def test_prepare_configure_agent_allows_points_text():
+    body = prepare_configure_chapter_body(
+        {
+            "_via_agent_tool": True,
+            "chapter_key": "c1",
+            "points_text": "第一条\n第二条",
+            "point_items": [{"id": "p0", "text": "幻觉"}],
+            "element_ids": ["el-x"],
+        }
+    )
+    assert body.get("points_text") == "第一条\n第二条"
+    assert "point_items" not in body
+    assert "element_ids" not in body
+
+
 def test_prepare_configure_keeps_structure_only_for_agent():
     body = prepare_configure_chapter_body(
         {
@@ -60,6 +75,52 @@ def test_prepare_configure_strips_agent_content_fields():
     assert "point_items" not in body
     assert "element_ids" not in body
     assert "_via_agent_tool" not in body
+
+
+def test_agent_configure_updates_points_text_preserves_element_link(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("report_writing.infra.llm.live_model", lambda **kw: None)
+    home = tmp_path
+    (home / "tasks").mkdir(parents=True)
+    wid = "wAgentPts"
+    path = home / "tasks" / wid
+    ensure_task(path)
+    task = TaskStore(path).load()
+    task.id = wid
+    task.outline_confirmed = True
+    task.element_nodes = [ElementNode(id="el_a", name="资料A", kind="fixed", value="x")]
+    task.outline = OutlineTree(
+        chapters=[
+            OutlineNode(
+                key="c1",
+                sequence="1",
+                title="章",
+                element_ids=["el_a"],
+                points=["说明"],
+                point_items=[
+                    {
+                        "id": "p0",
+                        "text": "说明",
+                        "element_id": "el_a",
+                        "element_name": "资料A",
+                    }
+                ],
+            )
+        ]
+    )
+    TaskStore(path).save(task)
+    session = ChatSession(id="s1", task_id=wid, phase="ready_to_write")
+    payload = {
+        "task_id": wid,
+        "chapter_key": "c1",
+        "_via_agent_tool": True,
+        "points_text": "说明\n新增第二条",
+    }
+    _action_configure_chapter(home, session, payload)
+    reloaded = TaskStore(path).load()
+    node = reloaded.outline.chapters[0]
+    assert len(node.points) == 2
+    assert node.point_items[0].get("element_id") == "el_a"
+    assert "新增第二条" in node.points[1]
 
 
 def test_agent_configure_keeps_disk_point_links(tmp_path: Path, monkeypatch):
