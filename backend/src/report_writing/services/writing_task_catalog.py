@@ -211,6 +211,32 @@ def latest_writing_task_id_for_blueprint(blueprint_id: str) -> str:
         return ""
 
 
+def resolve_writing_task_id_for_blueprint_view(
+    blueprint_id: str,
+    writing_task_id: str = "",
+) -> str:
+    """bp* 请求附带的 w* 校验通过后优先；否则 sole 唯一副本策略。"""
+    bid = str(blueprint_id or "").strip()
+    if not bid:
+        return ""
+    wid = str(writing_task_id or "").strip()
+    if wid:
+        try:
+            from report_writing.api.deps import load_task
+
+            cand = load_task(wid)
+            src = str(getattr(cand, "source_blueprint_id", "") or "").strip()
+            if src and src != bid:
+                wid = ""
+            elif not src and wid != bid:
+                wid = ""
+        except Exception:
+            wid = ""
+    if not wid:
+        wid = sole_writing_task_id_for_blueprint(bid)
+    return wid
+
+
 def sole_writing_task_id_for_blueprint(blueprint_id: str) -> str:
     """无显式 w* 时：仅当该蓝本有且仅有一个写作副本才返回 id，避免多文档串稿。"""
     bid = str(blueprint_id or "").strip()

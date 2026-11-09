@@ -137,3 +137,20 @@ export function docOutlineUrl(taskId, { fresh = true, writingTaskId = "" } = {})
   const q = params.toString();
   return `/api/writing/tasks/${encodeURIComponent(tid)}/doc-outline${q ? `?${q}` : ""}`;
 }
+
+/** 全文预览：蓝本 id 可附带本会话写作副本 w* */
+export function draftPreviewUrl(
+  taskId,
+  { writtenOnly = true, confirmedOnly = false, writingTaskId = "", cacheBust = true } = {}
+) {
+  const tid = String(taskId || "").trim();
+  if (!tid) return "";
+  const params = new URLSearchParams();
+  if (writtenOnly) params.set("written_only", "true");
+  if (confirmedOnly) params.set("confirmed_only", "true");
+  const wid = String(writingTaskId || "").trim();
+  if (wid && !/^w/i.test(tid)) params.set("writing_task_id", wid);
+  if (cacheBust) params.set("_", String(Date.now()));
+  const q = params.toString();
+  return `/api/writing/tasks/${encodeURIComponent(tid)}/draft-preview?${q}`;
+}

@@ -974,7 +974,7 @@ import { ElMessage, ElMessageBox } from "../ui.js";
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 
 import { htmlToPlain } from "../chatHtml";
-import { authHeaders, docOutlineUrl, request } from "../api";
+import { authHeaders, docOutlineUrl, draftPreviewUrl, request } from "../api";
 import {
   COMPOSE_HYBRID,
   COMPOSE_OPTIONS,
@@ -3816,7 +3816,7 @@ async function loadDraftPreview({ force = false } = {}) {
   previewError.value = "";
   try {
     const data = await request(
-      `/api/writing/tasks/${encodeURIComponent(tid)}/draft-preview?written_only=true&confirmed_only=false&_=${Date.now()}`
+      draftPreviewUrl(tid, { writingTaskId: sessionWritingTaskId() })
     );
     // 切文档或后发的旧请求丢弃，避免写完后又被上一稿盖住
     if (seq !== previewFetchSeq || previewTaskId.value !== tid) return;

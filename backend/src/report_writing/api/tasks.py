@@ -626,6 +626,10 @@ def get_draft_preview(
     task_id: str,
     written_only: bool = Query(True, description="仅包含已有正文的章节"),
     confirmed_only: bool = Query(False, description="仅已确认章节（默认含草稿）"),
+    writing_task_id: str = Query(
+        "",
+        description="请求库蓝本 bp* 时指定本会话绑定的写作副本 w*",
+    ),
 ) -> dict:
     """全文预览：按大纲顺序拼接本章写作正文为 HTML；按 task_id 隔离，不串其它文档。
 
@@ -638,13 +642,13 @@ def get_draft_preview(
     from report_writing.services.writing_task_catalog import (
         is_writing_task_id,
         load_writing_task,
-        sole_writing_task_id_for_blueprint,
+        resolve_writing_task_id_for_blueprint_view,
     )
 
     tid = (task_id or "").strip()
     preview_task = None
     if tid and not is_writing_task_id(tid):
-        wid = sole_writing_task_id_for_blueprint(tid)
+        wid = resolve_writing_task_id_for_blueprint_view(tid, writing_task_id)
         if wid:
             preview_task = load_writing_task(wid)
             if preview_task is None:
@@ -708,7 +712,7 @@ def get_doc_outline(
     from report_writing.services.writing_task_catalog import (
         is_writing_task_id,
         load_writing_task,
-        sole_writing_task_id_for_blueprint,
+        resolve_writing_task_id_for_blueprint_view,
     )
 
     state_by_key = {
@@ -716,19 +720,7 @@ def get_doc_outline(
     }
     writing = None
     if not is_writing_task_id(task_id):
-        wid = (writing_task_id or "").strip()
-        if wid:
-            try:
-                cand = load_task(wid)
-                src = str(getattr(cand, "source_blueprint_id", "") or "").strip()
-                if src and src != task_id:
-                    wid = ""
-                elif not src and wid != task_id:
-                    wid = ""
-            except Exception:
-                wid = ""
-        if not wid:
-            wid = sole_writing_task_id_for_blueprint(task_id)
+        wid = resolve_writing_task_id_for_blueprint_view(task_id, writing_task_id)
         writing = load_writing_task(wid) if wid else None
         if writing is None and wid:
             try:
