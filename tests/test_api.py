@@ -43,8 +43,8 @@ def test_home_page_is_served():
     assert script
     asset = client.get(script.group(1))
     assert asset.status_code == 200
-    assert "配置 / 生成大纲" in asset.text or "生成大纲" in asset.text
-    assert "Excel" in asset.text or "相关文献" in asset.text
+    assert "书写蓝本" in asset.text or "生成要点" in asset.text or "开始分析" in asset.text
+    assert "Word" in asset.text or "使用说明" in asset.text
 
 
 def test_create_task_and_confirm_through_http(tmp_path, monkeypatch):

@@ -1768,7 +1768,7 @@ def build_chat_tools(state: ChatControlState) -> list:
             "章节说明 describes、补充提示词 aux_prompt、参考正文 reference_text、关联要素 element_ids。"
             "缺了：问配置哪一章；只填用户明确说的字段，没有的不要编、不要清空未提到的项。"
             "不要：文档窗里保存配置（窗内静默落盘）；不要用本工具查看配置（用 get_chapter_info）；"
-            "不要自动生成补充提示词。"
+            "不要自动生成补充提示词。不要：通过本工具改 points/point_items/element_ids（用户在文档窗操作）。"
         ),
     )
     def configure_chapter(
