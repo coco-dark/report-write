@@ -637,14 +637,14 @@ def get_draft_preview(
     )
     from report_writing.services.writing_task_catalog import (
         is_writing_task_id,
-        latest_writing_task_id_for_blueprint,
         load_writing_task,
+        sole_writing_task_id_for_blueprint,
     )
 
     tid = (task_id or "").strip()
     preview_task = None
     if tid and not is_writing_task_id(tid):
-        wid = latest_writing_task_id_for_blueprint(tid)
+        wid = sole_writing_task_id_for_blueprint(tid)
         if wid:
             preview_task = load_writing_task(wid)
             if preview_task is None:
@@ -707,8 +707,8 @@ def get_doc_outline(
     from report_writing.domain.models import ChapterStatus
     from report_writing.services.writing_task_catalog import (
         is_writing_task_id,
-        latest_writing_task_id_for_blueprint,
         load_writing_task,
+        sole_writing_task_id_for_blueprint,
     )
 
     state_by_key = {
@@ -728,7 +728,7 @@ def get_doc_outline(
             except Exception:
                 wid = ""
         if not wid:
-            wid = latest_writing_task_id_for_blueprint(task_id)
+            wid = sole_writing_task_id_for_blueprint(task_id)
         writing = load_writing_task(wid) if wid else None
         if writing is None and wid:
             try:

@@ -104,3 +104,8 @@ def test_doc_outline_merges_requested_writing_task(tmp_path, monkeypatch):
     body_b = r_b.json()
     ch_b = (body_b.get("chapters") or [])[0]
     assert ch_b.get("element_ids") == ["el-b"]
+
+    r_plain = client.get(f"/api/writing/tasks/{bid}/doc-outline", params={"fresh": "1"})
+    assert r_plain.status_code == 200
+    ch_plain = (r_plain.json().get("chapters") or [])[0]
+    assert ch_plain.get("element_ids") in ([], None) or ch_plain.get("element_ids") == []
